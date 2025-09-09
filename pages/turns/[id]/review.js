@@ -1,29 +1,141 @@
 import { useRouter } from 'next/router';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+
+// Small helper to fetch photos (and signed URLs)
+async function fetchPhotos(turnId) {
+  const resp = await fetch(`/api/turn-photos?turnId=${turnId}`);
+  if (!resp.ok) throw new Error('Failed to load photos');
+  const json = await resp.json();
+  return json.photos || [];
+}
+
+// Small helper to fetch current turn status
+async function fetchTurnStatus(turnId) {
+  const resp = await fetch(`/api/turn-status?turnId=${turnId}`);
+  if (!resp.ok) return { status: 'unknown' };
+  return await resp.json(); // { status: 'submitted' | 'approved' | 'needs_fix' | ... }
+}
 
 export default function Review() {
   const { query } = useRouter();
   const turnId = query.id;
+
   const [photos, setPhotos] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [status, setStatus] = useState('loading');
+
+  // Finding form state (used only for Needs Fix)
+  const [findingArea, setFindingArea] = useState('');
+  const [findingLabel, setFindingLabel] = useState('');
+  const [findingSeverity, setFindingSeverity] = useState('warn');
+  const [findingNote, setFindingNote] = useState('');
+
+  const uniqueAreas = useMemo(() => {
+    const s = new Set(photos.map(p => p.area_key).filter(Boolean));
+    return Array.from(s);
+  }, [photos]);
 
   async function load() {
     if (!turnId) return;
     setLoading(true);
-    const resp = await fetch(`/api/turn-photos?turnId=${turnId}`);
-    const json = await resp.json();
-    setPhotos(json.photos || []);
+    const [ph, st] = await Promise.all([
+      fetchPhotos(turnId),
+      fetchTurnStatus(turnId)
+    ]);
+    setPhotos(ph);
+    setStatus(st.status || 'unknown');
     setLoading(false);
   }
 
   useEffect(() => { load(); }, [turnId]);
+
+  async function mark(statusToSet, withFinding = false) {
+    const payload = { turnId, status: statusToSet };
+    if (withFinding) {
+      payload.finding = {
+        area_key: findingArea || null,
+        label: findingLabel || 'Needs fixes',
+        severity: findingSeverity || 'warn',
+        note: findingNote || null,
+        evidence_url: null // (optional) could attach a specific photo path later
+      };
+    }
+
+    const resp = await fetch('/api/mark-turn', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      alert('Failed to update status: ' + (err.error || resp.statusText));
+      return;
+    }
+
+    // Refresh current status
+    const st = await fetchTurnStatus(turnId);
+    setStatus(st.status || statusToSet);
+    if (withFinding) {
+      // Reset form
+      setFindingArea('');
+      setFindingLabel('');
+      setFindingSeverity('warn');
+      setFindingNote('');
+    }
+    alert(`Turn marked: ${statusToSet.toUpperCase()}`);
+  }
 
   if (!turnId) return <div style={{ padding:24 }}>Loading…</div>;
 
   return (
     <div style={{ maxWidth: 1200, margin: '24px auto', padding: '0 16px', fontFamily: 'ui-sans-serif' }}>
       <h1>Turn {turnId} — Review</h1>
-      <p>Click a photo to open in a new tab. Use notes to flag issues; PASS when satisfied.</p>
+
+      <div style={{ margin: '8px 0', color: '#555' }}>
+        <b>Status:</b> {status}
+      </div>
+
+      {/* Action bar */}
+      <div style={{ display:'flex', gap:12, alignItems:'center', flexWrap:'wrap', marginTop: 8, padding: 12, border:'1px solid #eee', borderRadius:12 }}>
+        <button onClick={() => mark('approved')} style={{ padding:'8px 12px' }}>
+          ✅ Mark PASS
+        </button>
+
+        <div style={{ fontSize:12, color:'#666' }}>or mark Needs Fix (optionally add a finding):</div>
+
+        <select value={findingArea} onChange={e => setFindingArea(e.target.value)} style={{ padding:6 }}>
+          <option value="">Select area (optional)</option>
+          {uniqueAreas.map(a => <option key={a} value={a}>{a}</option>)}
+        </select>
+
+        <input
+          placeholder="Finding label (e.g., Towel left on shower ledge)"
+          value={findingLabel}
+          onChange={e => setFindingLabel(e.target.value)}
+          style={{ padding:6, minWidth: 280 }}
+        />
+
+        <select value={findingSeverity} onChange={e => setFindingSeverity(e.target.value)} style={{ padding:6 }}>
+          <option value="info">info</option>
+          <option value="warn">warn</option>
+          <option value="fail">fail</option>
+        </select>
+
+        <input
+          placeholder="Note (optional)"
+          value={findingNote}
+          onChange={e => setFindingNote(e.target.value)}
+          style={{ padding:6, minWidth: 220 }}
+        />
+
+        <button onClick={() => mark('needs_fix', true)} style={{ padding:'8px 12px' }}>
+          ⚠️ Mark NEEDS FIX + Save Finding
+        </button>
+      </div>
+
+      {/* Photos grid */}
+      <p style={{ marginTop: 12, color:'#555' }}>Click any photo to open full-size in a new tab.</p>
 
       {loading ? <div>Loading photos…</div> : (
         photos.length === 0 ? <div>No photos yet.</div> : (
