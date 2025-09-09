@@ -13,44 +13,90 @@ export default function Capture() {
   const ready = useMemo(() => Boolean(turnId), [turnId]);
 
   async function addFiles(areaKey, fileList) {
-    const files = Array.from(fileList || []);
-    const uploaded = [];
+  const files = Array.from(fileList || []);
+  const uploaded = [];
 
-    for (const f of files) {
-      // 1) ask server for signed upload URL
-      const up = await fetch('/api/upload-url', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ turnId, areaKey, filename: f.name, mime: f.type })
-      }).then(r => r.json());
+  for (const f of files) {
+    // --- 1) Read dimensions client-side
+    const dims = await new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        // Handle EXIF-rotated images automatically via natural sizes
+        resolve({ width: img.naturalWidth, height: img.naturalHeight });
+        URL.revokeObjectURL(img.src);
+      };
+      img.onerror = reject;
+      img.src = URL.createObjectURL(f);
+    });
 
-      if (!up.uploadUrl) continue;
-
-      // 2) upload to Supabase Storage using the signed URL
-      await fetch(up.uploadUrl, {
-        method: 'PUT',
-        headers: { 'Content-Type': up.mime || 'application/octet-stream' },
-        body: f
-      });
-
-      // 3) record for submit & precheck
-      uploaded.push({ name: f.name, areaKey, url: up.path });
+    // --- 2) (Optional) Enforce minimum quality now (adjust thresholds as you like)
+    const longest = Math.max(dims.width, dims.height);
+    const fileTooBig = f.size > 6 * 1024 * 1024; // >6 MB
+    const tooSmall = longest < 1024;             // <1024 px on longest side
+    if (tooSmall || fileTooBig) {
+      alert(
+        `Photo "${f.name}" rejected: ` +
+        (tooSmall ? `resolution ${dims.width}×${dims.height} < 1024px longest side. ` : '') +
+        (fileTooBig ? `file > 6MB.` : '')
+      );
+      continue; // skip uploading this one
     }
 
-    setUploadsByArea(prev => ({
-      ...prev,
-      [areaKey]: [ ...(prev[areaKey] || []), ...uploaded ]
-    }));
-  }
-
-  async function runPrecheck() {
-    const resp = await fetch('/api/vision-precheck', {
+    // --- 3) Get a signed upload URL from the server
+    const up = await fetch('/api/upload-url', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ uploadsByArea })
+      body: JSON.stringify({ turnId, areaKey, filename: f.name, mime: f.type })
     }).then(r => r.json());
-    setAiFlags(resp.flags || []);
+
+    if (!up.uploadUrl) continue;
+
+    // --- 4) Upload directly to Supabase Storage
+    await fetch(up.uploadUrl, {
+      method: 'PUT',
+      headers: { 'Content-Type': up.mime || 'application/octet-stream' },
+      body: f
+    });
+
+    // --- 5) Record locally (include width/height so submit-turn can store them)
+    uploaded.push({
+      name: f.name,
+      areaKey,
+      url: up.path,           // storage key (e.g., "turns/<id>/<area>/...jpg")
+      width: dims.width,
+      height: dims.height
+    });
   }
+
+  setUploadsByArea(prev => ({
+    ...prev,
+    [areaKey]: [ ...(prev[areaKey] || []), ...uploaded ]
+  }));
+}
+
+
+  async function runPrecheck() {
+  // local quality flags (before server call)
+  const localFlags = [];
+  const MIN_LONGEST = 1024;
+
+  Object.entries(uploadsByArea).forEach(([area, files]) => {
+    files.forEach(f => {
+      const longest = Math.max(f.width || 0, f.height || 0);
+      if (longest && longest < MIN_LONGEST) {
+        localFlags.push(`Low-resolution photo in ${area}: ${f.name} (${f.width}×${f.height})`);
+      }
+    });
+  });
+
+  const server = await fetch('/api/vision-precheck', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ uploadsByArea })
+  }).then(r => r.json());
+
+  setAiFlags([...(server.flags || []), ...localFlags]);
+}
 
   async function submitAll() {
     setSubmitting(true);
