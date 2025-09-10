@@ -28,21 +28,31 @@ export default async function handler(req,res){
     }
 
     if (!templateId) {
-      // Return an empty set; front-end can fallback to a default list
       return res.status(200).json({ shots: [], template: null });
     }
 
+    // IMPORTANT: include template_shots.id so UI can group by shotId
     const { data: shots, error: sErr } = await supabaseClient
       .from('template_shots')
-      .select('area_key,label,min_count,notes,sort_order')
+      .select('id, area_key, label, min_count, notes, sort_order')
       .eq('template_id', templateId)
       .order('sort_order', { ascending: true });
 
     if (sErr) throw sErr;
 
+    // Rename id -> shot_id for clarity on the client
+    const mapped = (shots || []).map(s => ({
+      shot_id: s.id,
+      area_key: s.area_key,
+      label: s.label,
+      min_count: s.min_count,
+      notes: s.notes,
+      sort_order: s.sort_order
+    }));
+
     res.status(200).json({
       template: { id: templateId, property_id: turn.property_id },
-      shots: shots || []
+      shots: mapped
     });
   } catch(e){
     console.error('turn-template error:', e);
