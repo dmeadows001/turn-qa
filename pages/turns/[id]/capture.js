@@ -4,12 +4,12 @@ import { useEffect, useRef, useState } from 'react';
 
 // Fallback default shots if no template is linked to this turn
 const DEFAULT_SHOTS = [
-  { key: 'entry_overall',       label: 'Entry - Overall',           minCount: 1 },
-  { key: 'living_overall',      label: 'Living - Overall',          minCount: 1 },
-  { key: 'living_under_tables', label: 'Living - Under Tables',     minCount: 1 },
-  { key: 'kitchen_overall',     label: 'Kitchen - Overall',         minCount: 2 },
-  { key: 'bathroom_overall',    label: 'Bathroom - Overall',        minCount: 2 },
-  { key: 'bedroom_overall',     label: 'Bedroom - Overall',         minCount: 1 }
+  { shot_id: 'fallback-entry_overall',  area_key: 'entry_overall',       label: 'Entry - Overall',           min_count: 1 },
+  { shot_id: 'fallback-living_overall', area_key: 'living_overall',      label: 'Living - Overall',          min_count: 1 },
+  { shot_id: 'fallback-living_under',   area_key: 'living_under_tables', label: 'Living - Under Tables',     min_count: 1 },
+  { shot_id: 'fallback-kitchen',        area_key: 'kitchen_overall',     label: 'Kitchen - Overall',         min_count: 2 },
+  { shot_id: 'fallback-bathroom',       area_key: 'bathroom_overall',    label: 'Bathroom - Overall',        min_count: 2 },
+  { shot_id: 'fallback-bedroom',        area_key: 'bedroom_overall',     label: 'Bedroom - Overall',         min_count: 1 }
 ];
 
 export default function Capture() {
@@ -17,20 +17,20 @@ export default function Capture() {
   const turnId = query.id;
 
   // -------- State --------
-  const [requiredShots, setRequiredShots] = useState(null); // null = loading
-  const [uploadsByArea, setUploadsByArea] = useState({});   // { [areaKey]: [{name,url,width,height,areaKey}] }
-  const [aiFlags, setAiFlags] = useState([]);               // combined findings (rules + AI)
-  const [aiByPath, setAiByPath] = useState({});             // { [storagePath]: issues[] }
+  const [shots, setShots] = useState(null);        // [{shot_id, area_key, label, min_count, notes}]
+  const [uploadsByShot, setUploadsByShot] = useState({}); // { [shotId]: [{name,url,width,height,shotId}] }
+  const [aiFlags, setAiFlags] = useState([]);      // combined findings
+  const [aiByPath, setAiByPath] = useState({});    // { [storagePath]: issues[] }
   const [submitting, setSubmitting] = useState(false);
 
   // --- Lightbox state ---
   const [lightboxOpen, setLightboxOpen] = useState(false);
-  const [lightboxUrl, setLightboxUrl] = useState(null);   // signed URL
-  const [lightboxPath, setLightboxPath] = useState(null); // storage path
+  const [lightboxUrl, setLightboxUrl] = useState(null);
+  const [lightboxPath, setLightboxPath] = useState(null);
   const [zoom, setZoom] = useState(1);
   const [rotation, setRotation] = useState(0);
 
-  // One hidden file input per area to open from placeholders/buttons
+  // One hidden file input per shot
   const inputRefs = useRef({});
 
   // -------- Helpers / UI bits --------
@@ -57,7 +57,7 @@ export default function Capture() {
     const resp = await fetch('/api/sign-photo', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path, expires: 600 }) // 10 min
+      body: JSON.stringify({ path, expires: 600 })
     });
     if (!resp.ok) throw new Error('sign failed');
     const json = await resp.json();
@@ -88,12 +88,12 @@ export default function Capture() {
     document.body.appendChild(a); a.click(); a.remove();
   }
 
-  function openPicker(areaKey) {
-    const el = inputRefs.current[areaKey];
+  function openPicker(shotId) {
+    const el = inputRefs.current[shotId];
     if (el) el.click();
   }
 
-  // -------- Load required shots for this turn (template-aware) --------
+  // -------- Load required shots (with shot_id) for this turn --------
   useEffect(() => {
     async function loadTemplate() {
       if (!turnId) return;
@@ -101,24 +101,25 @@ export default function Capture() {
         const r = await fetch(`/api/turn-template?turnId=${turnId}`);
         const json = await r.json();
         if (Array.isArray(json.shots) && json.shots.length) {
-          setRequiredShots(json.shots.map(s => ({
-            key: s.area_key,
+          setShots(json.shots.map(s => ({
+            shot_id: s.shot_id,
+            area_key: s.area_key,
             label: s.label,
-            minCount: s.min_count || 1,
+            min_count: s.min_count || 1,
             notes: s.notes || ''
           })));
         } else {
-          setRequiredShots(DEFAULT_SHOTS);
+          setShots(DEFAULT_SHOTS);
         }
       } catch {
-        setRequiredShots(DEFAULT_SHOTS);
+        setShots(DEFAULT_SHOTS);
       }
     }
     loadTemplate();
   }, [turnId]);
 
   // -------- Add files (quality + upload to Storage) --------
-  async function addFiles(areaKey, fileList) {
+  async function addFiles(shotId, fileList) {
     const files = Array.from(fileList || []);
     const uploaded = [];
 
@@ -126,7 +127,7 @@ export default function Capture() {
       const dims = await getDims(f);
       const longest = Math.max(dims.width, dims.height);
       const tooSmall = longest < 1024;
-      const tooBig = f.size > 6 * 1024 * 1024; // >6MB
+      const tooBig = f.size > 6 * 1024 * 1024;
 
       if (tooSmall || tooBig) {
         alert(
@@ -140,7 +141,7 @@ export default function Capture() {
       const up = await fetch('/api/upload-url', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ turnId, areaKey, filename: f.name, mime: f.type })
+        body: JSON.stringify({ turnId, shotId, filename: f.name, mime: f.type })
       }).then(r => r.json());
 
       if (!up.uploadUrl || !up.path) {
@@ -154,42 +155,52 @@ export default function Capture() {
         body: f
       });
 
-      uploaded.push({ name: f.name, areaKey, url: up.path, width: dims.width, height: dims.height });
+      uploaded.push({ name: f.name, shotId, url: up.path, width: dims.width, height: dims.height });
     }
 
     if (uploaded.length) {
-      setUploadsByArea(prev => ({ ...prev, [areaKey]: [ ...(prev[areaKey] || []), ...uploaded ] }));
+      setUploadsByShot(prev => ({ ...prev, [shotId]: [ ...(prev[shotId] || []), ...uploaded ] }));
     }
   }
 
-  // -------- AI Pre-Check (rules + OpenAI vision) --------
+  // -------- AI Pre-Check (local + OpenAI vision) --------
   async function runPrecheck() {
     const localFlags = [];
     const MIN_LONGEST = 1024;
 
-    Object.entries(uploadsByArea).forEach(([area, files]) => {
+    Object.entries(uploadsByShot).forEach(([shotId, files]) => {
       files.forEach(f => {
         const longest = Math.max(f.width || 0, f.height || 0);
         if (longest && longest < MIN_LONGEST) {
-          localFlags.push(`Low-resolution in ${area}: ${f.name} (${f.width}×${f.height})`);
+          localFlags.push(`Low-resolution in shot ${shotId}: ${f.name} (${f.width}×${f.height})`);
         }
       });
     });
 
-    const ruleResp = await fetch('/api/vision-precheck', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ uploadsByArea })
-    }).then(r => r.json()).catch(() => ({ flags: [] }));
+    // Build items directly (so server doesn't need uploadsByArea map)
+    const items = [];
+    (shots || []).forEach(s => {
+      (uploadsByShot[s.shot_id] || []).forEach(f => {
+        items.push({
+          url: f.url,                 // storage path
+          area_key: s.area_key || s.label || s.shot_id, // context for AI + display
+        });
+      });
+    });
+
+    // Optional: keep your rules endpoint call if you like
+    const ruleResp = { flags: [] };
 
     const aiResp = await fetch('/api/vision-scan', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ uploadsByArea })
+      body: JSON.stringify({ items })
     }).then(r => r.json()).catch(() => ({ results: [], error: 'network' }));
 
     const perPhoto = {};
-    (aiResp.results || []).forEach(r => { perPhoto[r.path] = Array.isArray(r.issues) ? r.issues : []; });
+    (aiResp.results || []).forEach(r => {
+      perPhoto[r.path] = Array.isArray(r.issues) ? r.issues : [];
+    });
     setAiByPath(perPhoto);
 
     const aiLines = [];
@@ -205,16 +216,16 @@ export default function Capture() {
     setAiFlags([ ...(ruleResp.flags || []), ...localFlags, ...aiLines ]);
   }
 
-  // -------- Submit (enforce min counts from template) --------
+  // -------- Submit (enforce min counts per shot) --------
   async function submitAll() {
-    const unmet = (requiredShots || []).filter(a => (a.minCount || 1) > (uploadsByArea[a.key]?.length || 0));
+    const unmet = (shots || []).filter(s => (s.min_count || 1) > (uploadsByShot[s.shot_id]?.length || 0));
     if (unmet.length) {
       alert('Please add required photos before submitting:\n' + unmet.map(a => `• ${a.label}`).join('\n'));
       return;
     }
 
     setSubmitting(true);
-    const photos = Object.values(uploadsByArea).flat();
+    const photos = Object.values(uploadsByShot).flat();
     const resp = await fetch('/api/submit-turn', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -231,7 +242,7 @@ export default function Capture() {
   }
 
   // -------- Render --------
-  if (!turnId || requiredShots === null) return <div style={{ padding:24 }}>Loading…</div>;
+  if (!turnId || shots === null) return <div style={{ padding:24 }}>Loading…</div>;
 
   return (
     <div style={{ maxWidth: 980, margin: '24px auto', padding: '0 16px', fontFamily: 'ui-sans-serif' }}>
@@ -240,33 +251,33 @@ export default function Capture() {
         Upload clear photos for each required shot. Longest side ≥ 1024px, ≤ 6MB. Run AI Pre-Check before submitting.
       </p>
 
-      {requiredShots.map(area => {
-        const files = uploadsByArea[area.key] || [];
-        const required = area.minCount || 1;
+      {shots.map(s => {
+        const files = uploadsByShot[s.shot_id] || [];
+        const required = s.min_count || 1;
         const missing = Math.max(0, required - files.length);
 
         return (
-          <div key={area.key} style={{ border:'1px solid #eee', borderRadius:12, padding:12, margin:'12px 0' }}>
-            {/* Hidden input for this area */}
+          <div key={s.shot_id} style={{ border:'1px solid #eee', borderRadius:12, padding:12, margin:'12px 0' }}>
+            {/* Hidden input per shot */}
             <input
-              ref={el => { inputRefs.current[area.key] = el; }}
+              ref={el => { inputRefs.current[s.shot_id] = el; }}
               type="file"
               accept="image/*"
               capture="environment"
               multiple
               style={{ display:'none' }}
-              onChange={(e)=>addFiles(area.key, e.target.files)}
+              onChange={(e)=>addFiles(s.shot_id, e.target.files)}
             />
 
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:12 }}>
               <div>
-                <b>{area.label}</b>
-                {area.notes ? <div style={{ fontSize:12, color:'#64748b' }}>{area.notes}</div> : null}
+                <b>{s.label}</b>
+                {s.notes ? <div style={{ fontSize:12, color:'#64748b' }}>{s.notes}</div> : null}
                 <div style={{ fontSize:12, marginTop:4, color: missing>0 ? '#9A3412' : '#0F766E' }}>
                   Required: {required} • Uploaded: {files.length} {missing>0 ? `• Missing: ${missing}` : '• ✅'}
                 </div>
               </div>
-              <button onClick={()=>openPicker(area.key)} style={{ padding:'8px 12px' }}>
+              <button onClick={()=>openPicker(s.shot_id)} style={{ padding:'8px 12px' }}>
                 ➕ Add photo
               </button>
             </div>
@@ -306,8 +317,8 @@ export default function Capture() {
               {/* Placeholders for missing photos */}
               {Array.from({ length: missing }).map((_, i) => (
                 <button
-                  key={`ph-${i}`}
-                  onClick={()=>openPicker(area.key)}
+                  key={`ph-${s.shot_id}-${i}`}
+                  onClick={()=>openPicker(s.shot_id)}
                   style={{
                     border:'2px dashed #cbd5e1',
                     borderRadius:12,
@@ -323,7 +334,7 @@ export default function Capture() {
                 >
                   <div style={{ fontSize:28, lineHeight:1, color:'#64748b', marginBottom:8 }}>＋</div>
                   <div style={{ fontSize:14, color:'#64748b' }}>Tap to add required photo</div>
-                  <div style={{ fontSize:12, color:'#94a3b8', marginTop:4 }}>{area.label}</div>
+                  <div style={{ fontSize:12, color:'#94a3b8', marginTop:4 }}>{s.label}</div>
                 </button>
               ))}
             </div>
