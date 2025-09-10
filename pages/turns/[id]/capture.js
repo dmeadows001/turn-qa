@@ -1,27 +1,30 @@
 // pages/turns/[id]/capture.js
 import { useRouter } from 'next/router';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 
-// --- If you already have this elsewhere, you can remove/adjust ---
-const REQUIRED_AREAS = [
-  { key: 'entry_overall', label: 'Entry - Overall' },
-  { key: 'living_overall', label: 'Living - Overall' },
-  { key: 'living_under_tables', label: 'Living - Under Tables' },
-  { key: 'kitchen_overall', label: 'Kitchen - Overall' },
-  { key: 'bathroom_overall', label: 'Bathroom - Overall' },
-  { key: 'bedroom_overall', label: 'Bedroom - Overall' }
+// Fallback default shots if no template is linked to this turn
+const DEFAULT_SHOTS = [
+  { key: 'entry_overall',       label: 'Entry - Overall',           minCount: 1 },
+  { key: 'living_overall',      label: 'Living - Overall',          minCount: 1 },
+  { key: 'living_under_tables', label: 'Living - Under Tables',     minCount: 1 },
+  { key: 'kitchen_overall',     label: 'Kitchen - Overall',         minCount: 2 },
+  { key: 'bathroom_overall',    label: 'Bathroom - Overall',        minCount: 2 },
+  { key: 'bedroom_overall',     label: 'Bedroom - Overall',         minCount: 1 }
 ];
-// -----------------------------------------------------------------
 
 export default function Capture() {
   const { query } = useRouter();
   const turnId = query.id;
 
+  // -------- State --------
+  // Shots required for THIS turn (loaded from /api/turn-template). null = loading
+  const [requiredShots, setRequiredShots] = useState(null);
+
   // Uploaded files grouped by area: { [areaKey]: [{name,url,width,height,areaKey}, ...] }
   const [uploadsByArea, setUploadsByArea] = useState({});
-  // Big combined “AI Findings” list
+  // Combined findings list (rules + AI)
   const [aiFlags, setAiFlags] = useState([]);
-  // Per-photo AI flags: { [storagePath]: issues[] }
+  // Per-photo AI flags map: { [storagePath]: issues[] }
   const [aiByPath, setAiByPath] = useState({});
   const [submitting, setSubmitting] = useState(false);
 
@@ -32,7 +35,7 @@ export default function Capture() {
   const [zoom, setZoom] = useState(1);
   const [rotation, setRotation] = useState(0);
 
-  // -------- helpers --------
+  // -------- Helpers / UI bits --------
   const sevStyle = (s='info') => ({
     display:'inline-block',
     padding:'2px 6px',
@@ -43,20 +46,15 @@ export default function Capture() {
     color: s==='fail' ? '#991B1B' : s==='warn' ? '#9A5B00' : '#334155'
   });
 
-  // Get image dimensions in browser (reads EXIF-rotated size correctly)
   async function getDims(file) {
     return await new Promise((resolve, reject) => {
       const img = new Image();
-      img.onload = () => {
-        resolve({ width: img.naturalWidth, height: img.naturalHeight });
-        URL.revokeObjectURL(img.src);
-      };
+      img.onload = () => { resolve({ width: img.naturalWidth, height: img.naturalHeight }); URL.revokeObjectURL(img.src); };
       img.onerror = reject;
       img.src = URL.createObjectURL(file);
     });
   }
 
-  // --- Sign a storage path to a temporary URL (for viewing) ---
   async function signPath(path) {
     const resp = await fetch('/api/sign-photo', {
       method: 'POST',
@@ -68,7 +66,6 @@ export default function Capture() {
     return json.url;
   }
 
-  // --- Lightbox controls ---
   async function viewPhoto(path) {
     try {
       const url = await signPath(path);
@@ -77,48 +74,49 @@ export default function Capture() {
       setZoom(1);
       setRotation(0);
       setLightboxOpen(true);
-    } catch (e) {
-      alert('Could not open photo. Try again.');
-    }
+    } catch { alert('Could not open photo. Try again.'); }
   }
-  function closeLightbox() {
-    setLightboxOpen(false);
-    setLightboxUrl(null);
-    setLightboxPath(null);
-  }
-  function zoomIn() { setZoom(z => Math.min(z + 0.25, 3)); }
-  function zoomOut() { setZoom(z => Math.max(z - 0.25, 0.5)); }
-  function rotateLeft() { setRotation(r => (r - 90 + 360) % 360); }
-  function rotateRight() { setRotation(r => (r + 90) % 360); }
-  async function refreshSignedUrl() {
-    if (!lightboxPath) return;
-    try {
-      const url = await signPath(lightboxPath);
-      setLightboxUrl(url);
-    } catch {}
-  }
-  function downloadCurrent() {
+  function closeLightbox(){ setLightboxOpen(false); setLightboxUrl(null); setLightboxPath(null); }
+  function zoomIn(){ setZoom(z => Math.min(z + 0.25, 3)); }
+  function zoomOut(){ setZoom(z => Math.max(z - 0.25, 0.5)); }
+  function rotateLeft(){ setRotation(r => (r - 90 + 360) % 360); }
+  function rotateRight(){ setRotation(r => (r + 90) % 360); }
+  async function refreshSignedUrl(){ if (!lightboxPath) return; try { setLightboxUrl(await signPath(lightboxPath)); } catch {} }
+  function downloadCurrent(){
     if (!lightboxUrl) return;
     const a = document.createElement('a');
     a.href = lightboxUrl;
     a.download = lightboxPath?.split('/').pop() || 'photo.jpg';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
+    document.body.appendChild(a); a.click(); a.remove();
   }
 
-  // Esc key closes lightbox
+  // -------- Load required shots for this turn (template-aware) --------
   useEffect(() => {
-    function onKey(e) {
-      if (e.key === 'Escape') closeLightbox();
-      if (e.key === '+' || e.key === '=') zoomIn();
-      if (e.key === '-') zoomOut();
+    async function loadTemplate() {
+      if (!turnId) return;
+      try {
+        const r = await fetch(`/api/turn-template?turnId=${turnId}`);
+        const json = await r.json();
+        if (Array.isArray(json.shots) && json.shots.length) {
+          // Map API rows to UI shape
+          setRequiredShots(json.shots.map(s => ({
+            key: s.area_key,
+            label: s.label,
+            minCount: s.min_count || 1,
+            notes: s.notes || ''
+          })));
+        } else {
+          // No template linked → fallback defaults
+          setRequiredShots(DEFAULT_SHOTS);
+        }
+      } catch {
+        setRequiredShots(DEFAULT_SHOTS);
+      }
     }
-    if (lightboxOpen) window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [lightboxOpen]);
+    loadTemplate();
+  }, [turnId]);
 
-  // -------- add files (captures width/height, enforces quality, uploads to Storage) --------
+  // -------- Add files (quality + upload to Storage) --------
   async function addFiles(areaKey, fileList) {
     const files = Array.from(fileList || []);
     const uploaded = [];
@@ -127,7 +125,7 @@ export default function Capture() {
       const dims = await getDims(f);
       const longest = Math.max(dims.width, dims.height);
       const tooSmall = longest < 1024;
-      const tooBig = f.size > 6 * 1024 * 1024; // > 6MB
+      const tooBig = f.size > 6 * 1024 * 1024; // >6MB
 
       if (tooSmall || tooBig) {
         alert(
@@ -155,24 +153,15 @@ export default function Capture() {
         body: f
       });
 
-      uploaded.push({
-        name: f.name,
-        areaKey,
-        url: up.path,        // e.g. "turns/<uuid>/<areaKey>/<file>.jpg"
-        width: dims.width,
-        height: dims.height
-      });
+      uploaded.push({ name: f.name, areaKey, url: up.path, width: dims.width, height: dims.height });
     }
 
     if (uploaded.length) {
-      setUploadsByArea(prev => ({
-        ...prev,
-        [areaKey]: [ ...(prev[areaKey] || []), ...uploaded ]
-      }));
+      setUploadsByArea(prev => ({ ...prev, [areaKey]: [ ...(prev[areaKey] || []), ...uploaded ] }));
     }
   }
 
-  // -------- AI pre-check: rules + real vision scan, then fill UI state --------
+  // -------- AI Pre-Check (rules + OpenAI vision) --------
   async function runPrecheck() {
     const localFlags = [];
     const MIN_LONGEST = 1024;
@@ -199,9 +188,7 @@ export default function Capture() {
     }).then(r => r.json()).catch(() => ({ results: [], error: 'network' }));
 
     const perPhoto = {};
-    (aiResp.results || []).forEach(r => {
-      perPhoto[r.path] = Array.isArray(r.issues) ? r.issues : [];
-    });
+    (aiResp.results || []).forEach(r => { perPhoto[r.path] = Array.isArray(r.issues) ? r.issues : []; });
     setAiByPath(perPhoto);
 
     const aiLines = [];
@@ -217,8 +204,15 @@ export default function Capture() {
     setAiFlags([ ...(ruleResp.flags || []), ...localFlags, ...aiLines ]);
   }
 
-  // -------- submit all photos (writes rows + marks turn submitted) --------
+  // -------- Submit (enforce min counts from template) --------
   async function submitAll() {
+    // Block submission if any required shot is missing photos
+    const unmet = (requiredShots || []).filter(a => (a.minCount || 1) > (uploadsByArea[a.key]?.length || 0));
+    if (unmet.length) {
+      alert('Please add required photos before submitting:\n' + unmet.map(a => `• ${a.label}`).join('\n'));
+      return;
+    }
+
     setSubmitting(true);
     const photos = Object.values(uploadsByArea).flat();
     const resp = await fetch('/api/submit-turn', {
@@ -236,31 +230,33 @@ export default function Capture() {
     alert('Submitted! (MVP)');
   }
 
-  // ---------- UI ----------
-  if (!turnId) return <div style={{ padding:24 }}>Loading…</div>;
+  // -------- Render --------
+  if (!turnId || requiredShots === null) return <div style={{ padding:24 }}>Loading…</div>;
 
   return (
-    <div style={{ maxWidth: 960, margin: '24px auto', padding: '0 16px', fontFamily: 'ui-sans-serif' }}>
+    <div style={{ maxWidth: 980, margin: '24px auto', padding: '0 16px', fontFamily: 'ui-sans-serif' }}>
       <h1>Turn {turnId} — Cleaner Capture</h1>
       <p style={{ color:'#555' }}>
-        Upload clear photos for each area. Longest side ≥ 1024px, ≤ 6MB. Run AI Pre-Check before submitting.
+        Upload clear photos for each required shot. Longest side ≥ 1024px, ≤ 6MB. Run AI Pre-Check before submitting.
       </p>
 
-      {REQUIRED_AREAS.map(area => {
+      {requiredShots.map(area => {
         const files = uploadsByArea[area.key] || [];
+        const missing = Math.max(0, (area.minCount || 1) - files.length);
         return (
           <div key={area.key} style={{ border:'1px solid #eee', borderRadius:12, padding:12, margin:'12px 0' }}>
-            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-              <b>{area.label}</b>
-              <input
-                type="file"
-                accept="image/*"
-                multiple
-                onChange={(e) => addFiles(area.key, e.target.files)}
-              />
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:12 }}>
+              <div>
+                <b>{area.label}</b>
+                {area.notes ? <div style={{ fontSize:12, color:'#64748b' }}>{area.notes}</div> : null}
+                <div style={{ fontSize:12, marginTop:4, color: missing>0 ? '#9A3412' : '#0F766E' }}>
+                  Required: {area.minCount || 1} • Uploaded: {files.length} {missing>0 ? `• Missing: ${missing}` : '• ✅'}
+                </div>
+              </div>
+              <input type="file" accept="image/*" multiple onChange={(e)=>addFiles(area.key, e.target.files)} />
             </div>
 
-            {/* file cards */}
+            {/* File cards */}
             {files.length > 0 && (
               <div style={{ marginTop:10, display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(260px,1fr))', gap:16 }}>
                 {files.map(f => (
@@ -283,9 +279,7 @@ export default function Capture() {
                             <span style={sevStyle(iss.severity)}>{(iss.severity || 'info').toUpperCase()}</span>
                             <span style={{ fontSize:13 }}>
                               {iss.label}
-                              {typeof iss.confidence === 'number'
-                                ? ` (${Math.round(iss.confidence * 100)}%)`
-                                : ''}
+                              {typeof iss.confidence === 'number' ? ` (${Math.round(iss.confidence * 100)}%)` : ''}
                             </span>
                           </div>
                         ))}
