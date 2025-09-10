@@ -88,19 +88,60 @@ export default function Review() {
 
   if (!turnId) return <div style={{ padding:24 }}>Loading…</div>;
 
+export default function Review() {
+  const { query } = useRouter();
+  const turnId = query.id;
+
+  const [photos, setPhotos] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [status, setStatus] = useState('loading');
+
+  // Add badgeStyle helper here
+  const badgeStyle = s => ({
+    display:'inline-block',
+    padding:'2px 8px',
+    borderRadius:8,
+    background: s==='approved'
+      ? '#E6FFEA'
+      : s==='needs_fix'
+        ? '#FFF4E5'
+        : '#EEF2FF',
+    color: s==='approved'
+      ? '#0F7B2D'
+      : s==='needs_fix'
+        ? '#9A5B00'
+        : '#334155'
+  });
+
+  // ...rest of your helper functions (mark, load, etc.)
+
+  if (!turnId) return <div style={{ padding:24 }}>Loading…</div>;
+
+  return (
+    <div>
+      {/* page JSX */}
+    </div>
+  );
+}
+
   return (
     <div style={{ maxWidth: 1200, margin: '24px auto', padding: '0 16px', fontFamily: 'ui-sans-serif' }}>
       <h1>Turn {turnId} — Review</h1>
 
-      <div style={{ margin: '8px 0', color: '#555' }}>
-        <b>Status:</b> {status}
-      </div>
+      <div style={{ margin:'8px 0' }}>
+  <b>Status: </b>
+  <span style={badgeStyle(status)}>{status}</span>
+</div>
 
       {/* Action bar */}
       <div style={{ display:'flex', gap:12, alignItems:'center', flexWrap:'wrap', marginTop: 8, padding: 12, border:'1px solid #eee', borderRadius:12 }}>
-        <button onClick={() => mark('approved')} style={{ padding:'8px 12px' }}>
-          ✅ Mark PASS
-        </button>
+        <button
+  onClick={() => mark('approved')}
+  disabled={status==='approved'}
+  style={{ padding:'8px 12px', opacity: status==='approved' ? 0.5 : 1 }}
+>
+  ✅ Mark PASS
+</button>
 
         <div style={{ fontSize:12, color:'#666' }}>or mark Needs Fix (optionally add a finding):</div>
 
@@ -129,9 +170,13 @@ export default function Review() {
           style={{ padding:6, minWidth: 220 }}
         />
 
-        <button onClick={() => mark('needs_fix', true)} style={{ padding:'8px 12px' }}>
-          ⚠️ Mark NEEDS FIX + Save Finding
-        </button>
+        <button
+  onClick={() => mark('needs_fix', true)}
+  disabled={status==='approved'}
+  style={{ padding:'8px 12px', opacity: status==='approved' ? 0.5 : 1 }}
+>
+  ⚠️ Mark NEEDS FIX + Save Finding
+</button>
       </div>
 
       {/* Photos grid */}
