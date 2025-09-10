@@ -1,6 +1,6 @@
 // pages/turns/[id]/capture.js
 import { useRouter } from 'next/router';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 // Fallback default shots if no template is linked to this turn
 const DEFAULT_SHOTS = [
@@ -17,15 +17,10 @@ export default function Capture() {
   const turnId = query.id;
 
   // -------- State --------
-  // Shots required for THIS turn (loaded from /api/turn-template). null = loading
-  const [requiredShots, setRequiredShots] = useState(null);
-
-  // Uploaded files grouped by area: { [areaKey]: [{name,url,width,height,areaKey}, ...] }
-  const [uploadsByArea, setUploadsByArea] = useState({});
-  // Combined findings list (rules + AI)
-  const [aiFlags, setAiFlags] = useState([]);
-  // Per-photo AI flags map: { [storagePath]: issues[] }
-  const [aiByPath, setAiByPath] = useState({});
+  const [requiredShots, setRequiredShots] = useState(null); // null = loading
+  const [uploadsByArea, setUploadsByArea] = useState({});   // { [areaKey]: [{name,url,width,height,areaKey}] }
+  const [aiFlags, setAiFlags] = useState([]);               // combined findings (rules + AI)
+  const [aiByPath, setAiByPath] = useState({});             // { [storagePath]: issues[] }
   const [submitting, setSubmitting] = useState(false);
 
   // --- Lightbox state ---
@@ -34,6 +29,9 @@ export default function Capture() {
   const [lightboxPath, setLightboxPath] = useState(null); // storage path
   const [zoom, setZoom] = useState(1);
   const [rotation, setRotation] = useState(0);
+
+  // One hidden file input per area to open from placeholders/buttons
+  const inputRefs = useRef({});
 
   // -------- Helpers / UI bits --------
   const sevStyle = (s='info') => ({
@@ -90,6 +88,11 @@ export default function Capture() {
     document.body.appendChild(a); a.click(); a.remove();
   }
 
+  function openPicker(areaKey) {
+    const el = inputRefs.current[areaKey];
+    if (el) el.click();
+  }
+
   // -------- Load required shots for this turn (template-aware) --------
   useEffect(() => {
     async function loadTemplate() {
@@ -98,7 +101,6 @@ export default function Capture() {
         const r = await fetch(`/api/turn-template?turnId=${turnId}`);
         const json = await r.json();
         if (Array.isArray(json.shots) && json.shots.length) {
-          // Map API rows to UI shape
           setRequiredShots(json.shots.map(s => ({
             key: s.area_key,
             label: s.label,
@@ -106,7 +108,6 @@ export default function Capture() {
             notes: s.notes || ''
           })));
         } else {
-          // No template linked → fallback defaults
           setRequiredShots(DEFAULT_SHOTS);
         }
       } catch {
@@ -206,7 +207,6 @@ export default function Capture() {
 
   // -------- Submit (enforce min counts from template) --------
   async function submitAll() {
-    // Block submission if any required shot is missing photos
     const unmet = (requiredShots || []).filter(a => (a.minCount || 1) > (uploadsByArea[a.key]?.length || 0));
     if (unmet.length) {
       alert('Please add required photos before submitting:\n' + unmet.map(a => `• ${a.label}`).join('\n'));
@@ -242,53 +242,91 @@ export default function Capture() {
 
       {requiredShots.map(area => {
         const files = uploadsByArea[area.key] || [];
-        const missing = Math.max(0, (area.minCount || 1) - files.length);
+        const required = area.minCount || 1;
+        const missing = Math.max(0, required - files.length);
+
         return (
           <div key={area.key} style={{ border:'1px solid #eee', borderRadius:12, padding:12, margin:'12px 0' }}>
+            {/* Hidden input for this area */}
+            <input
+              ref={el => { inputRefs.current[area.key] = el; }}
+              type="file"
+              accept="image/*"
+              capture="environment"
+              multiple
+              style={{ display:'none' }}
+              onChange={(e)=>addFiles(area.key, e.target.files)}
+            />
+
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:12 }}>
               <div>
                 <b>{area.label}</b>
                 {area.notes ? <div style={{ fontSize:12, color:'#64748b' }}>{area.notes}</div> : null}
                 <div style={{ fontSize:12, marginTop:4, color: missing>0 ? '#9A3412' : '#0F766E' }}>
-                  Required: {area.minCount || 1} • Uploaded: {files.length} {missing>0 ? `• Missing: ${missing}` : '• ✅'}
+                  Required: {required} • Uploaded: {files.length} {missing>0 ? `• Missing: ${missing}` : '• ✅'}
                 </div>
               </div>
-              <input type="file" accept="image/*" multiple onChange={(e)=>addFiles(area.key, e.target.files)} />
+              <button onClick={()=>openPicker(area.key)} style={{ padding:'8px 12px' }}>
+                ➕ Add photo
+              </button>
             </div>
 
-            {/* File cards */}
-            {files.length > 0 && (
-              <div style={{ marginTop:10, display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(260px,1fr))', gap:16 }}>
-                {files.map(f => (
-                  <div key={f.url} style={{ border:'1px solid #eee', borderRadius:10, padding:10 }}>
-                    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:6 }}>
-                      <div style={{ fontSize:13, maxWidth:'70%' }}>
-                        <b title={f.name}>{f.name}</b><br/>
-                        {f.width}×{f.height}
-                      </div>
-                      <button onClick={() => viewPhoto(f.url)} style={{ padding:'6px 10px' }}>
-                        👁️ View
-                      </button>
+            {/* File cards + placeholders */}
+            <div style={{ marginTop:10, display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(260px,1fr))', gap:16 }}>
+              {/* Existing uploads */}
+              {files.map(f => (
+                <div key={f.url} style={{ border:'1px solid #eee', borderRadius:10, padding:10 }}>
+                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:6 }}>
+                    <div style={{ fontSize:13, maxWidth:'70%' }}>
+                      <b title={f.name}>{f.name}</b><br/>
+                      {f.width}×{f.height}
                     </div>
-
-                    {/* AI flags under each photo */}
-                    {Array.isArray(aiByPath[f.url]) && aiByPath[f.url].length > 0 && (
-                      <div>
-                        {aiByPath[f.url].map((iss, idx) => (
-                          <div key={idx} style={{ marginBottom:4 }}>
-                            <span style={sevStyle(iss.severity)}>{(iss.severity || 'info').toUpperCase()}</span>
-                            <span style={{ fontSize:13 }}>
-                              {iss.label}
-                              {typeof iss.confidence === 'number' ? ` (${Math.round(iss.confidence * 100)}%)` : ''}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
+                    <button onClick={() => viewPhoto(f.url)} style={{ padding:'6px 10px' }}>
+                      👁️ View
+                    </button>
                   </div>
-                ))}
-              </div>
-            )}
+
+                  {/* AI flags under each photo */}
+                  {Array.isArray(aiByPath[f.url]) && aiByPath[f.url].length > 0 && (
+                    <div>
+                      {aiByPath[f.url].map((iss, idx) => (
+                        <div key={idx} style={{ marginBottom:4 }}>
+                          <span style={sevStyle(iss.severity)}>{(iss.severity || 'info').toUpperCase()}</span>
+                          <span style={{ fontSize:13 }}>
+                            {iss.label}
+                            {typeof iss.confidence === 'number' ? ` (${Math.round(iss.confidence * 100)}%)` : ''}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+
+              {/* Placeholders for missing photos */}
+              {Array.from({ length: missing }).map((_, i) => (
+                <button
+                  key={`ph-${i}`}
+                  onClick={()=>openPicker(area.key)}
+                  style={{
+                    border:'2px dashed #cbd5e1',
+                    borderRadius:12,
+                    padding:'16px 12px',
+                    background:'transparent',
+                    cursor:'pointer',
+                    display:'flex',
+                    flexDirection:'column',
+                    alignItems:'center',
+                    justifyContent:'center',
+                    minHeight:140
+                  }}
+                >
+                  <div style={{ fontSize:28, lineHeight:1, color:'#64748b', marginBottom:8 }}>＋</div>
+                  <div style={{ fontSize:14, color:'#64748b' }}>Tap to add required photo</div>
+                  <div style={{ fontSize:12, color:'#94a3b8', marginTop:4 }}>{area.label}</div>
+                </button>
+              ))}
+            </div>
           </div>
         );
       })}
