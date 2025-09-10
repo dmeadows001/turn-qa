@@ -76,26 +76,46 @@ export default function Capture() {
 
 
   async function runPrecheck() {
-  // local quality flags (before server call)
   const localFlags = [];
   const MIN_LONGEST = 1024;
 
+  // 1. Local quality checks first (resolution)
   Object.entries(uploadsByArea).forEach(([area, files]) => {
     files.forEach(f => {
       const longest = Math.max(f.width || 0, f.height || 0);
       if (longest && longest < MIN_LONGEST) {
-        localFlags.push(`Low-resolution photo in ${area}: ${f.name} (${f.width}×${f.height})`);
+        localFlags.push(`Low-resolution in ${area}: ${f.name} (${f.width}×${f.height})`);
       }
     });
   });
 
-  const server = await fetch('/api/vision-precheck', {
+  // 2. Call the existing rule-based precheck (min photos, filename heuristics)
+  const ruleResp = await fetch('/api/vision-precheck', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ uploadsByArea })
-  }).then(r => r.json());
+  }).then(r => r.json()).catch(() => ({ flags: [] }));
 
-  setAiFlags([...(server.flags || []), ...localFlags]);
+  // 3. Call the new AI scan endpoint
+  const aiResp = await fetch('/api/vision-scan', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ uploadsByArea })
+  }).then(r => r.json()).catch(() => ({ results: [] }));
+
+  const aiFlags = [];
+  (aiResp.results || []).forEach(r => {
+    (r.issues || []).forEach(issue => {
+      const sev = issue.severity || 'info';
+      const conf = typeof issue.confidence === 'number'
+        ? ` (${Math.round(issue.confidence * 100)}%)`
+        : '';
+      aiFlags.push(`${sev.toUpperCase()} in ${r.area_key || 'unknown'}: ${issue.label}${conf}`);
+    });
+  });
+
+  // 4. Merge all flags
+  setAiFlags([ ...(ruleResp.flags || []), ...localFlags, ...aiFlags ]);
 }
 
   async function submitAll() {
