@@ -2,7 +2,7 @@
 import { useRouter } from 'next/router';
 import { useEffect, useMemo, useState } from 'react';
 
-// --- If you already define REQUIRED_AREAS elsewhere, you can remove this block ---
+// --- If you already have this elsewhere, you can remove/adjust ---
 const REQUIRED_AREAS = [
   { key: 'entry_overall', label: 'Entry - Overall' },
   { key: 'living_overall', label: 'Living - Overall' },
@@ -11,7 +11,7 @@ const REQUIRED_AREAS = [
   { key: 'bathroom_overall', label: 'Bathroom - Overall' },
   { key: 'bedroom_overall', label: 'Bedroom - Overall' }
 ];
-// -------------------------------------------------------------------------------
+// -----------------------------------------------------------------
 
 export default function Capture() {
   const { query } = useRouter();
@@ -21,9 +21,16 @@ export default function Capture() {
   const [uploadsByArea, setUploadsByArea] = useState({});
   // Big combined “AI Findings” list
   const [aiFlags, setAiFlags] = useState([]);
-  // NEW: per-photo AI flags map: { [storagePath]: issues[] }
+  // Per-photo AI flags: { [storagePath]: issues[] }
   const [aiByPath, setAiByPath] = useState({});
   const [submitting, setSubmitting] = useState(false);
+
+  // --- Lightbox state ---
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [lightboxUrl, setLightboxUrl] = useState(null);   // signed URL
+  const [lightboxPath, setLightboxPath] = useState(null); // storage path
+  const [zoom, setZoom] = useState(1);
+  const [rotation, setRotation] = useState(0);
 
   // -------- helpers --------
   const sevStyle = (s='info') => ({
@@ -49,6 +56,68 @@ export default function Capture() {
     });
   }
 
+  // --- Sign a storage path to a temporary URL (for viewing) ---
+  async function signPath(path) {
+    const resp = await fetch('/api/sign-photo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path, expires: 600 }) // 10 min
+    });
+    if (!resp.ok) throw new Error('sign failed');
+    const json = await resp.json();
+    return json.url;
+  }
+
+  // --- Lightbox controls ---
+  async function viewPhoto(path) {
+    try {
+      const url = await signPath(path);
+      setLightboxPath(path);
+      setLightboxUrl(url);
+      setZoom(1);
+      setRotation(0);
+      setLightboxOpen(true);
+    } catch (e) {
+      alert('Could not open photo. Try again.');
+    }
+  }
+  function closeLightbox() {
+    setLightboxOpen(false);
+    setLightboxUrl(null);
+    setLightboxPath(null);
+  }
+  function zoomIn() { setZoom(z => Math.min(z + 0.25, 3)); }
+  function zoomOut() { setZoom(z => Math.max(z - 0.25, 0.5)); }
+  function rotateLeft() { setRotation(r => (r - 90 + 360) % 360); }
+  function rotateRight() { setRotation(r => (r + 90) % 360); }
+  async function refreshSignedUrl() {
+    if (!lightboxPath) return;
+    try {
+      const url = await signPath(lightboxPath);
+      setLightboxUrl(url);
+    } catch {}
+  }
+  function downloadCurrent() {
+    if (!lightboxUrl) return;
+    const a = document.createElement('a');
+    a.href = lightboxUrl;
+    a.download = lightboxPath?.split('/').pop() || 'photo.jpg';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
+  // Esc key closes lightbox
+  useEffect(() => {
+    function onKey(e) {
+      if (e.key === 'Escape') closeLightbox();
+      if (e.key === '+' || e.key === '=') zoomIn();
+      if (e.key === '-') zoomOut();
+    }
+    if (lightboxOpen) window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [lightboxOpen]);
+
   // -------- add files (captures width/height, enforces quality, uploads to Storage) --------
   async function addFiles(areaKey, fileList) {
     const files = Array.from(fileList || []);
@@ -69,7 +138,6 @@ export default function Capture() {
         continue;
       }
 
-      // Ask server for a signed upload URL + storage path
       const up = await fetch('/api/upload-url', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -81,7 +149,6 @@ export default function Capture() {
         continue;
       }
 
-      // Upload file to Storage with the signed URL
       await fetch(up.uploadUrl, {
         method: 'PUT',
         headers: { 'Content-Type': up.mime || 'application/octet-stream' },
@@ -91,7 +158,7 @@ export default function Capture() {
       uploaded.push({
         name: f.name,
         areaKey,
-        url: up.path,        // e.g. "turns/<uuid>/<areaKey>/<filename>.jpg" (no leading "photos/")
+        url: up.path,        // e.g. "turns/<uuid>/<areaKey>/<file>.jpg"
         width: dims.width,
         height: dims.height
       });
@@ -110,7 +177,6 @@ export default function Capture() {
     const localFlags = [];
     const MIN_LONGEST = 1024;
 
-    // local quality checks (resolution)
     Object.entries(uploadsByArea).forEach(([area, files]) => {
       files.forEach(f => {
         const longest = Math.max(f.width || 0, f.height || 0);
@@ -120,28 +186,24 @@ export default function Capture() {
       });
     });
 
-    // rules-based (min counts, filename keywords)
     const ruleResp = await fetch('/api/vision-precheck', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ uploadsByArea })
     }).then(r => r.json()).catch(() => ({ flags: [] }));
 
-    // real AI scan (OpenAI Vision)
     const aiResp = await fetch('/api/vision-scan', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ uploadsByArea })
     }).then(r => r.json()).catch(() => ({ results: [], error: 'network' }));
 
-    // per-photo map for rendering under each thumbnail
     const perPhoto = {};
     (aiResp.results || []).forEach(r => {
       perPhoto[r.path] = Array.isArray(r.issues) ? r.issues : [];
     });
     setAiByPath(perPhoto);
 
-    // flatten to lines for the “AI Findings” list
     const aiLines = [];
     (aiResp.results || []).forEach(r => {
       (r.issues || []).forEach(issue => {
@@ -198,17 +260,22 @@ export default function Capture() {
               />
             </div>
 
-            {/* simple list of current uploads for this area */}
+            {/* file cards */}
             {files.length > 0 && (
-              <div style={{ marginTop:10, display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(220px,1fr))', gap:10 }}>
+              <div style={{ marginTop:10, display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(260px,1fr))', gap:16 }}>
                 {files.map(f => (
-                  <div key={f.url} style={{ border:'1px solid #eee', borderRadius:10, padding:8 }}>
-                    <div style={{ fontSize:13, marginBottom:6 }}>
-                      <b title={f.name}>{f.name}</b><br/>
-                      {f.width}×{f.height}
+                  <div key={f.url} style={{ border:'1px solid #eee', borderRadius:10, padding:10 }}>
+                    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:6 }}>
+                      <div style={{ fontSize:13, maxWidth:'70%' }}>
+                        <b title={f.name}>{f.name}</b><br/>
+                        {f.width}×{f.height}
+                      </div>
+                      <button onClick={() => viewPhoto(f.url)} style={{ padding:'6px 10px' }}>
+                        👁️ View
+                      </button>
                     </div>
 
-                    {/* Per-photo AI flags */}
+                    {/* AI flags under each photo */}
                     {Array.isArray(aiByPath[f.url]) && aiByPath[f.url].length > 0 && (
                       <div>
                         {aiByPath[f.url].map((iss, idx) => (
@@ -252,6 +319,51 @@ export default function Capture() {
           ✅ Submit Turn
         </button>
       </div>
+
+      {/* --- LIGHTBOX MODAL --- */}
+      {lightboxOpen && (
+        <div
+          onClick={(e) => { if (e.target === e.currentTarget) closeLightbox(); }}
+          style={{
+            position:'fixed', inset:0, background:'rgba(0,0,0,0.75)',
+            display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000, padding:16
+          }}
+        >
+          <div style={{ position:'relative', width:'min(95vw,1100px)', maxHeight:'90vh', background:'#111', borderRadius:12, overflow:'hidden' }}>
+            {/* Toolbar */}
+            <div style={{ display:'flex', gap:8, padding:'8px 10px', alignItems:'center', background:'#0f172a', color:'#fff' }}>
+              <button onClick={closeLightbox} style={{ padding:'6px 10px' }}>✖ Close (Esc)</button>
+              <div style={{ flex:1 }} />
+              <button onClick={zoomOut} style={{ padding:'6px 10px' }}>➖ Zoom</button>
+              <button onClick={zoomIn} style={{ padding:'6px 10px' }}>➕ Zoom</button>
+              <button onClick={rotateLeft} style={{ padding:'6px 10px' }}>⟲ Rotate</button>
+              <button onClick={rotateRight} style={{ padding:'6px 10px' }}>⟳ Rotate</button>
+              <button onClick={refreshSignedUrl} style={{ padding:'6px 10px' }}>⟳ Refresh URL</button>
+              <button onClick={downloadCurrent} style={{ padding:'6px 10px' }}>⬇ Download</button>
+            </div>
+
+            {/* Image */}
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'center', padding:16, maxHeight:'calc(90vh - 48px)', overflow:'auto' }}>
+              {lightboxUrl ? (
+                <img
+                  src={lightboxUrl}
+                  alt="Photo"
+                  style={{
+                    maxWidth:'100%',
+                    maxHeight:'80vh',
+                    transform: `scale(${zoom}) rotate(${rotation}deg)`,
+                    transformOrigin:'center center',
+                    transition:'transform 120ms ease'
+                  }}
+                  draggable={false}
+                />
+              ) : (
+                <div style={{ color:'#e2e8f0' }}>Loading…</div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
