@@ -9,6 +9,7 @@ export default function Capture() {
   const [uploadsByArea, setUploadsByArea] = useState({});
   const [aiFlags, setAiFlags] = useState([]);
   const [submitting, setSubmitting] = useState(false);
+  const [aiByPath, setAiByPath] = useState({});
 
   const ready = useMemo(() => Boolean(turnId), [turnId]);
 
