@@ -79,13 +79,14 @@ export default function Capture() {
   const turnId = query.id;
 
   // -------- State --------
-  const [shots, setShots] = useState(null);                 // [{shot_id, area_key, label, min_count, notes}]
-  const [uploadsByShot, setUploadsByShot] = useState({});   // { [shotId]: [{name,url,width,height,shotId,preview}] }
-  const [aiFlags, setAiFlags] = useState([]);               // combined findings
-  const [aiByPath, setAiByPath] = useState({});             // { [storagePath]: issues[] }
+  const [shots, setShots] = useState(null);                     // [{shot_id, area_key, label, min_count, notes}]
+  const [uploadsByShot, setUploadsByShot] = useState({});       // { [shotId]: [{name,url,width,height,shotId,preview}] }
+  const [aiFlags, setAiFlags] = useState([]);                   // combined findings
+  const [aiByPath, setAiByPath] = useState({});                 // { [storagePath]: issues[] }
   const [submitting, setSubmitting] = useState(false);
   const [prechecking, setPrechecking] = useState(false);
   const [templateRules, setTemplateRules] = useState({ property: '', template: '' });
+  const [scannedPaths, setScannedPaths] = useState(new Set());  // Cache of paths we’ve already scanned in this session
 
   // --- Lightbox state ---
   const [lightboxOpen, setLightboxOpen] = useState(false);
@@ -243,17 +244,20 @@ export default function Capture() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // -------- AI Pre-Check (local + OpenAI vision) --------
- // -------- AI Pre-Check (local + OpenAI vision) --------
+// -------- AI Pre-Check (local + OpenAI vision) — batched & parallel --------
 async function runPrecheck() {
   if (prechecking) return;
   setPrechecking(true);
+
+  // Tweak these to taste
+  const CHUNK_SIZE = 6;      // how many images per API call
+  const PARALLEL = 3;        // how many API calls at the same time
 
   try {
     const localFlags = [];
     const MIN_LONGEST = 1024;
 
-    // Local quality rules (dimension check)
+    // Local quality check
     Object.entries(uploadsByShot).forEach(([shotId, files]) => {
       files.forEach(f => {
         const longest = Math.max(f.width || 0, f.height || 0);
@@ -263,53 +267,96 @@ async function runPrecheck() {
       });
     });
 
-    // Build items we send to the AI scanner
-    // NOTE: we include label/notes, and (if present in shots[]) rules_text per shot.
-    const items = [];
+    // Build all items (with rules context)
+    const allItems = [];
     (shots || []).forEach(s => {
       (uploadsByShot[s.shot_id] || []).forEach(f => {
-        items.push({
-          url: f.url,                                        // storage path only
-          area_key: s.area_key || s.label || s.shot_id,      // context tag
-          label: s.label,                                    // shot label
-          notes: s.notes || '',                              // shot notes
-          shot_rules: s.rules_text || ''                     // per-shot rules (may be empty)
+        allItems.push({
+          url: f.url,                                        // storage path
+          area_key: s.area_key || s.label || s.shot_id,
+          label: s.label,
+          notes: s.notes || '',
+          shot_rules: s.rules_text || ''
         });
       });
     });
 
-    // Property + template-level rules go once as global_rules
+    // Skip ones we've already scanned (path changes when a new photo is taken)
+    const toScan = allItems.filter(it => !scannedPaths.has(it.url));
+
+    // No work? just surface local flags
+    if (toScan.length === 0) {
+      setAiFlags(prev => [...prev, ...localFlags]);
+      return;
+    }
+
+    // Prepare global rules once
     const global_rules = {
       property: (templateRules?.property || ''),
       template: (templateRules?.template || '')
     };
 
-    // Call the server vision scan with both items and global rules
-    const aiResp = await fetch('/api/vision-scan', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items, global_rules })
-    }).then(r => r.json()).catch(() => ({ results: [], error: 'network' }));
+    // Helper: split array into chunks
+    const chunk = (arr, size) => arr.reduce((acc, _, i) =>
+      (i % size ? acc : acc.concat([arr.slice(i, i + size)])), []);
 
-    // Map per-photo issues for inline badges
-    const perPhoto = {};
-    (aiResp.results || []).forEach(r => {
+    const chunks = chunk(toScan, CHUNK_SIZE);
+
+    // Process chunks with a simple concurrency limiter
+    const results = [];
+    let index = 0;
+
+    async function worker() {
+      while (index < chunks.length) {
+        const myIndex = index++;
+        const items = chunks[myIndex];
+
+        try {
+          const resp = await fetch('/api/vision-scan', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ items, global_rules })
+          });
+          const json = await resp.json();
+          if (Array.isArray(json.results)) {
+            results.push(...json.results);
+          }
+        } catch (e) {
+          // If a batch fails, just continue; we’ll show what we got
+          console.warn('vision batch failed', e);
+        }
+      }
+    }
+
+    // Kick off PARALLEL workers
+    const workers = Array.from({ length: Math.min(PARALLEL, chunks.length) }, () => worker());
+    await Promise.all(workers);
+
+    // Merge per-photo results into state
+    const perPhoto = { ...aiByPath };
+    results.forEach(r => {
       perPhoto[r.path] = Array.isArray(r.issues) ? r.issues : [];
     });
     setAiByPath(perPhoto);
 
-    // Create the summary list
+    // Build the summary lines
     const aiLines = [];
-    (aiResp.results || []).forEach(r => {
+    results.forEach(r => {
       (r.issues || []).forEach(issue => {
         const sev = (issue.severity || 'info').toUpperCase();
         const conf = typeof issue.confidence === 'number' ? ` (${Math.round(issue.confidence * 100)}%)` : '';
         aiLines.push(`${sev} in ${r.area_key || 'unknown'}: ${issue.label}${conf}`);
       });
     });
-    if (aiResp.error) aiLines.unshift(`AI check notice: ${aiResp.error}`);
 
-    setAiFlags([ ...localFlags, ...aiLines ]);
+    // Mark scanned paths so we don’t rescan next time
+    setScannedPaths(prev => {
+      const next = new Set(prev);
+      toScan.forEach(it => next.add(it.url));
+      return next;
+    });
+
+    setAiFlags(prev => [ ...prev, ...localFlags, ...aiLines ]);
   } finally {
     setPrechecking(false);
   }
