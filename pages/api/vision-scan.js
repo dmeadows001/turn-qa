@@ -4,108 +4,129 @@ import { supabaseAdmin } from '../../lib/supabase';
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// Helper: get a temporary, downloadable URL for each storage path
-async function signedReadUrl(path) {
-  // Longer expiry to avoid timeouts during OpenAI fetch
-  // 600s = 10 minutes
-  const expiresIn = 600;
+// ------------- Prompt -------------
+const SYSTEM_PROMPT = `
+You are a vacation-rental *turnover QA* assistant. You review photos taken by cleaners during a turn.
+Your job is to quickly spot visible guest-facing issues. Return SHORT, actionable findings only.
 
-  // Optional: transform (downscale) to speed up downloads for AI.
-  // Remove the transform block if your Supabase version doesn't support it.
+General rules:
+- Prioritize obvious guest-impacting issues over tiny imperfections.
+- If an image looks acceptable, return an empty issues array for that image.
+- Use severities: "fail" (must fix before guest), "warn" (nice-to-fix), "info" (minor note).
+- Include confidence 0..1 when appropriate.
+
+Common checks by area (examples, not exhaustive):
+- bedroom_overall / "Bedroom": bed made neatly; NO items on bed; pillows arranged; floor free of clutter; trash absent; drawers/closet closed.
+- bathroom_overall / "Bathroom": no used towels/face cloths visible; toilet closed/clean; surfaces wiped; trash removed; toiletries staged; no hair on surfaces.
+- living_overall / "Living": cushions arranged; blankets folded; surfaces wiped; visible trash absent; cords/cables tidy.
+- kitchen_overall / "Kitchen": sink empty; no dirty dishes; counters clear/wiped; appliances closed/clean; trash removed.
+- entry_overall / "Entry": floor clear; doormat aligned; no bags/boxes left.
+
+Use shot label/notes to refine expectations (e.g., "Hot Tub – Temperature" means the **display/thermometer** must be readable and show target range).
+Do not invent issues not visible in the image.
+
+Your response MUST be valid JSON:
+{
+  "results": [
+    {
+      "path": "<echo original storage path>",
+      "area_key": "<echo from input>",
+      "issues": [
+        { "label": "Bed not made", "severity": "fail", "confidence": 0.92 },
+        { "label": "Items on bed", "severity": "warn", "confidence": 0.76 }
+      ]
+    },
+    ...
+  ]
+}
+`;
+
+// Create a temporary READ url for OpenAI to fetch
+async function signedReadUrl(path) {
+  const expiresIn = 600; // 10 minutes
   const { data, error } = await supabaseAdmin
     .storage
     .from('photos')
     .createSignedUrl(path, expiresIn, {
-      // Comment this out if your Storage (or SDK) version doesn't support transforms
-      transform: { width: 1600, resize: 'contain' } // keeps aspect, ~faster to fetch
+      // If your SDK doesn't support transform, remove this block.
+      transform: { width: 1600, resize: 'contain' }
     });
-
   if (error) throw error;
-  return data.signedUrl; // direct HTTPS URL OpenAI can fetch
+  return data.signedUrl;
 }
 
 export default async function handler(req, res) {
   try {
     if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
+    // Expected: { items: [{ url: "<storage path>", area_key, label?, notes? }, ...] }
     const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
-    // Expected: { items: [{ url: "<storage path>", area_key: "bathroom_overall" }, ...] }
     const items = Array.isArray(body.items) ? body.items : [];
 
-    // Resolve each storage path -> signed URL that lasts long enough
+    // Sign each image so OpenAI can fetch it
     const resolved = [];
     for (const it of items) {
       try {
-        const url = await signedReadUrl(it.url);
-        resolved.push({ ...it, signedUrl: url });
+        const signedUrl = await signedReadUrl(it.url);
+        resolved.push({ ...it, signedUrl });
       } catch (e) {
-        // If a single image fails to sign, skip it (don’t fail whole batch)
         console.warn('sign error', it.url, e?.message || e);
       }
     }
-
     if (resolved.length === 0) {
       return res.status(200).json({ results: [], note: 'no images to scan' });
     }
 
-    // Build the vision prompt
-    const sys = `You are a QA assistant checking Airbnb turn photos for missed items, trash, stray towels, dirty spots, and misc issues. 
-Return concise findings; for each image include up to 3 issues max with a severity (info|warn|fail) and optional confidence 0..1. 
-If clean, return an empty list for that image.`;
-
+    // Build the multi-image user content: we include area, label, and notes for context
     const userParts = [];
     for (const r of resolved) {
-      userParts.push({ type: 'text', text: `Area: ${r.area_key || 'unknown'}` });
+      const ctx = [
+        `Area: ${r.area_key || 'unknown'}`,
+        r.label ? `Label: ${r.label}` : null,
+        r.notes ? `Notes: ${r.notes}` : null
+      ].filter(Boolean).join('\n');
+      userParts.push({ type: 'text', text: ctx });
       userParts.push({ type: 'image_url', image_url: { url: r.signedUrl } });
     }
 
+    // Ask for strict JSON
     const resp = await client.chat.completions.create({
-      model: 'gpt-4o-mini', // or another vision-capable model you prefer
+      model: 'gpt-4o-mini',
       temperature: 0.2,
+      response_format: { type: 'json_object' },
+      max_tokens: 800,
       messages: [
-        { role: 'system', content: sys },
-        {
-          role: 'user',
-          content: userParts
-        }
-      ],
-      // Keep the response small
-      max_tokens: 450
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: userParts }
+      ]
     });
 
-    // Expect the model to emit a compact JSON-ish block; but to be robust,
-    // we’ll parse with a fallback.
-    const text = resp.choices?.[0]?.message?.content || '';
-    // Try to pull JSON array if present, else fall back to simple mapping.
-    let parsed = null;
+    let json;
     try {
-      // Common pattern: the model outputs a single JSON array/object
-      const jsonStart = text.indexOf('[');
-      const jsonEnd = text.lastIndexOf(']');
-      if (jsonStart >= 0 && jsonEnd > jsonStart) {
-        parsed = JSON.parse(text.slice(jsonStart, jsonEnd + 1));
-      }
-    } catch (_) {}
-
-    // If parsing failed, create a best-effort structure
-    // Expected target format:
-    // results: [{ path, area_key, issues: [{ label, severity, confidence? }] }]
-    const results = [];
-    if (Array.isArray(parsed)) {
-      for (let i = 0; i < resolved.length; i++) {
-        const r = resolved[i];
-        const p = parsed[i];
-        const issues = Array.isArray(p?.issues) ? p.issues : [];
-        results.push({ path: r.url, area_key: r.area_key, issues });
-      }
-    } else {
-      // Fallback: no structured JSON; return empty issues
-      for (const r of resolved) results.push({ path: r.url, area_key: r.area_key, issues: [] });
+      json = JSON.parse(resp.choices?.[0]?.message?.content || '{}');
+    } catch {
+      json = {};
     }
 
-    res.status(200).json({ results });
+    // Normalize to expected array
+    const out = [];
+    if (Array.isArray(json.results)) {
+      // Map back to original storage paths
+      // We trust the model’s order, but also fall back to aligning by index if path missing.
+      for (let i = 0; i < resolved.length; i++) {
+        const r = resolved[i];
+        const m = json.results[i] || {};
+        const issues = Array.isArray(m.issues) ? m.issues : [];
+        out.push({ path: r.url, area_key: r.area_key, issues });
+      }
+    } else {
+      // Fall back: no findings
+      for (const r of resolved) out.push({ path: r.url, area_key: r.area_key, issues: [] });
+    }
+
+    res.status(200).json({ results: out });
   } catch (e) {
     console.error('vision-scan error:', e);
-    res.status(500).json({ error: (e?.message || 'vision-scan failed') });
+    res.status(500).json({ error: e?.message || 'vision-scan failed' });
   }
 }
