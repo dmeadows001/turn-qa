@@ -244,60 +244,76 @@ export default function Capture() {
   }, []);
 
   // -------- AI Pre-Check (local + OpenAI vision) --------
-  async function runPrecheck() {
-    if (prechecking) return;
-    setPrechecking(true);
+ // -------- AI Pre-Check (local + OpenAI vision) --------
+async function runPrecheck() {
+  if (prechecking) return;
+  setPrechecking(true);
 
-    try {
-      const localFlags = [];
-      const MIN_LONGEST = 1024;
+  try {
+    const localFlags = [];
+    const MIN_LONGEST = 1024;
 
-      Object.entries(uploadsByShot).forEach(([shotId, files]) => {
-        files.forEach(f => {
-          const longest = Math.max(f.width || 0, f.height || 0);
-          if (longest && longest < MIN_LONGEST) {
-            localFlags.push(`Low-resolution in shot ${shotId}: ${f.name} (${f.width}×${f.height})`);
-          }
+    // Local quality rules (dimension check)
+    Object.entries(uploadsByShot).forEach(([shotId, files]) => {
+      files.forEach(f => {
+        const longest = Math.max(f.width || 0, f.height || 0);
+        if (longest && longest < MIN_LONGEST) {
+          localFlags.push(`Low-resolution in shot ${shotId}: ${f.name} (${f.width}×${f.height})`);
+        }
+      });
+    });
+
+    // Build items we send to the AI scanner
+    // NOTE: we include label/notes, and (if present in shots[]) rules_text per shot.
+    const items = [];
+    (shots || []).forEach(s => {
+      (uploadsByShot[s.shot_id] || []).forEach(f => {
+        items.push({
+          url: f.url,                                        // storage path only
+          area_key: s.area_key || s.label || s.shot_id,      // context tag
+          label: s.label,                                    // shot label
+          notes: s.notes || '',                              // shot notes
+          shot_rules: s.rules_text || ''                     // per-shot rules (may be empty)
         });
       });
+    });
 
-      const items = [];
-      (shots || []).forEach(s => {
-        (uploadsByShot[s.shot_id] || []).forEach(f => {
-          items.push({
-            url: f.url,
-            area_key: s.area_key || s.label || s.shot_id
-          });
-        });
+    // Property + template-level rules go once as global_rules
+    const global_rules = {
+      property: (templateRules?.property || ''),
+      template: (templateRules?.template || '')
+    };
+
+    // Call the server vision scan with both items and global rules
+    const aiResp = await fetch('/api/vision-scan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items, global_rules })
+    }).then(r => r.json()).catch(() => ({ results: [], error: 'network' }));
+
+    // Map per-photo issues for inline badges
+    const perPhoto = {};
+    (aiResp.results || []).forEach(r => {
+      perPhoto[r.path] = Array.isArray(r.issues) ? r.issues : [];
+    });
+    setAiByPath(perPhoto);
+
+    // Create the summary list
+    const aiLines = [];
+    (aiResp.results || []).forEach(r => {
+      (r.issues || []).forEach(issue => {
+        const sev = (issue.severity || 'info').toUpperCase();
+        const conf = typeof issue.confidence === 'number' ? ` (${Math.round(issue.confidence * 100)}%)` : '';
+        aiLines.push(`${sev} in ${r.area_key || 'unknown'}: ${issue.label}${conf}`);
       });
+    });
+    if (aiResp.error) aiLines.unshift(`AI check notice: ${aiResp.error}`);
 
-      const aiResp = await fetch('/api/vision-scan', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items })
-      }).then(r => r.json()).catch(() => ({ results: [], error: 'network' }));
-
-      const perPhoto = {};
-      (aiResp.results || []).forEach(r => {
-        perPhoto[r.path] = Array.isArray(r.issues) ? r.issues : [];
-      });
-      setAiByPath(perPhoto);
-
-      const aiLines = [];
-      (aiResp.results || []).forEach(r => {
-        (r.issues || []).forEach(issue => {
-          const sev = (issue.severity || 'info').toUpperCase();
-          const conf = typeof issue.confidence === 'number' ? ` (${Math.round(issue.confidence * 100)}%)` : '';
-          aiLines.push(`${sev} in ${r.area_key || 'unknown'}: ${issue.label}${conf}`);
-        });
-      });
-      if (aiResp.error) aiLines.unshift(`AI check notice: ${aiResp.error}`);
-
-      setAiFlags([ ...localFlags, ...aiLines ]);
-    } finally {
-      setPrechecking(false);
-    }
+    setAiFlags([ ...localFlags, ...aiLines ]);
+  } finally {
+    setPrechecking(false);
   }
+}
 
   // -------- Submit (enforce min counts per shot) --------
   async function submitAll() {
