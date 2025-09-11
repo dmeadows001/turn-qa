@@ -87,6 +87,7 @@ export default function Capture() {
   const [prechecking, setPrechecking] = useState(false);
   const [templateRules, setTemplateRules] = useState({ property: '', template: '' });
   const [scannedPaths, setScannedPaths] = useState(new Set());  // Cache of paths we’ve already scanned in this session
+  const [scanProgress, setScanProgress] = useState({ done: 0, total: 0 });
 
   // --- Lightbox state ---
   const [lightboxOpen, setLightboxOpen] = useState(false);
@@ -244,20 +245,20 @@ export default function Capture() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-// -------- AI Pre-Check (local + OpenAI vision) — batched & parallel --------
+// -------- AI Pre-Check (local + OpenAI vision) — batched & progress --------
 async function runPrecheck() {
   if (prechecking) return;
   setPrechecking(true);
 
-  // Tweak these to taste
-  const CHUNK_SIZE = 6;      // how many images per API call
-  const PARALLEL = 3;        // how many API calls at the same time
+  // Tune to taste
+  const CHUNK_SIZE = 6;   // images per API call
+  const PARALLEL   = 3;   // concurrent API calls
 
   try {
     const localFlags = [];
     const MIN_LONGEST = 1024;
 
-    // Local quality check
+    // Local quality checks
     Object.entries(uploadsByShot).forEach(([shotId, files]) => {
       files.forEach(f => {
         const longest = Math.max(f.width || 0, f.height || 0);
@@ -267,12 +268,12 @@ async function runPrecheck() {
       });
     });
 
-    // Build all items (with rules context)
+    // Build all items with context
     const allItems = [];
     (shots || []).forEach(s => {
       (uploadsByShot[s.shot_id] || []).forEach(f => {
         allItems.push({
-          url: f.url,                                        // storage path
+          url: f.url,
           area_key: s.area_key || s.label || s.shot_id,
           label: s.label,
           notes: s.notes || '',
@@ -281,35 +282,35 @@ async function runPrecheck() {
       });
     });
 
-    // Skip ones we've already scanned (path changes when a new photo is taken)
+    // Skip ones we already scanned
     const toScan = allItems.filter(it => !scannedPaths.has(it.url));
 
-    // No work? just surface local flags
+    // Init progress
+    setScanProgress({ done: 0, total: toScan.length });
+
     if (toScan.length === 0) {
       setAiFlags(prev => [...prev, ...localFlags]);
       return;
     }
 
-    // Prepare global rules once
     const global_rules = {
       property: (templateRules?.property || ''),
       template: (templateRules?.template || '')
     };
 
-    // Helper: split array into chunks
-    const chunk = (arr, size) => arr.reduce((acc, _, i) =>
-      (i % size ? acc : acc.concat([arr.slice(i, i + size)])), []);
+    // chunk helper
+    const chunk = (arr, size) =>
+      arr.reduce((acc, _, i) => (i % size ? acc : acc.concat([arr.slice(i, i + size)])), []);
 
     const chunks = chunk(toScan, CHUNK_SIZE);
 
-    // Process chunks with a simple concurrency limiter
     const results = [];
-    let index = 0;
+    let nextIndex = 0;
 
     async function worker() {
-      while (index < chunks.length) {
-        const myIndex = index++;
-        const items = chunks[myIndex];
+      while (nextIndex < chunks.length) {
+        const myIdx = nextIndex++;
+        const items = chunks[myIdx];
 
         try {
           const resp = await fetch('/api/vision-scan', {
@@ -322,24 +323,26 @@ async function runPrecheck() {
             results.push(...json.results);
           }
         } catch (e) {
-          // If a batch fails, just continue; we’ll show what we got
           console.warn('vision batch failed', e);
+        } finally {
+          // bump progress by the batch size we attempted
+          setScanProgress(prev => ({ done: Math.min(prev.done + items.length, prev.total), total: prev.total }));
         }
       }
     }
 
-    // Kick off PARALLEL workers
+    // run limited concurrency
     const workers = Array.from({ length: Math.min(PARALLEL, chunks.length) }, () => worker());
     await Promise.all(workers);
 
-    // Merge per-photo results into state
+    // Merge per-photo issues
     const perPhoto = { ...aiByPath };
     results.forEach(r => {
       perPhoto[r.path] = Array.isArray(r.issues) ? r.issues : [];
     });
     setAiByPath(perPhoto);
 
-    // Build the summary lines
+    // Summary lines
     const aiLines = [];
     results.forEach(r => {
       (r.issues || []).forEach(issue => {
@@ -349,7 +352,7 @@ async function runPrecheck() {
       });
     });
 
-    // Mark scanned paths so we don’t rescan next time
+    // Remember scanned paths
     setScannedPaths(prev => {
       const next = new Set(prev);
       toScan.forEach(it => next.add(it.url));
@@ -359,6 +362,8 @@ async function runPrecheck() {
     setAiFlags(prev => [ ...prev, ...localFlags, ...aiLines ]);
   } finally {
     setPrechecking(false);
+    // tiny delay so users can see 100%, then reset
+    setTimeout(() => setScanProgress({ done: 0, total: 0 }), 600);
   }
 }
 
