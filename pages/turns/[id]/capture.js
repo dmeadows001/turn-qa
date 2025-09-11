@@ -307,29 +307,34 @@ export default function Capture() {
       const results = [];
       let nextIndex = 0;
 
-      async function worker() {
-        while (nextIndex < chunks.length) {
-          const myIdx = nextIndex++;
-          const items = chunks[myIdx];
+     async function worker() {
+  while (nextIndex < chunks.length) {
+    const myIdx = nextIndex++;
+    const items = chunks[myIdx];
 
-          try {
-            const resp = await fetch('/api/vision-scan', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ items, global_rules })
-            });
-            const json = await resp.json();
-            if (Array.isArray(json.results)) {
-              results.push(...json.results);
-            }
-          } catch (e) {
-            console.warn('vision batch failed', e);
-          } finally {
-            // bump progress by the batch size we attempted
-            setScanProgress(prev => ({ done: Math.min(prev.done + items.length, prev.total), total: prev.total }));
-          }
-        }
+    // ⬅️ Optimistic progress: advance as soon as the batch is dispatched
+    setScanProgress(prev => ({
+      done: Math.min(prev.done + items.length, prev.total),
+      total: prev.total
+    }));
+
+    try {
+      const resp = await fetch('/api/vision-scan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items, global_rules })
+      });
+      const json = await resp.json();
+      if (Array.isArray(json.results)) {
+        results.push(...json.results);
       }
+    } catch (e) {
+      console.warn('vision batch failed', e);
+      // no progress change here — already counted when we dispatched
+    }
+  }
+}
+
 
       // run limited concurrency
       const workers = Array.from({ length: Math.min(PARALLEL, chunks.length) }, () => worker());
