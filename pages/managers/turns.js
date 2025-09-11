@@ -21,40 +21,6 @@ function Badge({ status }) {
   );
 }
 
-function Row({ t }) {
-  return (
-    <tr style={{ borderBottom:'1px solid #e5e7eb' }}>
-      <td style={{ padding:'10px 8px' }}>
-        <Badge status={t.status} />
-      </td>
-      <td style={{ padding:'10px 8px' }}>
-        <Link href={`/turns/${t.id}/review`} style={{ color:'#0369a1', textDecoration:'none', fontWeight:700 }}>
-          {t.property_name || '—'}
-        </Link>
-        <div style={{ fontSize:12, color:'#64748b' }}>
-          Cleaner: {t.cleaner_name || '—'}
-        </div>
-      </td>
-      <td style={{ padding:'10px 8px' }}>
-        {t.turn_date || '—'}
-        <div style={{ fontSize:12, color:'#64748b' }}>
-          Submitted: {t.submitted_at ? new Date(t.submitted_at).toLocaleString() : '—'}
-        </div>
-      </td>
-      <td style={{ padding:'10px 8px' }}>{t.photo_count ?? 0}</td>
-      <td style={{ padding:'10px 8px' }}>{t.finding_count ?? 0}</td>
-      <td style={{ padding:'10px 8px' }}>
-        <Link href={`/turns/${t.id}/review`} style={{
-          display:'inline-block', padding:'8px 10px', border:'1px solid #e5e7eb', borderRadius:10,
-          textDecoration:'none', color:'#0f172a', background:'#fff'
-        }}>
-          Open Review →
-        </Link>
-      </td>
-    </tr>
-  );
-}
-
 export default function ManagerTurns() {
   // filters
   const [status, setStatus] = useState('submitted');
@@ -66,6 +32,7 @@ export default function ManagerTurns() {
   const [loading, setLoading] = useState(true);
   const [turns, setTurns] = useState([]);
   const [properties, setProperties] = useState([]);
+  const [actingId, setActingId] = useState(null); // row-level spinner
 
   // load properties for dropdown
   useEffect(() => {
@@ -80,7 +47,6 @@ export default function ManagerTurns() {
     })();
   }, []);
 
-  // load turns when filters change
   const query = useMemo(() => ({
     status: status || undefined,
     property_id: propertyId || undefined,
@@ -89,24 +55,56 @@ export default function ManagerTurns() {
     limit: 50,
   }), [status, propertyId, from, to]);
 
-  useEffect(() => {
-    (async () => {
-      setLoading(true);
-      try {
-        const r = await fetch('/api/list-turns', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(query)
-        });
-        const j = await r.json();
-        setTurns(j.turns || []);
-      } catch (e) {
-        console.error(e);
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, [query]);
+  async function refresh() {
+    setLoading(true);
+    try {
+      const r = await fetch('/api/list-turns', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(query)
+      });
+      const j = await r.json();
+      setTurns(j.turns || []);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => { refresh(); }, [query]); // load on filter change
+
+  async function act(turnId, newStatus) {
+    const note = newStatus === 'needs_fix'
+      ? (window.prompt('Optional note for cleaner (visible in review):', '') || '')
+      : '';
+
+    setActingId(turnId);
+    // optimistic local patch
+    const prev = turns.slice();
+    setTurns(ts => ts.map(t => t.id === turnId ? { ...t, status: newStatus } : t));
+
+    try {
+      const r = await fetch('/api/update-turn-status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ turn_id: turnId, new_status: newStatus, manager_note: note })
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || 'update failed');
+
+      // On approve: keep it in the list only if the filter matches
+      // Easiest: just refresh if status filter is not empty
+      if (status) await refresh();
+    } catch (e) {
+      console.error(e);
+      alert(e.message || 'Could not update status.');
+      // revert optimistic change
+      setTurns(prev);
+    } finally {
+      setActingId(null);
+    }
+  }
 
   return (
     <div style={{ minHeight:'100vh', background:'#f8fafc' }}>
@@ -167,15 +165,66 @@ export default function ManagerTurns() {
                 <th style={{ textAlign:'left', padding:'10px 8px', fontSize:12, color:'#475569' }}>Photos</th>
                 <th style={{ textAlign:'left', padding:'10px 8px', fontSize:12, color:'#475569' }}>Findings</th>
                 <th style={{ textAlign:'left', padding:'10px 8px', fontSize:12, color:'#475569' }}></th>
+                <th style={{ textAlign:'left', padding:'10px 8px', fontSize:12, color:'#475569' }}>Actions</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={6} style={{ padding:16, color:'#64748b' }}>Loading…</td></tr>
+                <tr><td colSpan={7} style={{ padding:16, color:'#64748b' }}>Loading…</td></tr>
               ) : (turns.length === 0 ? (
-                <tr><td colSpan={6} style={{ padding:16, color:'#64748b' }}>No turns match these filters.</td></tr>
+                <tr><td colSpan={7} style={{ padding:16, color:'#64748b' }}>No turns match these filters.</td></tr>
               ) : (
-                turns.map(t => <Row key={t.id} t={t} />)
+                turns.map(t => (
+                  <tr key={t.id} style={{ borderBottom:'1px solid #e5e7eb' }}>
+                    <td style={{ padding:'10px 8px' }}><Badge status={t.status} /></td>
+                    <td style={{ padding:'10px 8px' }}>
+                      <Link href={`/turns/${t.id}/review`} style={{ color:'#0369a1', textDecoration:'none', fontWeight:700 }}>
+                        {t.property_name || '—'}
+                      </Link>
+                      <div style={{ fontSize:12, color:'#64748b' }}>
+                        Cleaner: {t.cleaner_name || '—'}
+                      </div>
+                    </td>
+                    <td style={{ padding:'10px 8px' }}>
+                      {t.turn_date || '—'}
+                      <div style={{ fontSize:12, color:'#64748b' }}>
+                        Submitted: {t.submitted_at ? new Date(t.submitted_at).toLocaleString() : '—'}
+                      </div>
+                    </td>
+                    <td style={{ padding:'10px 8px' }}>{t.photo_count ?? 0}</td>
+                    <td style={{ padding:'10px 8px' }}>{t.finding_count ?? 0}</td>
+                    <td style={{ padding:'10px 8px' }}>
+                      <Link href={`/turns/${t.id}/review`} style={{
+                        display:'inline-block', padding:'8px 10px', border:'1px solid #e5e7eb', borderRadius:10,
+                        textDecoration:'none', color:'#0f172a', background:'#fff'
+                      }}>
+                        Open Review →
+                      </Link>
+                    </td>
+                    <td style={{ padding:'10px 8px', whiteSpace:'nowrap' }}>
+                      {(t.status === 'submitted' || t.status === 'needs_fix') ? (
+                        <>
+                          <button
+                            onClick={()=>act(t.id,'needs_fix')}
+                            disabled={actingId === t.id}
+                            style={{ padding:'8px 10px', marginRight:8, borderRadius:10, border:'1px solid #f59e0b', background:'#fffbeb', cursor:'pointer' }}
+                          >
+                            {actingId === t.id ? '…' : '🛠️ Needs Fix'}
+                          </button>
+                          <button
+                            onClick={()=>act(t.id,'approved')}
+                            disabled={actingId === t.id}
+                            style={{ padding:'8px 10px', borderRadius:10, border:'1px solid #22c55e', background:'#ecfdf5', cursor:'pointer' }}
+                          >
+                            {actingId === t.id ? '…' : '✅ Approve'}
+                          </button>
+                        </>
+                      ) : (
+                        <span style={{ color:'#94a3b8' }}>—</span>
+                      )}
+                    </td>
+                  </tr>
+                ))
               ))}
             </tbody>
           </table>
