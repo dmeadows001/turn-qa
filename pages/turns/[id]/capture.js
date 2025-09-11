@@ -85,6 +85,7 @@ export default function Capture() {
   const [aiByPath, setAiByPath] = useState({});             // { [storagePath]: issues[] }
   const [submitting, setSubmitting] = useState(false);
   const [prechecking, setPrechecking] = useState(false);
+  const [templateRules, setTemplateRules] = useState({ property: '', template: '' });
 
   // --- Lightbox state ---
   const [lightboxOpen, setLightboxOpen] = useState(false);
