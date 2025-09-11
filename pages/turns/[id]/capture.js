@@ -312,9 +312,9 @@ export default function Capture() {
     const myIdx = nextIndex++;
     const items = chunks[myIdx];
 
-    // ⬅️ Optimistic progress: advance as soon as the batch is dispatched
+    // Give half progress when dispatching this batch
     setScanProgress(prev => ({
-      done: Math.min(prev.done + items.length, prev.total),
+      done: Math.min(prev.done + items.length * 0.5, prev.total),
       total: prev.total
     }));
 
@@ -330,10 +330,18 @@ export default function Capture() {
       }
     } catch (e) {
       console.warn('vision batch failed', e);
-      // no progress change here — already counted when we dispatched
+      // If a batch fails, we won't add the second half; that's okay since no results came back.
+      continue;
     }
+
+    // Grant the remaining half when the batch completes
+    setScanProgress(prev => ({
+      done: Math.min(prev.done + items.length * 0.5, prev.total),
+      total: prev.total
+    }));
   }
 }
+
 
 
       // run limited concurrency
