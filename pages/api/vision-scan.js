@@ -49,7 +49,7 @@ async function signedReadUrl(path) {
     .from('photos')
     .createSignedUrl(path, expiresIn, {
       // If your SDK doesn't support transform, remove this block.
-      transform: { width: 1600, resize: 'contain' }
+      transform: { width: 1200, resize: 'contain' }
     });
   if (error) throw error;
   return data.signedUrl;
