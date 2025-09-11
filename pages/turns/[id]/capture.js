@@ -20,7 +20,6 @@ function BigButton({ children, onPress, loading=false, kind='primary', full=fals
   const handlePointerUp = async (e) => {
     e.preventDefault();
     if (loading || busyRef.current) return;
-    // tiny debounce to avoid double fire on some devices
     const now = Date.now();
     if (now - lastFireRef.current < 250) return;
     lastFireRef.current = now;
@@ -29,7 +28,6 @@ function BigButton({ children, onPress, loading=false, kind='primary', full=fals
       busyRef.current = true;
       await onPress?.();
     } finally {
-      // slight delay to avoid rapid re-press on slow networks
       setTimeout(() => { busyRef.current = false; }, 200);
     }
   };
@@ -43,8 +41,8 @@ function BigButton({ children, onPress, loading=false, kind='primary', full=fals
       fontWeight: 600,
       fontSize: 16,
       lineHeight: '22px',
-      padding: '14px 18px',               // 44px+ target with padding + border
-      minHeight: 48,                       // 🖐️ finger target
+      padding: '14px 18px',
+      minHeight: 48,
       borderRadius: 12,
       border: '1px solid transparent',
       display: 'inline-flex',
@@ -82,11 +80,11 @@ export default function Capture() {
 
   // -------- State --------
   const [shots, setShots] = useState(null);                 // [{shot_id, area_key, label, min_count, notes}]
-  const [uploadsByShot, setUploadsByShot] = useState({});   // { [shotId]: [{name,url,width,height,shotId}] }
+  const [uploadsByShot, setUploadsByShot] = useState({});   // { [shotId]: [{name,url,width,height,shotId,preview}] }
   const [aiFlags, setAiFlags] = useState([]);               // combined findings
   const [aiByPath, setAiByPath] = useState({});             // { [storagePath]: issues[] }
   const [submitting, setSubmitting] = useState(false);
-  const [prechecking, setPrechecking] = useState(false);    // NEW: loading state for AI precheck
+  const [prechecking, setPrechecking] = useState(false);
 
   // --- Lightbox state ---
   const [lightboxOpen, setLightboxOpen] = useState(false);
@@ -203,6 +201,9 @@ export default function Capture() {
         continue;
       }
 
+      // Create a local preview URL so the card shows the image instantly
+      const preview = URL.createObjectURL(f);
+
       const up = await fetch('/api/upload-url', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -210,6 +211,7 @@ export default function Capture() {
       }).then(r => r.json());
 
       if (!up.uploadUrl || !up.path) {
+        URL.revokeObjectURL(preview);
         alert('Could not get upload URL; try again.');
         continue;
       }
@@ -220,7 +222,7 @@ export default function Capture() {
         body: f
       });
 
-      uploaded.push({ name: f.name, shotId, url: up.path, width: dims.width, height: dims.height });
+      uploaded.push({ name: f.name, shotId, url: up.path, width: dims.width, height: dims.height, preview });
     }
 
     if (uploaded.length) {
@@ -228,9 +230,20 @@ export default function Capture() {
     }
   }
 
+  // Cleanup preview URLs on unmount to avoid memory leaks
+  useEffect(() => {
+    return () => {
+      Object.values(uploadsByShot).flat().forEach(f => {
+        if (f.preview) URL.revokeObjectURL(f.preview);
+      });
+    };
+    // It's okay not to include uploadsByShot as a dep; we just need cleanup on unmount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // -------- AI Pre-Check (local + OpenAI vision) --------
   async function runPrecheck() {
-    if (prechecking) return;       // guard rapid taps
+    if (prechecking) return;
     setPrechecking(true);
 
     try {
@@ -246,13 +259,12 @@ export default function Capture() {
         });
       });
 
-      // Build items directly
       const items = [];
       (shots || []).forEach(s => {
         (uploadsByShot[s.shot_id] || []).forEach(f => {
           items.push({
-            url: f.url,                                  // storage path
-            area_key: s.area_key || s.label || s.shot_id // context label
+            url: f.url,
+            area_key: s.area_key || s.label || s.shot_id
           });
         });
       });
@@ -310,7 +322,6 @@ export default function Capture() {
       }
       alert('Submitted! (MVP)');
     } finally {
-      // small delay so users see state change and avoid immediate double-tap
       setTimeout(() => setSubmitting(false), 300);
     }
   }
@@ -361,6 +372,18 @@ export default function Capture() {
               {/* Existing uploads */}
               {files.map(f => (
                 <div key={f.url} style={{ border:'1px solid #eee', borderRadius:10, padding:10 }}>
+                  {/* NEW: thumbnail preview */}
+                  {f.preview && (
+                    <div style={{ marginBottom:8 }}>
+                      <img
+                        src={f.preview}
+                        alt={f.name}
+                        style={{ width: '100%', height: 160, objectFit: 'cover', borderRadius: 8 }}
+                        draggable={false}
+                      />
+                    </div>
+                  )}
+
                   <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:6 }}>
                     <div style={{ fontSize:13, maxWidth:'70%' }}>
                       <b title={f.name}>{f.name}</b><br/>
@@ -404,7 +427,7 @@ export default function Capture() {
                     flexDirection:'column',
                     alignItems:'center',
                     justifyContent:'center',
-                    minHeight:160,          // bigger target
+                    minHeight:160,
                     userSelect:'none',
                     WebkitTapHighlightColor:'transparent'
                   }}
@@ -432,23 +455,11 @@ export default function Capture() {
       </div>
 
       <div style={{ display:'flex', gap:12, marginTop:16, flexWrap:'wrap' }}>
-        <BigButton
-          onPress={runPrecheck}
-          loading={prechecking}
-          kind="primary"
-          full={false}
-          ariaLabel="Run AI Pre-Check"
-        >
+        <BigButton onPress={runPrecheck} loading={prechecking} kind="primary" ariaLabel="Run AI Pre-Check">
           🔎 Run AI Pre-Check
         </BigButton>
 
-        <BigButton
-          onPress={submitAll}
-          loading={submitting}
-          kind="secondary"
-          full={false}
-          ariaLabel="Submit Turn"
-        >
+        <BigButton onPress={submitAll} loading={submitting} kind="secondary" ariaLabel="Submit Turn">
           ✅ Submit Turn
         </BigButton>
       </div>
