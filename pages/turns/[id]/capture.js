@@ -251,7 +251,7 @@ export default function Capture() {
     setPrechecking(true);
 
     // Tune to taste
-    const CHUNK_SIZE = 6;   // images per API call
+    const CHUNK_SIZE = 4;   // images per API call
     const PARALLEL   = 3;   // concurrent API calls
 
     try {
