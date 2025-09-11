@@ -12,16 +12,81 @@ const DEFAULT_SHOTS = [
   { shot_id: 'fallback-bedroom',        area_key: 'bedroom_overall',     label: 'Bedroom - Overall',         min_count: 1 }
 ];
 
+/** Touch-friendly button with built-in loading + debounce */
+function BigButton({ children, onPress, loading=false, kind='primary', full=false, ariaLabel }) {
+  const busyRef = useRef(false);
+  const lastFireRef = useRef(0);
+
+  const handlePointerUp = async (e) => {
+    e.preventDefault();
+    if (loading || busyRef.current) return;
+    // tiny debounce to avoid double fire on some devices
+    const now = Date.now();
+    if (now - lastFireRef.current < 250) return;
+    lastFireRef.current = now;
+
+    try {
+      busyRef.current = true;
+      await onPress?.();
+    } finally {
+      // slight delay to avoid rapid re-press on slow networks
+      setTimeout(() => { busyRef.current = false; }, 200);
+    }
+  };
+
+  const styles = {
+    base: {
+      userSelect: 'none',
+      WebkitTapHighlightColor: 'transparent',
+      outline: 'none',
+      cursor: loading ? 'default' : 'pointer',
+      fontWeight: 600,
+      fontSize: 16,
+      lineHeight: '22px',
+      padding: '14px 18px',               // 44px+ target with padding + border
+      minHeight: 48,                       // 🖐️ finger target
+      borderRadius: 12,
+      border: '1px solid transparent',
+      display: 'inline-flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 8,
+      width: full ? '100%' : 'auto',
+      transition: 'transform 80ms ease, opacity 120ms ease',
+      transform: loading ? 'scale(0.99)' : 'none',
+      opacity: loading ? 0.85 : 1
+    },
+    primary: { background: '#0ea5e9', color: '#fff' },
+    secondary: { background: '#f8fafc', color: '#0f172a', border: '1px solid #e5e7eb' }
+  };
+
+  const style = { ...styles.base, ...(kind === 'primary' ? styles.primary : styles.secondary) };
+
+  return (
+    <button
+      type="button"
+      onPointerUp={handlePointerUp}
+      aria-label={ariaLabel}
+      aria-busy={loading ? 'true' : 'false'}
+      disabled={loading}
+      style={style}
+    >
+      {loading ? 'Working…' : children}
+    </button>
+  );
+}
+
 export default function Capture() {
   const { query } = useRouter();
   const turnId = query.id;
 
   // -------- State --------
-  const [shots, setShots] = useState(null);        // [{shot_id, area_key, label, min_count, notes}]
-  const [uploadsByShot, setUploadsByShot] = useState({}); // { [shotId]: [{name,url,width,height,shotId}] }
-  const [aiFlags, setAiFlags] = useState([]);      // combined findings
-  const [aiByPath, setAiByPath] = useState({});    // { [storagePath]: issues[] }
+  const [shots, setShots] = useState(null);                 // [{shot_id, area_key, label, min_count, notes}]
+  const [uploadsByShot, setUploadsByShot] = useState({});   // { [shotId]: [{name,url,width,height,shotId}] }
+  const [aiFlags, setAiFlags] = useState([]);               // combined findings
+  const [aiByPath, setAiByPath] = useState({});             // { [storagePath]: issues[] }
   const [submitting, setSubmitting] = useState(false);
+  const [prechecking, setPrechecking] = useState(false);    // NEW: loading state for AI precheck
 
   // --- Lightbox state ---
   const [lightboxOpen, setLightboxOpen] = useState(false);
@@ -165,59 +230,64 @@ export default function Capture() {
 
   // -------- AI Pre-Check (local + OpenAI vision) --------
   async function runPrecheck() {
-    const localFlags = [];
-    const MIN_LONGEST = 1024;
+    if (prechecking) return;       // guard rapid taps
+    setPrechecking(true);
 
-    Object.entries(uploadsByShot).forEach(([shotId, files]) => {
-      files.forEach(f => {
-        const longest = Math.max(f.width || 0, f.height || 0);
-        if (longest && longest < MIN_LONGEST) {
-          localFlags.push(`Low-resolution in shot ${shotId}: ${f.name} (${f.width}×${f.height})`);
-        }
-      });
-    });
+    try {
+      const localFlags = [];
+      const MIN_LONGEST = 1024;
 
-    // Build items directly (so server doesn't need uploadsByArea map)
-    const items = [];
-    (shots || []).forEach(s => {
-      (uploadsByShot[s.shot_id] || []).forEach(f => {
-        items.push({
-          url: f.url,                 // storage path
-          area_key: s.area_key || s.label || s.shot_id, // context for AI + display
+      Object.entries(uploadsByShot).forEach(([shotId, files]) => {
+        files.forEach(f => {
+          const longest = Math.max(f.width || 0, f.height || 0);
+          if (longest && longest < MIN_LONGEST) {
+            localFlags.push(`Low-resolution in shot ${shotId}: ${f.name} (${f.width}×${f.height})`);
+          }
         });
       });
-    });
 
-    // Optional: keep your rules endpoint call if you like
-    const ruleResp = { flags: [] };
-
-    const aiResp = await fetch('/api/vision-scan', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items })
-    }).then(r => r.json()).catch(() => ({ results: [], error: 'network' }));
-
-    const perPhoto = {};
-    (aiResp.results || []).forEach(r => {
-      perPhoto[r.path] = Array.isArray(r.issues) ? r.issues : [];
-    });
-    setAiByPath(perPhoto);
-
-    const aiLines = [];
-    (aiResp.results || []).forEach(r => {
-      (r.issues || []).forEach(issue => {
-        const sev = (issue.severity || 'info').toUpperCase();
-        const conf = typeof issue.confidence === 'number' ? ` (${Math.round(issue.confidence * 100)}%)` : '';
-        aiLines.push(`${sev} in ${r.area_key || 'unknown'}: ${issue.label}${conf}`);
+      // Build items directly
+      const items = [];
+      (shots || []).forEach(s => {
+        (uploadsByShot[s.shot_id] || []).forEach(f => {
+          items.push({
+            url: f.url,                                  // storage path
+            area_key: s.area_key || s.label || s.shot_id // context label
+          });
+        });
       });
-    });
-    if (aiResp.error) aiLines.unshift(`AI check notice: ${aiResp.error}`);
 
-    setAiFlags([ ...(ruleResp.flags || []), ...localFlags, ...aiLines ]);
+      const aiResp = await fetch('/api/vision-scan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items })
+      }).then(r => r.json()).catch(() => ({ results: [], error: 'network' }));
+
+      const perPhoto = {};
+      (aiResp.results || []).forEach(r => {
+        perPhoto[r.path] = Array.isArray(r.issues) ? r.issues : [];
+      });
+      setAiByPath(perPhoto);
+
+      const aiLines = [];
+      (aiResp.results || []).forEach(r => {
+        (r.issues || []).forEach(issue => {
+          const sev = (issue.severity || 'info').toUpperCase();
+          const conf = typeof issue.confidence === 'number' ? ` (${Math.round(issue.confidence * 100)}%)` : '';
+          aiLines.push(`${sev} in ${r.area_key || 'unknown'}: ${issue.label}${conf}`);
+        });
+      });
+      if (aiResp.error) aiLines.unshift(`AI check notice: ${aiResp.error}`);
+
+      setAiFlags([ ...localFlags, ...aiLines ]);
+    } finally {
+      setPrechecking(false);
+    }
   }
 
   // -------- Submit (enforce min counts per shot) --------
   async function submitAll() {
+    if (submitting) return;
     const unmet = (shots || []).filter(s => (s.min_count || 1) > (uploadsByShot[s.shot_id]?.length || 0));
     if (unmet.length) {
       alert('Please add required photos before submitting:\n' + unmet.map(a => `• ${a.label}`).join('\n'));
@@ -225,20 +295,24 @@ export default function Capture() {
     }
 
     setSubmitting(true);
-    const photos = Object.values(uploadsByShot).flat();
-    const resp = await fetch('/api/submit-turn', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ turnId, photos })
-    });
-    setSubmitting(false);
+    try {
+      const photos = Object.values(uploadsByShot).flat();
+      const resp = await fetch('/api/submit-turn', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ turnId, photos })
+      });
 
-    if (!resp.ok) {
-      const err = await resp.json().catch(() => ({}));
-      alert('Submit failed: ' + (err.error || resp.statusText));
-      return;
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        alert('Submit failed: ' + (err.error || resp.statusText));
+        return;
+      }
+      alert('Submitted! (MVP)');
+    } finally {
+      // small delay so users see state change and avoid immediate double-tap
+      setTimeout(() => setSubmitting(false), 300);
     }
-    alert('Submitted! (MVP)');
   }
 
   // -------- Render --------
@@ -277,9 +351,9 @@ export default function Capture() {
                   Required: {required} • Uploaded: {files.length} {missing>0 ? `• Missing: ${missing}` : '• ✅'}
                 </div>
               </div>
-              <button onClick={()=>openPicker(s.shot_id)} style={{ padding:'8px 12px' }}>
+              <BigButton kind="secondary" onPress={() => openPicker(s.shot_id)} ariaLabel={`Add photo for ${s.label}`}>
                 ➕ Add photo
-              </button>
+              </BigButton>
             </div>
 
             {/* File cards + placeholders */}
@@ -292,9 +366,9 @@ export default function Capture() {
                       <b title={f.name}>{f.name}</b><br/>
                       {f.width}×{f.height}
                     </div>
-                    <button onClick={() => viewPhoto(f.url)} style={{ padding:'6px 10px' }}>
+                    <BigButton kind="secondary" onPress={() => viewPhoto(f.url)} ariaLabel={`View ${f.name}`}>
                       👁️ View
-                    </button>
+                    </BigButton>
                   </div>
 
                   {/* AI flags under each photo */}
@@ -318,22 +392,25 @@ export default function Capture() {
               {Array.from({ length: missing }).map((_, i) => (
                 <button
                   key={`ph-${s.shot_id}-${i}`}
-                  onClick={()=>openPicker(s.shot_id)}
+                  onPointerUp={() => openPicker(s.shot_id)}
+                  aria-label={`Add required photo for ${s.label}`}
                   style={{
                     border:'2px dashed #cbd5e1',
                     borderRadius:12,
-                    padding:'16px 12px',
+                    padding:'20px 14px',
                     background:'transparent',
                     cursor:'pointer',
                     display:'flex',
                     flexDirection:'column',
                     alignItems:'center',
                     justifyContent:'center',
-                    minHeight:140
+                    minHeight:160,          // bigger target
+                    userSelect:'none',
+                    WebkitTapHighlightColor:'transparent'
                   }}
                 >
-                  <div style={{ fontSize:28, lineHeight:1, color:'#64748b', marginBottom:8 }}>＋</div>
-                  <div style={{ fontSize:14, color:'#64748b' }}>Tap to add required photo</div>
+                  <div style={{ fontSize:30, lineHeight:1, color:'#64748b', marginBottom:8 }}>＋</div>
+                  <div style={{ fontSize:15, color:'#475569' }}>Tap to add required photo</div>
                   <div style={{ fontSize:12, color:'#94a3b8', marginTop:4 }}>{s.label}</div>
                 </button>
               ))}
@@ -346,7 +423,7 @@ export default function Capture() {
       <div style={{ border:'1px dashed #cbd5e1', borderRadius:12, padding:12, marginTop:16 }}>
         <div style={{ fontWeight:600, marginBottom:8 }}>AI Findings</div>
         {aiFlags.length === 0 ? (
-          <div style={{ color:'#64748b' }}>No findings yet — click “Run AI Pre-Check”.</div>
+          <div style={{ color:'#64748b' }}>No findings yet — tap “Run AI Pre-Check”.</div>
         ) : (
           <ul style={{ marginLeft:18 }}>
             {aiFlags.map((f, i) => <li key={i}>{f}</li>)}
@@ -354,13 +431,26 @@ export default function Capture() {
         )}
       </div>
 
-      <div style={{ display:'flex', gap:12, marginTop:16 }}>
-        <button onClick={runPrecheck} style={{ padding:'10px 14px' }}>
+      <div style={{ display:'flex', gap:12, marginTop:16, flexWrap:'wrap' }}>
+        <BigButton
+          onPress={runPrecheck}
+          loading={prechecking}
+          kind="primary"
+          full={false}
+          ariaLabel="Run AI Pre-Check"
+        >
           🔎 Run AI Pre-Check
-        </button>
-        <button onClick={submitAll} disabled={submitting} style={{ padding:'10px 14px', opacity: submitting ? 0.6 : 1 }}>
+        </BigButton>
+
+        <BigButton
+          onPress={submitAll}
+          loading={submitting}
+          kind="secondary"
+          full={false}
+          ariaLabel="Submit Turn"
+        >
           ✅ Submit Turn
-        </button>
+        </BigButton>
       </div>
 
       {/* --- LIGHTBOX MODAL --- */}
@@ -375,14 +465,14 @@ export default function Capture() {
           <div style={{ position:'relative', width:'min(95vw,1100px)', maxHeight:'90vh', background:'#111', borderRadius:12, overflow:'hidden' }}>
             {/* Toolbar */}
             <div style={{ display:'flex', gap:8, padding:'8px 10px', alignItems:'center', background:'#0f172a', color:'#fff' }}>
-              <button onClick={closeLightbox} style={{ padding:'6px 10px' }}>✖ Close (Esc)</button>
+              <button onClick={closeLightbox} style={{ padding:'10px 12px', fontSize:14, borderRadius:10 }}>✖ Close (Esc)</button>
               <div style={{ flex:1 }} />
-              <button onClick={zoomOut} style={{ padding:'6px 10px' }}>➖ Zoom</button>
-              <button onClick={zoomIn} style={{ padding:'6px 10px' }}>➕ Zoom</button>
-              <button onClick={rotateLeft} style={{ padding:'6px 10px' }}>⟲ Rotate</button>
-              <button onClick={rotateRight} style={{ padding:'6px 10px' }}>⟳ Rotate</button>
-              <button onClick={refreshSignedUrl} style={{ padding:'6px 10px' }}>⟳ Refresh URL</button>
-              <button onClick={downloadCurrent} style={{ padding:'6px 10px' }}>⬇ Download</button>
+              <button onClick={zoomOut} style={{ padding:'10px 12px', fontSize:14, borderRadius:10 }}>➖ Zoom</button>
+              <button onClick={zoomIn} style={{ padding:'10px 12px', fontSize:14, borderRadius:10 }}>➕ Zoom</button>
+              <button onClick={rotateLeft} style={{ padding:'10px 12px', fontSize:14, borderRadius:10 }}>⟲ Rotate</button>
+              <button onClick={rotateRight} style={{ padding:'10px 12px', fontSize:14, borderRadius:10 }}>⟳ Rotate</button>
+              <button onClick={refreshSignedUrl} style={{ padding:'10px 12px', fontSize:14, borderRadius:10 }}>⟳ Refresh URL</button>
+              <button onClick={downloadCurrent} style={{ padding:'10px 12px', fontSize:14, borderRadius:10 }}>⬇ Download</button>
             </div>
 
             {/* Image */}
