@@ -79,7 +79,7 @@ export default function Capture() {
   const turnId = query.id;
 
   // -------- State --------
-  const [shots, setShots] = useState(null);                     // [{shot_id, area_key, label, min_count, notes}]
+  const [shots, setShots] = useState(null);                     // [{shot_id, area_key, label, min_count, notes, rules_text}]
   const [uploadsByShot, setUploadsByShot] = useState({});       // { [shotId]: [{name,url,width,height,shotId,preview}] }
   const [aiFlags, setAiFlags] = useState([]);                   // combined findings
   const [aiByPath, setAiByPath] = useState({});                 // { [storagePath]: issues[] }
@@ -173,7 +173,8 @@ export default function Capture() {
             area_key: s.area_key,
             label: s.label,
             min_count: s.min_count || 1,
-            notes: s.notes || ''
+            notes: s.notes || '',
+            rules_text: s.rules_text || ''   // <-- keep shot-level rules so AI sees them
           })));
         } else {
           setShots(DEFAULT_SHOTS);
@@ -241,131 +242,130 @@ export default function Capture() {
         if (f.preview) URL.revokeObjectURL(f.preview);
       });
     };
-    // It's okay not to include uploadsByShot as a dep; we just need cleanup on unmount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-// -------- AI Pre-Check (local + OpenAI vision) — batched & progress --------
-async function runPrecheck() {
-  if (prechecking) return;
-  setPrechecking(true);
+  // -------- AI Pre-Check (local + OpenAI vision) — batched & progress --------
+  async function runPrecheck() {
+    if (prechecking) return;
+    setPrechecking(true);
 
-  // Tune to taste
-  const CHUNK_SIZE = 6;   // images per API call
-  const PARALLEL   = 3;   // concurrent API calls
+    // Tune to taste
+    const CHUNK_SIZE = 6;   // images per API call
+    const PARALLEL   = 3;   // concurrent API calls
 
-  try {
-    const localFlags = [];
-    const MIN_LONGEST = 1024;
+    try {
+      const localFlags = [];
+      const MIN_LONGEST = 1024;
 
-    // Local quality checks
-    Object.entries(uploadsByShot).forEach(([shotId, files]) => {
-      files.forEach(f => {
-        const longest = Math.max(f.width || 0, f.height || 0);
-        if (longest && longest < MIN_LONGEST) {
-          localFlags.push(`Low-resolution in shot ${shotId}: ${f.name} (${f.width}×${f.height})`);
-        }
-      });
-    });
-
-    // Build all items with context
-    const allItems = [];
-    (shots || []).forEach(s => {
-      (uploadsByShot[s.shot_id] || []).forEach(f => {
-        allItems.push({
-          url: f.url,
-          area_key: s.area_key || s.label || s.shot_id,
-          label: s.label,
-          notes: s.notes || '',
-          shot_rules: s.rules_text || ''
+      // Local quality checks
+      Object.entries(uploadsByShot).forEach(([shotId, files]) => {
+        files.forEach(f => {
+          const longest = Math.max(f.width || 0, f.height || 0);
+          if (longest && longest < MIN_LONGEST) {
+            localFlags.push(`Low-resolution in shot ${shotId}: ${f.name} (${f.width}×${f.height})`);
+          }
         });
       });
-    });
 
-    // Skip ones we already scanned
-    const toScan = allItems.filter(it => !scannedPaths.has(it.url));
-
-    // Init progress
-    setScanProgress({ done: 0, total: toScan.length });
-
-    if (toScan.length === 0) {
-      setAiFlags(prev => [...prev, ...localFlags]);
-      return;
-    }
-
-    const global_rules = {
-      property: (templateRules?.property || ''),
-      template: (templateRules?.template || '')
-    };
-
-    // chunk helper
-    const chunk = (arr, size) =>
-      arr.reduce((acc, _, i) => (i % size ? acc : acc.concat([arr.slice(i, i + size)])), []);
-
-    const chunks = chunk(toScan, CHUNK_SIZE);
-
-    const results = [];
-    let nextIndex = 0;
-
-    async function worker() {
-      while (nextIndex < chunks.length) {
-        const myIdx = nextIndex++;
-        const items = chunks[myIdx];
-
-        try {
-          const resp = await fetch('/api/vision-scan', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ items, global_rules })
+      // Build all items with context
+      const allItems = [];
+      (shots || []).forEach(s => {
+        (uploadsByShot[s.shot_id] || []).forEach(f => {
+          allItems.push({
+            url: f.url,
+            area_key: s.area_key || s.label || s.shot_id,
+            label: s.label,
+            notes: s.notes || '',
+            shot_rules: s.rules_text || ''
           });
-          const json = await resp.json();
-          if (Array.isArray(json.results)) {
-            results.push(...json.results);
+        });
+      });
+
+      // Skip ones we already scanned
+      const toScan = allItems.filter(it => !scannedPaths.has(it.url));
+
+      // Init progress
+      setScanProgress({ done: 0, total: toScan.length });
+
+      if (toScan.length === 0) {
+        setAiFlags(prev => [...prev, ...localFlags]);
+        return;
+      }
+
+      const global_rules = {
+        property: (templateRules?.property || ''),
+        template: (templateRules?.template || '')
+      };
+
+      // chunk helper
+      const chunk = (arr, size) =>
+        arr.reduce((acc, _, i) => (i % size ? acc : acc.concat([arr.slice(i, i + size)])), []);
+
+      const chunks = chunk(toScan, CHUNK_SIZE);
+
+      const results = [];
+      let nextIndex = 0;
+
+      async function worker() {
+        while (nextIndex < chunks.length) {
+          const myIdx = nextIndex++;
+          const items = chunks[myIdx];
+
+          try {
+            const resp = await fetch('/api/vision-scan', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ items, global_rules })
+            });
+            const json = await resp.json();
+            if (Array.isArray(json.results)) {
+              results.push(...json.results);
+            }
+          } catch (e) {
+            console.warn('vision batch failed', e);
+          } finally {
+            // bump progress by the batch size we attempted
+            setScanProgress(prev => ({ done: Math.min(prev.done + items.length, prev.total), total: prev.total }));
           }
-        } catch (e) {
-          console.warn('vision batch failed', e);
-        } finally {
-          // bump progress by the batch size we attempted
-          setScanProgress(prev => ({ done: Math.min(prev.done + items.length, prev.total), total: prev.total }));
         }
       }
-    }
 
-    // run limited concurrency
-    const workers = Array.from({ length: Math.min(PARALLEL, chunks.length) }, () => worker());
-    await Promise.all(workers);
+      // run limited concurrency
+      const workers = Array.from({ length: Math.min(PARALLEL, chunks.length) }, () => worker());
+      await Promise.all(workers);
 
-    // Merge per-photo issues
-    const perPhoto = { ...aiByPath };
-    results.forEach(r => {
-      perPhoto[r.path] = Array.isArray(r.issues) ? r.issues : [];
-    });
-    setAiByPath(perPhoto);
-
-    // Summary lines
-    const aiLines = [];
-    results.forEach(r => {
-      (r.issues || []).forEach(issue => {
-        const sev = (issue.severity || 'info').toUpperCase();
-        const conf = typeof issue.confidence === 'number' ? ` (${Math.round(issue.confidence * 100)}%)` : '';
-        aiLines.push(`${sev} in ${r.area_key || 'unknown'}: ${issue.label}${conf}`);
+      // Merge per-photo issues
+      const perPhoto = { ...aiByPath };
+      results.forEach(r => {
+        perPhoto[r.path] = Array.isArray(r.issues) ? r.issues : [];
       });
-    });
+      setAiByPath(perPhoto);
 
-    // Remember scanned paths
-    setScannedPaths(prev => {
-      const next = new Set(prev);
-      toScan.forEach(it => next.add(it.url));
-      return next;
-    });
+      // Summary lines
+      const aiLines = [];
+      results.forEach(r => {
+        (r.issues || []).forEach(issue => {
+          const sev = (issue.severity || 'info').toUpperCase();
+          const conf = typeof issue.confidence === 'number' ? ` (${Math.round(issue.confidence * 100)}%)` : '';
+          aiLines.push(`${sev} in ${r.area_key || 'unknown'}: ${issue.label}${conf}`);
+        });
+      });
 
-    setAiFlags(prev => [ ...prev, ...localFlags, ...aiLines ]);
-  } finally {
-    setPrechecking(false);
-    // tiny delay so users can see 100%, then reset
-    setTimeout(() => setScanProgress({ done: 0, total: 0 }), 600);
+      // Remember scanned paths
+      setScannedPaths(prev => {
+        const next = new Set(prev);
+        toScan.forEach(it => next.add(it.url));
+        return next;
+      });
+
+      setAiFlags(prev => [ ...prev, ...localFlags, ...aiLines ]);
+    } finally {
+      setPrechecking(false);
+      // tiny delay so users can see 100%, then reset
+      setTimeout(() => setScanProgress({ done: 0, total: 0 }), 600);
+    }
   }
-}
 
   // -------- Submit (enforce min counts per shot) --------
   async function submitAll() {
@@ -398,6 +398,10 @@ async function runPrecheck() {
 
   // -------- Render --------
   if (!turnId || shots === null) return <div style={{ padding:24 }}>Loading…</div>;
+
+  const pct = scanProgress.total > 0
+    ? Math.round((scanProgress.done / scanProgress.total) * 100)
+    : null;
 
   return (
     <div style={{ maxWidth: 980, margin: '24px auto', padding: '0 16px', fontFamily: 'ui-sans-serif' }}>
@@ -442,7 +446,7 @@ async function runPrecheck() {
               {/* Existing uploads */}
               {files.map(f => (
                 <div key={f.url} style={{ border:'1px solid #eee', borderRadius:10, padding:10 }}>
-                  {/* NEW: thumbnail preview */}
+                  {/* Thumbnail preview (local, immediate) */}
                   {f.preview && (
                     <div style={{ marginBottom:8 }}>
                       <img
@@ -524,12 +528,41 @@ async function runPrecheck() {
         )}
       </div>
 
-      <div style={{ display:'flex', gap:12, marginTop:16, flexWrap:'wrap' }}>
-        <BigButton onPress={runPrecheck} loading={prechecking} kind="primary" ariaLabel="Run AI Pre-Check">
-          🔎 Run AI Pre-Check
+      {/* Buttons + progress */}
+      <div style={{ display:'flex', flexDirection:'column', gap:12, marginTop:16, maxWidth:420 }}>
+        <BigButton
+          onPress={runPrecheck}
+          loading={prechecking}
+          kind="primary"
+          ariaLabel="Run AI Pre-Check"
+        >
+          {prechecking && scanProgress.total > 0
+            ? `🔎 Scanning ${scanProgress.done}/${scanProgress.total} (${pct}%)`
+            : '🔎 Run AI Pre-Check'}
         </BigButton>
 
-        <BigButton onPress={submitAll} loading={submitting} kind="secondary" ariaLabel="Submit Turn">
+        {prechecking && scanProgress.total > 0 && (
+          <div>
+            <div style={{ height:8, background:'#e5e7eb', borderRadius:6, overflow:'hidden' }}>
+              <div style={{
+                height:'100%',
+                width: `${pct}%`,
+                background:'#0ea5e9',
+                transition:'width 200ms ease'
+              }} />
+            </div>
+            <div style={{ fontSize:12, color:'#475569', marginTop:6 }}>
+              Scanning {scanProgress.done} of {scanProgress.total}…
+            </div>
+          </div>
+        )}
+
+        <BigButton
+          onPress={submitAll}
+          loading={submitting}
+          kind="secondary"
+          ariaLabel="Submit Turn"
+        >
           ✅ Submit Turn
         </BigButton>
       </div>
