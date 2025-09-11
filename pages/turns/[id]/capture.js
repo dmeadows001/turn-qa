@@ -164,6 +164,7 @@ export default function Capture() {
       try {
         const r = await fetch(`/api/turn-template?turnId=${turnId}`);
         const json = await r.json();
+        setTemplateRules(json.rules || { property: '', template: '' });
         if (Array.isArray(json.shots) && json.shots.length) {
           setShots(json.shots.map(s => ({
             shot_id: s.shot_id,
