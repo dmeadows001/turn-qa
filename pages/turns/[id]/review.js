@@ -1,7 +1,6 @@
 // pages/turns/[id]/review.js
 import { useRouter } from 'next/router';
 import { useEffect, useMemo, useState } from 'react';
-import { useEffect, useState } from 'react';
 
 // --- helpers to load data ---
 async function fetchPhotos(turnId) {
@@ -18,10 +17,10 @@ async function fetchTurnStatus(turnId) {
 }
 
 export default function Review() {
-  const { query } = useRouter();
-  const turnId = query.id;
   const router = useRouter();
   const turnId = router.query.id;
+  // ...
+}
 
   const [turnStatus, setTurnStatus] = useState(null);
   const [managerNote, setManagerNote] = useState('');
