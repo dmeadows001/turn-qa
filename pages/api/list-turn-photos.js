@@ -1,70 +1,52 @@
 // pages/api/list-turn-photos.js
 import { supabaseAdmin } from '../../lib/supabase';
 
+// Helper: turn a stored path OR full https URL into a bucket-relative path
+function toBucketPath(raw) {
+  if (!raw) return null;
+  if (raw.startsWith('http')) {
+    // If it's a full URL, try to strip everything up to and including "/photos/"
+    const marker = '/photos/';
+    const i = raw.indexOf(marker);
+    if (i !== -1) return raw.substring(i + marker.length);
+    return null; // can't sign arbitrary external URLs
+  }
+  // If it already starts with "photos/" prefix, strip it
+  if (raw.startsWith('photos/')) return raw.substring('photos/'.length);
+  return raw; // assume it's already a relative path inside the bucket
+}
+
 export default async function handler(req, res) {
   try {
     const id = (req.query.id || '').trim();
     if (!id) return res.status(400).json({ error: 'Missing id' });
 
-    // Try `photos` first (your original table), then fall back to `turn_photos`.
-    let rows = null;
-    let err = null;
-
-    // 1) photos (original)
-    let r1 = await supabaseAdmin
+    // Read from your existing table. (Use the one you actually have.)
+    // Most of your setup used `photos`, not `turn_photos`.
+    const { data, error } = await supabaseAdmin
       .from('photos')
       .select('id, turn_id, shot_id, area_key, url, storage_path, width, height, created_at')
       .eq('turn_id', id)
       .order('created_at', { ascending: true });
 
-    if (r1.error) {
-      err = r1.error;
-    } else {
-      rows = r1.data || [];
-    }
+    if (error) throw error;
 
-    // 2) if table didn't exist or query failed hard, try `turn_photos`
-    if ((!rows || rows.length === 0) && (err?.code === '42P01' || err?.message?.includes('relation "photos" does not exist'))) {
-      const r2 = await supabaseAdmin
-        .from('turn_photos')
-        .select('id, turn_id, shot_id, area_key, url, storage_path, width, height, created_at')
-        .eq('turn_id', id)
-        .order('created_at', { ascending: true });
-
-      if (r2.error) throw r2.error;
-      rows = r2.data || [];
-    } else if (err && !rows) {
-      // real error in the primary attempt
-      throw err;
-    }
-
-    // Sign each path (prefer storage_path, else url if it's a storage path)
     const out = [];
-    for (const row of rows) {
-      const rawPath = row.storage_path || row.url || '';
-      if (!rawPath) continue;
+    for (const row of (data || [])) {
+      // Prefer storage_path; fall back to url
+      const bucketPath = toBucketPath(row.storage_path || row.url);
+      if (!bucketPath) continue;
 
-      // If someone stored a full https URL, strip to bucket path after '/photos/'
-      let path = rawPath;
-      const idx = rawPath.indexOf('/photos/');
-      if (rawPath.startsWith('http') && idx !== -1) {
-        path = rawPath.substring(idx + '/photos/'.length);
-      }
-
-      // Create a 10-minute signed URL from the 'photos' bucket
       const { data: signed, error: signErr } = await supabaseAdmin
         .storage
-        .from('photos')
-        .createSignedUrl(path, 60 * 10);
+        .from('photos')                // bucket name: "photos"
+        .createSignedUrl(bucketPath, 60 * 10); // 10 minutes
 
-      if (signErr) {
-        // Skip signing failure, but continue others
-        continue;
-      }
+      if (signErr) continue;
 
       out.push({
         id: row.id,
-        path,
+        path: bucketPath,
         width: row.width,
         height: row.height,
         area_key: row.area_key || null,
