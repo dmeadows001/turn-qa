@@ -1,6 +1,7 @@
 // pages/turns/[id]/review.js
 import { useRouter } from 'next/router';
 import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 
 // --- helpers to load data ---
 async function fetchPhotos(turnId) {
@@ -19,6 +20,13 @@ async function fetchTurnStatus(turnId) {
 export default function Review() {
   const { query } = useRouter();
   const turnId = query.id;
+  const router = useRouter();
+  const turnId = router.query.id;
+
+  const [turnStatus, setTurnStatus] = useState(null);
+  const [managerNote, setManagerNote] = useState('');
+  const [acting, setActing] = useState(false);
+  const [loadErr, setLoadErr] = useState('');
 
   const [photos, setPhotos] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -54,6 +62,24 @@ export default function Review() {
   }
 
   useEffect(() => { load(); }, [turnId]);
+
+  useEffect(() => {
+  if (!turnId) return;
+  (async () => {
+    try {
+      setLoadErr('');
+      const r = await fetch(`/api/get-turn?id=${turnId}`);
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || 'failed to load turn');
+      setTurnStatus(j.turn.status);
+      // Seed the note with any prior manager note if you want
+      if (j.turn.manager_notes) setManagerNote(j.turn.manager_notes);
+    } catch (e) {
+      setLoadErr(e.message || 'Could not load turn.');
+    }
+  })();
+}, [turnId]);
+
 
   async function mark(statusToSet, withFinding = false) {
     const payload = { turnId, status: statusToSet };
@@ -107,6 +133,99 @@ export default function Review() {
   return (
     <div style={{ maxWidth: 1200, margin: '24px auto', padding: '0 16px', fontFamily: 'ui-sans-serif' }}>
       <h1>Turn {turnId} — Review</h1>
+
+    {/* ---- Manager Action Bar ---- */}
+<div style={{ 
+  margin:'12px 0 16px', padding:12, border:'1px solid #e5e7eb', borderRadius:12, background:'#fff'
+}}>
+  <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
+    <div style={{ fontWeight:700 }}>Status:</div>
+    <span style={{
+      display:'inline-block', padding:'4px 8px', borderRadius:999,
+      background: turnStatus === 'approved' ? '#dcfce7'
+        : turnStatus === 'submitted' ? '#dbeafe'
+        : turnStatus === 'needs_fix' ? '#fef3c7'
+        : turnStatus === 'cancelled' ? '#fee2e2'
+        : '#e2e8f0',
+      color:'#0f172a', fontSize:12, fontWeight:700
+    }}>
+      {turnStatus || '—'}
+    </span>
+    {loadErr && <span style={{ color:'#b91c1c' }}>({loadErr})</span>}
+  </div>
+
+  <div style={{ marginTop:10 }}>
+    <div style={{ fontSize:12, fontWeight:700, color:'#475569', marginBottom:6 }}>
+      Optional note to cleaner (why needs fix or approval notes)
+    </div>
+    <textarea
+      value={managerNote}
+      onChange={e=>setManagerNote(e.target.value)}
+      rows={3}
+      placeholder="Short note that cleaners can see…"
+      style={{ width:'100%', padding:'10px', border:'1px solid #cbd5e1', borderRadius:10, fontSize:14 }}
+    />
+  </div>
+
+  <div style={{ display:'flex', gap:10, marginTop:12, flexWrap:'wrap' }}>
+    <button
+      onClick={async ()=>{
+        if (!turnId) return;
+        const note = managerNote || '';
+        setActing(true);
+        try {
+          const r = await fetch('/api/update-turn-status', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ turn_id: turnId, new_status: 'needs_fix', manager_note: note })
+          });
+          const j = await r.json();
+          if (!r.ok) throw new Error(j.error || 'update failed');
+          setTurnStatus('needs_fix');
+          alert('Marked Needs Fix. Cleaner will see this on their next visit.');
+        } catch (e) {
+          alert(e.message || 'Could not update status.');
+        } finally {
+          setActing(false);
+        }
+      }}
+      disabled={acting || !turnId}
+      style={{ padding:'10px 12px', borderRadius:10, border:'1px solid #f59e0b', background:'#fffbeb', cursor:'pointer' }}
+    >
+      {acting ? '…' : '🛠️ Needs Fix'}
+    </button>
+
+    <button
+      onClick={async ()=>{
+        if (!turnId) return;
+        const ok = window.confirm('Approve this turn?');
+        if (!ok) return;
+        const note = managerNote || '';
+        setActing(true);
+        try {
+          const r = await fetch('/api/update-turn-status', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ turn_id: turnId, new_status: 'approved', manager_note: note })
+          });
+          const j = await r.json();
+          if (!r.ok) throw new Error(j.error || 'update failed');
+          setTurnStatus('approved');
+          alert('Turn approved ✅');
+        } catch (e) {
+          alert(e.message || 'Could not update status.');
+        } finally {
+          setActing(false);
+        }
+      }}
+      disabled={acting || !turnId}
+      style={{ padding:'10px 12px', borderRadius:10, border:'1px solid #22c55e', background:'#ecfdf5', cursor:'pointer' }}
+    >
+      {acting ? '…' : '✅ Approve'}
+    </button>
+  </div>
+</div>
+
 
       <div style={{ margin: '8px 0' }}>
         <b>Status: </b>
