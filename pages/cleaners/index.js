@@ -96,12 +96,23 @@ export default function CleanersStart() {
   const inputStyle = {
     width: '100%',
     maxWidth: '100%',
-    boxSizing: 'border-box',   // prevent overflow
+    boxSizing: 'border-box',
     padding: 10,
     border: '1px solid #cbd5e1',
     borderRadius: 10,
-    fontSize: 16,               // prevent iOS auto-zoom
+    fontSize: 16,
     WebkitTextSizeAdjust: '100%'
+  };
+  const dateInputStyle = {
+    ...inputStyle,
+    appearance: 'none',
+    WebkitAppearance: 'none',
+    MozAppearance: 'none',
+    backgroundClip: 'padding-box',
+    lineHeight: '1.25',
+    // extra guard rails against overflow on iOS
+    overflow: 'hidden',
+    minWidth: 0
   };
   const selectStyle = { ...inputStyle };
 
@@ -110,7 +121,8 @@ export default function CleanersStart() {
     margin: '36px auto',
     padding: '0 16px',
     fontFamily: 'ui-sans-serif',
-    minHeight: '100svh'
+    minHeight: '100svh',
+    overflowX: 'hidden' // belt-and-suspenders for any mobile overflow
   };
 
   return (
@@ -140,7 +152,7 @@ export default function CleanersStart() {
             type="date"
             value={dateStr}
             onChange={e => setDateStr(e.target.value)}
-            style={inputStyle}
+            style={dateInputStyle}
           />
         </div>
 
