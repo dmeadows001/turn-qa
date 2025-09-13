@@ -1,5 +1,11 @@
-// pages/cleaners.js
+// pages/cleaners/index.js
 import { useEffect, useState } from 'react';
+
+function isiOS() {
+  if (typeof navigator === 'undefined') return false;
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) || 
+         (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
 
 export default function CleanersStart() {
   const [properties, setProperties] = useState([]);
@@ -9,7 +15,7 @@ export default function CleanersStart() {
   const [name, setName] = useState('');
   const [dateStr, setDateStr] = useState(() => {
     const d = new Date();
-    return d.toISOString().slice(0, 10); // YYYY-MM-DD
+    return d.toISOString().slice(0, 10);
   });
   const [propertyId, setPropertyId] = useState('');
 
@@ -25,10 +31,7 @@ export default function CleanersStart() {
 
         if (!cancelled) {
           setProperties(j.properties || []);
-          // if exactly 1 property, preselect it
-          if ((j.properties || []).length === 1) {
-            setPropertyId(j.properties[0].id);
-          }
+          if ((j.properties || []).length === 1) setPropertyId(j.properties[0].id);
         }
       } catch (e) {
         if (!cancelled) setLoadErr(e.message || 'Load failed');
@@ -39,12 +42,39 @@ export default function CleanersStart() {
     return () => { cancelled = true; };
   }, []);
 
+  // iOS keyboard/zoom handling
+  useEffect(() => {
+    if (!isiOS()) return;
+
+    const meta = document.querySelector('meta[name=viewport]');
+    const original = meta?.getAttribute('content') || 'width=device-width, initial-scale=1, viewport-fit=cover';
+
+    const onFocusIn = () => {
+      // prevent auto-zoom while a field is focused
+      meta?.setAttribute('content', `${original}, maximum-scale=1, user-scalable=0`);
+    };
+    const onFocusOut = () => {
+      // restore viewport and gently nudge scroll back
+      meta?.setAttribute('content', original);
+      setTimeout(() => {
+        window.scrollTo({ top: 0, left: 0, behavior: 'smooth' });
+      }, 80);
+    };
+
+    window.addEventListener('focusin', onFocusIn);
+    window.addEventListener('focusout', onFocusOut);
+    return () => {
+      window.removeEventListener('focusin', onFocusIn);
+      window.removeEventListener('focusout', onFocusOut);
+      meta?.setAttribute('content', original);
+    };
+  }, []);
+
   async function startTurn() {
     if (!name.trim()) return alert('Please enter your name.');
     if (!propertyId) return alert('Please select a property.');
 
     try {
-      // Minimal server-side start-turn (you may already have this)
       const r = await fetch('/api/start-turn', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -56,8 +86,6 @@ export default function CleanersStart() {
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || 'Could not start');
-
-      // Expect server to return the created/located turn id
       const turnId = j.turn_id || j.id;
       if (!turnId) throw new Error('No turn_id returned');
       window.location.href = `/turns/${turnId}/capture`;
@@ -66,8 +94,26 @@ export default function CleanersStart() {
     }
   }
 
+  const inputStyle = {
+    width: '100%',
+    padding: 10,
+    border: '1px solid #cbd5e1',
+    borderRadius: 10,
+    fontSize: 16,                // 👈 prevents iOS auto-zoom
+    WebkitTextSizeAdjust: '100%' // keep stable text scaling
+  };
+
+  const selectStyle = { ...inputStyle };
+  const containerStyle = {
+    maxWidth: 640,
+    margin: '36px auto',
+    padding: '0 16px',
+    fontFamily: 'ui-sans-serif',
+    minHeight: '100svh'          // better mobile viewport unit (avoids 100vh keyboard issues)
+  };
+
   return (
-    <div style={{ maxWidth: 640, margin: '36px auto', padding: '0 16px', fontFamily: 'ui-sans-serif' }}>
+    <div style={containerStyle}>
       <h1 style={{ fontSize: 34, marginBottom: 6 }}>Cleaners — Start Your Turn</h1>
       <p style={{ color: '#475569', marginBottom: 18 }}>
         Enter your info, pick the property, and we’ll load the required photo checklist.
@@ -82,7 +128,8 @@ export default function CleanersStart() {
             value={name}
             onChange={e => setName(e.target.value)}
             placeholder="Jane"
-            style={{ width: '100%', padding: 10, border: '1px solid #cbd5e1', borderRadius: 10 }}
+            inputMode="text"
+            style={inputStyle}
           />
         </div>
 
@@ -92,7 +139,7 @@ export default function CleanersStart() {
             type="date"
             value={dateStr}
             onChange={e => setDateStr(e.target.value)}
-            style={{ width: '100%', padding: 10, border: '1px solid #cbd5e1', borderRadius: 10 }}
+            style={inputStyle}
           />
         </div>
 
@@ -101,7 +148,7 @@ export default function CleanersStart() {
           <select
             value={propertyId}
             onChange={e => setPropertyId(e.target.value)}
-            style={{ width: '100%', padding: 10, border: '1px solid #cbd5e1', borderRadius: 10 }}
+            style={selectStyle}
           >
             <option value="" disabled>{loading ? 'Loading…' : 'Select a property'}</option>
             {properties.map(p => (
@@ -115,17 +162,25 @@ export default function CleanersStart() {
         <button
           onClick={startTurn}
           style={{
-            width: '100%', padding: '12px 14px', borderRadius: 10,
-            background: '#0ea5e9', color: '#fff', fontWeight: 700, cursor: 'pointer'
+            width: '100%',
+            padding: '14px 16px',
+            borderRadius: 12,
+            background: '#0ea5e9',
+            color: '#fff',
+            fontWeight: 700,
+            fontSize: 16,          // keep buttons comfortable after zoom
+            cursor: 'pointer'
           }}
         >
           Start Turn
         </button>
       </div>
 
+      <div style={{ height: 20 }} /> {/* breathing room below keyboard */}
       <div style={{ marginTop: 16 }}>
-        <a href="/" style={{ color: '#0369a1' }}>← Back to home</a>
+        <a href="/" style={{ color: '#0369a1', fontSize: 16 }}>← Back to home</a>
       </div>
+      <div style={{ height: 24 }} />
     </div>
   );
 }
