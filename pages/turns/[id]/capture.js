@@ -427,7 +427,7 @@ export default function Capture() {
 </div>
 
 <p style={{ color:'#555', marginTop: 8 }}>
-  Upload clear photos for each required shot. Longest side ≥ 1024px, ≤ 6MB. Run AI Pre-Check before submitting.
+  Tap + Inside Box To Take Picture. Run AI Pre-Check before submitting.
 </p>
 
 {/* Show Turn ID only if ?showId=1 is in the URL */}
