@@ -95,13 +95,17 @@ export default function CleanersStart() {
   }
 
   const inputStyle = {
-    width: '100%',
-    padding: 10,
-    border: '1px solid #cbd5e1',
-    borderRadius: 10,
-    fontSize: 16,                // 👈 prevents iOS auto-zoom
-    WebkitTextSizeAdjust: '100%' // keep stable text scaling
-  };
+  width: '100%',
+  maxWidth: '100%',
+  boxSizing: 'border-box',   // ✅ prevents overflow
+  padding: 10,
+  border: '1px solid #cbd5e1',
+  borderRadius: 10,
+  fontSize: 16,
+  WebkitTextSizeAdjust: '100%'
+};
+const selectStyle = { ...inputStyle };
+
 
   const selectStyle = { ...inputStyle };
   const containerStyle = {
@@ -120,8 +124,7 @@ export default function CleanersStart() {
       </p>
 
       {loadErr && <div style={{ color: '#b91c1c', marginBottom: 10 }}>{loadErr}</div>}
-
-      <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 12, padding: 14 }}>
+      <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 12, padding: 14, overflow: 'hidden' }}>
         <div style={{ marginBottom: 12 }}>
           <div style={{ fontWeight: 700, marginBottom: 6 }}>Your Name</div>
           <input
