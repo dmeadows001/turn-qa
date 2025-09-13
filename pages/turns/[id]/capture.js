@@ -418,10 +418,25 @@ export default function Capture() {
 
   return (
     <div style={{ maxWidth: 980, margin: '24px auto', padding: '0 16px', fontFamily: 'ui-sans-serif' }}>
-      <h1>Turn {turnId} — Cleaner Capture</h1>
-      <p style={{ color:'#555' }}>
-        Upload clear photos for each required shot. Longest side ≥ 1024px, ≤ 6MB. Run AI Pre-Check before submitting.
-      </p>
+     <h1>Start taking photos</h1>
+
+{/* small context line for cleaners (no UUID) */}
+<div style={{ color:'#475569', marginTop: 6, fontSize: 14 }}>
+  {templateRules?.property ? <span><b>Property:</b> {templateRules.property}</span> : null}
+  {templateRules?.template ? <span> • <b>Checklist:</b> {templateRules.template}</span> : null}
+</div>
+
+<p style={{ color:'#555', marginTop: 8 }}>
+  Upload clear photos for each required shot. Longest side ≥ 1024px, ≤ 6MB. Run AI Pre-Check before submitting.
+</p>
+
+{/* Show Turn ID only if ?showId=1 is in the URL */}
+{typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('showId') === '1' && (
+  <div style={{ color:'#94a3b8', fontSize: 12, marginTop: 6 }}>
+    Turn ID: <code style={{ userSelect:'all' }}>{turnId}</code>
+  </div>
+)}
+
 
       {shots.map(s => {
         const files = uploadsByShot[s.shot_id] || [];
