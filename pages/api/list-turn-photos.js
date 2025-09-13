@@ -1,19 +1,17 @@
 // pages/api/list-turn-photos.js
 import { supabaseAdmin } from '../../lib/supabase';
 
-// Helper: turn a stored path OR full https URL into a bucket-relative path
+// Turn a stored path OR full https URL into a bucket-relative path
 function toBucketPath(raw) {
   if (!raw) return null;
   if (raw.startsWith('http')) {
-    // If it's a full URL, try to strip everything up to and including "/photos/"
     const marker = '/photos/';
     const i = raw.indexOf(marker);
     if (i !== -1) return raw.substring(i + marker.length);
     return null; // can't sign arbitrary external URLs
   }
-  // If it already starts with "photos/" prefix, strip it
   if (raw.startsWith('photos/')) return raw.substring('photos/'.length);
-  return raw; // assume it's already a relative path inside the bucket
+  return raw;
 }
 
 export default async function handler(req, res) {
@@ -21,11 +19,10 @@ export default async function handler(req, res) {
     const id = (req.query.id || '').trim();
     if (!id) return res.status(400).json({ error: 'Missing id' });
 
-    // Read from your existing table. (Use the one you actually have.)
-    // Most of your setup used `photos`, not `turn_photos`.
+    // NOTE: no shot_id selected (your table doesn't have it)
     const { data, error } = await supabaseAdmin
       .from('photos')
-      .select('id, turn_id, shot_id, area_key, url, storage_path, width, height, created_at')
+      .select('id, turn_id, area_key, url, storage_path, width, height, created_at')
       .eq('turn_id', id)
       .order('created_at', { ascending: true });
 
@@ -33,13 +30,12 @@ export default async function handler(req, res) {
 
     const out = [];
     for (const row of (data || [])) {
-      // Prefer storage_path; fall back to url
       const bucketPath = toBucketPath(row.storage_path || row.url);
       if (!bucketPath) continue;
 
       const { data: signed, error: signErr } = await supabaseAdmin
         .storage
-        .from('photos')                // bucket name: "photos"
+        .from('photos')
         .createSignedUrl(bucketPath, 60 * 10); // 10 minutes
 
       if (signErr) continue;
@@ -50,7 +46,6 @@ export default async function handler(req, res) {
         width: row.width,
         height: row.height,
         area_key: row.area_key || null,
-        label: row.label || null,
         created_at: row.created_at,
         signedUrl: signed?.signedUrl || null
       });
