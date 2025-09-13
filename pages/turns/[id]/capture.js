@@ -403,7 +403,8 @@ export default function Capture() {
         alert('Submit failed: ' + (err.error || resp.statusText));
         return;
       }
-      alert('Submitted! (MVP)');
+      // after a successful submit:
+    window.location.href = `/turns/${turnId}/done`;
     } finally {
       setTimeout(() => setSubmitting(false), 300);
     }
