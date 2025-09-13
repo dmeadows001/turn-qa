@@ -420,14 +420,12 @@ export default function Capture() {
     <div style={{ maxWidth: 980, margin: '24px auto', padding: '0 16px', fontFamily: 'ui-sans-serif' }}>
      <h1>Start Taking Photos</h1>
 
-<ul style={{ listStyle: 'none', padding: 0, marginTop: 12, marginBottom: 12 }}>
-  <li style={{ display: 'flex', alignItems: 'center', marginBottom: 6, color: '#16a34a', fontWeight: 500 }}>
-    <span style={{ marginRight: 8 }}>✅</span>
-    Tap <b>+</b> inside each box to take a picture
+<ul style={{ marginTop: 8, marginLeft: 20, color: '#14532d', fontSize: 14 }}>
+  <li style={{ marginBottom: 6 }}>
+    ✅ Tap <span style={{ margin: '0 4px' }}>+</span> inside each box to take a picture
   </li>
-  <li style={{ display: 'flex', alignItems: 'center', color: '#16a34a', fontWeight: 500 }}>
-    <span style={{ marginRight: 8 }}>✅</span>
-    Run AI Pre-Check before submitting
+  <li>
+    ✅ Run AI Pre-Check before submitting
   </li>
 </ul>
 
