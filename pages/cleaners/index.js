@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 
 function isiOS() {
   if (typeof navigator === 'undefined') return false;
-  return /iPad|iPhone|iPod/.test(navigator.userAgent) || 
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) ||
          (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 }
 
@@ -15,7 +15,7 @@ export default function CleanersStart() {
   const [name, setName] = useState('');
   const [dateStr, setDateStr] = useState(() => {
     const d = new Date();
-    return d.toISOString().slice(0, 10);
+    return d.toISOString().slice(0, 10); // YYYY-MM-DD
   });
   const [propertyId, setPropertyId] = useState('');
 
@@ -50,11 +50,9 @@ export default function CleanersStart() {
     const original = meta?.getAttribute('content') || 'width=device-width, initial-scale=1, viewport-fit=cover';
 
     const onFocusIn = () => {
-      // prevent auto-zoom while a field is focused
       meta?.setAttribute('content', `${original}, maximum-scale=1, user-scalable=0`);
     };
     const onFocusOut = () => {
-      // restore viewport and gently nudge scroll back
       meta?.setAttribute('content', original);
       setTimeout(() => {
         window.scrollTo({ top: 0, left: 0, behavior: 'smooth' });
@@ -94,26 +92,25 @@ export default function CleanersStart() {
     }
   }
 
+  // --- styles ---
   const inputStyle = {
-  width: '100%',
-  maxWidth: '100%',
-  boxSizing: 'border-box',   // ✅ prevents overflow
-  padding: 10,
-  border: '1px solid #cbd5e1',
-  borderRadius: 10,
-  fontSize: 16,
-  WebkitTextSizeAdjust: '100%'
-};
-const selectStyle = { ...inputStyle };
-
-
+    width: '100%',
+    maxWidth: '100%',
+    boxSizing: 'border-box',   // prevent overflow
+    padding: 10,
+    border: '1px solid #cbd5e1',
+    borderRadius: 10,
+    fontSize: 16,               // prevent iOS auto-zoom
+    WebkitTextSizeAdjust: '100%'
+  };
   const selectStyle = { ...inputStyle };
+
   const containerStyle = {
     maxWidth: 640,
     margin: '36px auto',
     padding: '0 16px',
     fontFamily: 'ui-sans-serif',
-    minHeight: '100svh'          // better mobile viewport unit (avoids 100vh keyboard issues)
+    minHeight: '100svh'
   };
 
   return (
@@ -124,6 +121,7 @@ const selectStyle = { ...inputStyle };
       </p>
 
       {loadErr && <div style={{ color: '#b91c1c', marginBottom: 10 }}>{loadErr}</div>}
+
       <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 12, padding: 14, overflow: 'hidden' }}>
         <div style={{ marginBottom: 12 }}>
           <div style={{ fontWeight: 700, marginBottom: 6 }}>Your Name</div>
@@ -171,7 +169,7 @@ const selectStyle = { ...inputStyle };
             background: '#0ea5e9',
             color: '#fff',
             fontWeight: 700,
-            fontSize: 16,          // keep buttons comfortable after zoom
+            fontSize: 16,
             cursor: 'pointer'
           }}
         >
@@ -179,7 +177,7 @@ const selectStyle = { ...inputStyle };
         </button>
       </div>
 
-      <div style={{ height: 20 }} /> {/* breathing room below keyboard */}
+      <div style={{ height: 20 }} />
       <div style={{ marginTop: 16 }}>
         <a href="/" style={{ color: '#0369a1', fontSize: 16 }}>← Back to home</a>
       </div>
