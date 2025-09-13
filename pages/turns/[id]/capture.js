@@ -418,7 +418,7 @@ export default function Capture() {
 
   return (
     <div style={{ maxWidth: 980, margin: '24px auto', padding: '0 16px', fontFamily: 'ui-sans-serif' }}>
-     <h1>Start taking photos</h1>
+     <h1>Start Taking Photos</h1>
 
 <ul style={{ listStyle: 'none', padding: 0, marginTop: 12, marginBottom: 12 }}>
   <li style={{ display: 'flex', alignItems: 'center', marginBottom: 6, color: '#16a34a', fontWeight: 500 }}>
@@ -436,10 +436,6 @@ export default function Capture() {
   {templateRules?.property ? <span><b>Property:</b> {templateRules.property}</span> : null}
   {templateRules?.template ? <span> • <b>Checklist:</b> {templateRules.template}</span> : null}
 </div>
-
-<p style={{ color:'#555', marginTop: 8 }}>
-  Tap + Inside Box To Take Picture. Run AI Pre-Check before submitting.
-</p>
 
 {/* Show Turn ID only if ?showId=1 is in the URL */}
 {typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('showId') === '1' && (
