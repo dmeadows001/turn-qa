@@ -1,128 +1,130 @@
-// pages/cleaners/index.js
+// pages/cleaners.js
 import { useEffect, useState } from 'react';
-import { useRouter } from 'next/router';
 
-function Field({ label, children }) {
-  return (
-    <label style={{ display:'block', marginBottom:12 }}>
-      <div style={{ fontWeight:600, fontSize:14, marginBottom:6 }}>{label}</div>
-      {children}
-    </label>
-  );
-}
-
-export default function Cleaners() {
-  const router = useRouter();
-  const [loading, setLoading] = useState(false);
-  const [propsLoading, setPropsLoading] = useState(true);
+export default function CleanersStart() {
   const [properties, setProperties] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [loadErr, setLoadErr] = useState('');
+
   const [name, setName] = useState('');
-  const [dateStr, setDateStr] = useState(() => new Date().toISOString().slice(0,10));
+  const [dateStr, setDateStr] = useState(() => {
+    const d = new Date();
+    return d.toISOString().slice(0, 10); // YYYY-MM-DD
+  });
   const [propertyId, setPropertyId] = useState('');
 
   useEffect(() => {
-    async function fetchProps() {
-      setPropsLoading(true);
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      setLoadErr('');
       try {
         const r = await fetch('/api/list-properties');
-        const json = await r.json();
-        setProperties(json.properties || []);
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || 'Failed to load properties');
+
+        if (!cancelled) {
+          setProperties(j.properties || []);
+          // if exactly 1 property, preselect it
+          if ((j.properties || []).length === 1) {
+            setPropertyId(j.properties[0].id);
+          }
+        }
       } catch (e) {
-        console.error(e);
-        alert('Could not load properties.');
+        if (!cancelled) setLoadErr(e.message || 'Load failed');
       } finally {
-        setPropsLoading(false);
+        if (!cancelled) setLoading(false);
       }
-    }
-    fetchProps();
+    })();
+    return () => { cancelled = true; };
   }, []);
 
-  async function startTurn(e) {
-    e.preventDefault();
+  async function startTurn() {
     if (!name.trim()) return alert('Please enter your name.');
-    if (!propertyId) return alert('Please choose a property.');
+    if (!propertyId) return alert('Please select a property.');
 
-    setLoading(true);
     try {
+      // Minimal server-side start-turn (you may already have this)
       const r = await fetch('/api/start-turn', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           cleaner_name: name.trim(),
-          date: dateStr,
-          property_id: propertyId
+          service_date: dateStr,
+          property_id: propertyId,
         })
       });
-      const json = await r.json();
-      if (!r.ok) {
-        console.error(json);
-        alert(json.error || 'Failed to start turn.');
-        return;
-      }
-      const turnId = json.turn_id;
-      // Pass cleaner name along (helpful context in UI/logs)
-      router.push(`/turns/${turnId}/capture?cleaner=${encodeURIComponent(name.trim())}`);
-    } finally {
-      setLoading(false);
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || 'Could not start');
+
+      // Expect server to return the created/located turn id
+      const turnId = j.turn_id || j.id;
+      if (!turnId) throw new Error('No turn_id returned');
+      window.location.href = `/turns/${turnId}/capture`;
+    } catch (e) {
+      alert(e.message || 'Failed to start turn.');
     }
   }
 
   return (
-    <div style={{ minHeight:'100vh', background:'#f8fafc' }}>
-      <div style={{ maxWidth:600, margin:'0 auto', padding:'28px 16px' }}>
-        <h1 style={{ margin:'6px 0 4px', fontSize:28, color:'#0f172a' }}>Cleaners — Start Your Turn</h1>
-        <p style={{ color:'#475569', marginTop:4 }}>
-          Enter your info, pick the property, and we’ll load the required photo checklist.
-        </p>
+    <div style={{ maxWidth: 640, margin: '36px auto', padding: '0 16px', fontFamily: 'ui-sans-serif' }}>
+      <h1 style={{ fontSize: 34, marginBottom: 6 }}>Cleaners — Start Your Turn</h1>
+      <p style={{ color: '#475569', marginBottom: 18 }}>
+        Enter your info, pick the property, and we’ll load the required photo checklist.
+      </p>
 
-        <form onSubmit={startTurn} style={{ marginTop:18, background:'#fff', padding:16, border:'1px solid #e5e7eb', borderRadius:12 }}>
-          <Field label="Your Name">
-            <input
-              value={name}
-              onChange={e=>setName(e.target.value)}
-              placeholder="e.g., Jessica"
-              style={{ width:'100%', padding:'12px 10px', borderRadius:10, border:'1px solid #cbd5e1', fontSize:16 }}
-            />
-          </Field>
+      {loadErr && <div style={{ color: '#b91c1c', marginBottom: 10 }}>{loadErr}</div>}
 
-          <Field label="Date">
-            <input
-              type="date"
-              value={dateStr}
-              onChange={e=>setDateStr(e.target.value)}
-              style={{ width:'100%', padding:'12px 10px', borderRadius:10, border:'1px solid #cbd5e1', fontSize:16 }}
-            />
-          </Field>
-
-          <Field label="Property">
-            <select
-              value={propertyId}
-              onChange={e=>setPropertyId(e.target.value)}
-              disabled={propsLoading}
-              style={{ width:'100%', padding:'12px 10px', borderRadius:10, border:'1px solid #cbd5e1', fontSize:16, background:'#fff' }}
-            >
-              <option value="">{propsLoading ? 'Loading…' : 'Select a property'}</option>
-              {(properties || []).map(p => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
-          </Field>
-
-          <button
-            type="submit"
-            disabled={loading || propsLoading}
-            style={{
-              width:'100%', marginTop:8, padding:'14px 16px', fontWeight:700, fontSize:16,
-              background:'#0284c7', color:'#fff', border:'none', borderRadius:12, cursor:'pointer'
-            }}
-          >
-            {loading ? 'Starting…' : 'Start Turn'}
-          </button>
-        </form>
-
-        <div style={{ textAlign:'center', marginTop:14 }}>
-          <a href="/" style={{ color:'#0369a1', textDecoration:'none' }}>← Back to home</a>
+      <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 12, padding: 14 }}>
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>Your Name</div>
+          <input
+            value={name}
+            onChange={e => setName(e.target.value)}
+            placeholder="Jane"
+            style={{ width: '100%', padding: 10, border: '1px solid #cbd5e1', borderRadius: 10 }}
+          />
         </div>
+
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>Date</div>
+          <input
+            type="date"
+            value={dateStr}
+            onChange={e => setDateStr(e.target.value)}
+            style={{ width: '100%', padding: 10, border: '1px solid #cbd5e1', borderRadius: 10 }}
+          />
+        </div>
+
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>Property</div>
+          <select
+            value={propertyId}
+            onChange={e => setPropertyId(e.target.value)}
+            style={{ width: '100%', padding: 10, border: '1px solid #cbd5e1', borderRadius: 10 }}
+          >
+            <option value="" disabled>{loading ? 'Loading…' : 'Select a property'}</option>
+            {properties.map(p => (
+              <option key={p.id} value={p.id}>
+                {p.name} {p.address ? `— ${p.address}` : ''}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <button
+          onClick={startTurn}
+          style={{
+            width: '100%', padding: '12px 14px', borderRadius: 10,
+            background: '#0ea5e9', color: '#fff', fontWeight: 700, cursor: 'pointer'
+          }}
+        >
+          Start Turn
+        </button>
+      </div>
+
+      <div style={{ marginTop: 16 }}>
+        <a href="/" style={{ color: '#0369a1' }}>← Back to home</a>
       </div>
     </div>
   );
