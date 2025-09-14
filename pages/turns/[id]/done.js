@@ -38,13 +38,8 @@ export default function Done() {
     })();
   }, [turnId]);
 
-  const box = {
-    maxWidth: 640, margin: '36px auto', padding: '0 16px',
-    fontFamily: 'ui-sans-serif'
-  };
-  const card = {
-    background: '#fff', border: '1px solid #e5e7eb', borderRadius: 16, padding: 16
-  };
+  const box = { maxWidth: 640, margin: '36px auto', padding: '0 16px', fontFamily: 'ui-sans-serif' };
+  const card = { background: '#fff', border: '1px solid #e5e7eb', borderRadius: 16, padding: 16 };
   const muted = { color: '#475569' };
 
   return (
@@ -52,9 +47,7 @@ export default function Done() {
       <div style={{ textAlign: 'center', marginBottom: 12 }}>
         <div style={{ fontSize: 56, lineHeight: 1 }}>🎉</div>
         <h1 style={{ margin: '8px 0 0' }}>Turn submitted!</h1>
-        <div style={{ ...muted, marginTop: 8 }}>
-          Thank you — you’re all set.
-        </div>
+        <div style={{ ...muted, marginTop: 8 }}>Thank you — you’re all set.</div>
       </div>
 
       <div style={card}>
@@ -66,7 +59,6 @@ export default function Done() {
             <div style={{ display: 'grid', rowGap: 6, fontSize: 14 }}>
               <div><b>Photos uploaded:</b> {photos.length}</div>
               <div><b>Status:</b> {(turn?.status || 'submitted').replace('_', ' ')}</div>
-              {turn?.property_id && <div><b>Property ID:</b> {turn.property_id}</div>}
               {turn?.turn_date && <div><b>Date:</b> {turn.turn_date}</div>}
             </div>
 
@@ -74,12 +66,8 @@ export default function Done() {
               <a
                 href="/cleaners"
                 style={{
-                  textDecoration: 'none',
-                  padding: '12px 14px',
-                  borderRadius: 12,
-                  background: '#0ea5e9',
-                  color: '#fff',
-                  fontWeight: 700
+                  textDecoration: 'none', padding: '12px 14px', borderRadius: 12,
+                  background: '#0ea5e9', color: '#fff', fontWeight: 700
                 }}
               >
                 Start another turn
@@ -88,32 +76,11 @@ export default function Done() {
               <a
                 href="/"
                 style={{
-                  textDecoration: 'none',
-                  padding: '12px 14px',
-                  borderRadius: 12,
-                  background: '#f8fafc',
-                  border: '1px solid #e5e7eb',
-                  color: '#0f172a',
-                  fontWeight: 700
+                  textDecoration: 'none', padding: '12px 14px', borderRadius: 12,
+                  background: '#f8fafc', border: '1px solid #e5e7eb', color: '#0f172a', fontWeight: 700
                 }}
               >
                 Back to home
-              </a>
-
-              {/* Optional: managers might use this */}
-              <a
-                href={`/turns/${turnId}/review`}
-                style={{
-                  textDecoration: 'none',
-                  padding: '12px 14px',
-                  borderRadius: 12,
-                  background: '#ecfdf5',
-                  border: '1px solid #22c55e',
-                  color: '#14532d',
-                  fontWeight: 700
-                }}
-              >
-                View submitted photos
               </a>
             </div>
           </>
