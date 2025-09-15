@@ -7,12 +7,12 @@ function niceDate(s) {
 }
 
 const statuses = [
-  { v: '',          label: 'Any' },
-  { v: 'submitted', label: 'Submitted' },
-  { v: 'needs_fix', label: 'Needs Fix' },
-  { v: 'approved',  label: 'Approved' },
+  { v: '',            label: 'Any' },
+  { v: 'submitted',   label: 'Submitted' },
+  { v: 'needs_fix',   label: 'Needs Fix' },
+  { v: 'approved',    label: 'Approved' },
   { v: 'in_progress', label: 'In Progress' },
-  { v: 'cancelled', label: 'Cancelled' },
+  { v: 'cancelled',   label: 'Cancelled' },
 ];
 
 export default function ManagerTurns() {
@@ -104,9 +104,18 @@ export default function ManagerTurns() {
                     <td style={{ padding:'8px 6px', textTransform:'capitalize' }}>{t.status || '—'}</td>
                     <td style={{ padding:'8px 6px' }}>{t.submitted_at ? niceDate(t.submitted_at) : '—'}</td>
                     <td style={{ padding:'8px 6px' }}>
-                      <Link href={`/turns/${t.id}/review`} legacyBehavior>
-                        <a style={{ padding:'6px 10px', border:'1px solid #94a3b8', borderRadius:8, textDecoration:'none' }}>Open</a>
-                      </a></Link>
+                      <Link
+                        href={`/turns/${t.id}/review`}
+                        style={{
+                          padding:'6px 10px',
+                          border:'1px solid #94a3b8',
+                          borderRadius:8,
+                          textDecoration:'none',
+                          display:'inline-block'
+                        }}
+                      >
+                        Open
+                      </Link>
                     </td>
                   </tr>
                 ))}
@@ -117,7 +126,7 @@ export default function ManagerTurns() {
       </div>
 
       <div style={{ marginTop:12 }}>
-        <Link href="/managers" legacyBehavior><a>← Back to Managers home</a></Link>
+        <Link href="/managers">← Back to Managers home</Link>
       </div>
     </div>
   );
