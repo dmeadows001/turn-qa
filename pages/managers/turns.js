@@ -1,144 +1,123 @@
 // pages/managers/turns.js
 import { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 
-async function loadTurns({ status, from, to }) {
-  const params = new URLSearchParams();
-  if (status) params.set('status', status);
-  if (from)   params.set('from', from);
-  if (to)     params.set('to', to);
-  const r = await fetch(`/api/managers/list-turns?${params.toString()}`);
-  const j = await r.json();
-  if (!r.ok) throw new Error(j.error || 'load failed');
-  return j.turns || [];
+function niceDate(s) {
+  try { return new Date(s).toLocaleString(); } catch { return s || '—'; }
 }
 
-function fmtDate(d) {
-  try { return new Date(d).toLocaleDateString(); } catch { return d || '—'; }
-}
-function fmtTime(d) {
-  try { return new Date(d).toLocaleString(); } catch { return d || '—'; }
-}
+const statuses = [
+  { v: '',          label: 'Any' },
+  { v: 'submitted', label: 'Submitted' },
+  { v: 'needs_fix', label: 'Needs Fix' },
+  { v: 'approved',  label: 'Approved' },
+  { v: 'in_progress', label: 'In Progress' },
+  { v: 'cancelled', label: 'Cancelled' },
+];
 
 export default function ManagerTurns() {
-  // default to last 14 days
-  const today = useMemo(() => new Date(), []);
-  const twoWeeksAgo = useMemo(() => {
-    const d = new Date();
-    d.setDate(d.getDate() - 14);
-    return d;
-  }, []);
+  const [status, setStatus]   = useState('submitted');
+  const [from, setFrom]       = useState(() => new Date(new Date().setMonth(new Date().getMonth()-1)).toISOString().slice(0,10));
+  const [to, setTo]           = useState(() => new Date().toISOString().slice(0,10));
+  const [rows, setRows]       = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr]         = useState('');
 
-  const [status, setStatus] = useState('submitted'); // default filter
-  const [from, setFrom] = useState(twoWeeksAgo.toISOString().slice(0, 10));
-  const [to, setTo] = useState(today.toISOString().slice(0, 10));
+  async function load() {
+    setLoading(true); setErr('');
+    try {
+      const qs = new URLSearchParams();
+      if (status) qs.set('status', status);
+      if (from)   qs.set('from', `${from}T00:00:00Z`);
+      if (to)     qs.set('to',   `${to}T23:59:59Z`);
+      const r = await fetch(`/api/list-turns?${qs.toString()}`);
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || 'load failed');
+      setRows(j.rows || []);
+    } catch(e) {
+      setErr(e.message || 'Failed to load');
+    } finally {
+      setLoading(false);
+    }
+  }
 
-  const [rows, setRows] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState('');
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      setLoading(true);
-      setErr('');
-      try {
-        const data = await loadTurns({ status, from, to });
-        if (!cancelled) setRows(data);
-      } catch (e) {
-        if (!cancelled) setErr(e.message || 'load failed');
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [status, from, to]);
+  const filtered = useMemo(() => rows, [rows]);
 
-  const card = { background:'#fff', border:'1px solid #e5e7eb', borderRadius:12, padding:12 };
-  const label = { fontWeight:700, marginBottom:6 };
-  const input = {
-    width:'100%', maxWidth: '100%', boxSizing:'border-box',
-    padding:10, border:'1px solid #cbd5e1', borderRadius:10, fontSize:16
+  const wrap = {
+    maxWidth: 1100, margin: '24px auto', padding: '0 16px', fontFamily: 'ui-sans-serif'
+  };
+  const card = {
+    border:'1px solid #e5e7eb', borderRadius:12, padding:12, background:'#fff'
   };
 
   return (
-    <div style={{ maxWidth: 1100, margin: '28px auto', padding: '0 16px', fontFamily: 'ui-sans-serif' }}>
-      <h1 style={{ marginBottom: 8 }}>Manager — Turns</h1>
-      <p style={{ color:'#475569', marginBottom: 12 }}>
-        Filter by status and date range (uses the service date: <code>turn_date</code>).
-      </p>
+    <div style={wrap}>
+      <h1>Manager — Turns</h1>
 
       {/* Filters */}
-      <div style={{ ...card, marginBottom: 14 }}>
-        <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))' }}>
-          <div>
-            <div style={label}>Status</div>
-            <select value={status} onChange={e=>setStatus(e.target.value)} style={input}>
-              <option value="">(any)</option>
-              <option value="in_progress">in_progress</option>
-              <option value="submitted">submitted</option>
-              <option value="needs_fix">needs_fix</option>
-              <option value="approved">approved</option>
-            </select>
-          </div>
-
-          <div>
-            <div style={label}>From (service date)</div>
-            <input type="date" value={from} onChange={e=>setFrom(e.target.value)} style={input}/>
-          </div>
-
-          <div>
-            <div style={label}>To (service date)</div>
-            <input type="date" value={to} onChange={e=>setTo(e.target.value)} style={input}/>
-          </div>
+      <div style={{ ...card, display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))', gap:12 }}>
+        <div>
+          <div style={{ fontSize:12, color:'#475569', marginBottom:4 }}>Status</div>
+          <select value={status} onChange={e=>setStatus(e.target.value)} style={{ width:'100%', padding:8, borderRadius:8, border:'1px solid #cbd5e1' }}>
+            {statuses.map(s => <option key={s.v} value={s.v}>{s.label}</option>)}
+          </select>
+        </div>
+        <div>
+          <div style={{ fontSize:12, color:'#475569', marginBottom:4 }}>From</div>
+          <input type="date" value={from} onChange={e=>setFrom(e.target.value)} style={{ width:'100%', padding:8, borderRadius:8, border:'1px solid #cbd5e1' }}/>
+        </div>
+        <div>
+          <div style={{ fontSize:12, color:'#475569', marginBottom:4 }}>To</div>
+          <input type="date" value={to} onChange={e=>setTo(e.target.value)} style={{ width:'100%', padding:8, borderRadius:8, border:'1px solid #cbd5e1' }}/>
+        </div>
+        <div style={{ alignSelf:'end' }}>
+          <button onClick={load} style={{ padding:'10px 14px', borderRadius:10, border:'1px solid #0ea5e9', background:'#e0f2fe', cursor:'pointer', width:'100%' }}>
+            {loading ? 'Loading…' : 'Apply Filters'}
+          </button>
         </div>
       </div>
 
-      {/* Results */}
-      <div style={card}>
-        {err && <div style={{ color:'#b91c1c', marginBottom:8 }}>Error: {err}</div>}
+      {err && <div style={{ color:'#b91c1c', marginTop:12 }}>{err}</div>}
 
-        {loading ? (
-          <div>Loading…</div>
-        ) : rows.length === 0 ? (
-          <div style={{ color:'#64748b' }}>No turns match these filters.</div>
-        ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width:'100%', borderCollapse:'collapse', fontSize:14 }}>
+      {/* Results */}
+      <div style={{ ...card, marginTop:16 }}>
+        {loading ? <div>Loading…</div> :
+          filtered.length === 0 ? <div>No turns match these filters.</div> :
+          (
+            <table style={{ width:'100%', borderCollapse:'collapse' }}>
               <thead>
                 <tr style={{ textAlign:'left', borderBottom:'1px solid #e5e7eb' }}>
-                  <th style={{ padding:'10px 6px' }}>Date</th>
-                  <th style={{ padding:'10px 6px' }}>Status</th>
-                  <th style={{ padding:'10px 6px' }}>Property</th>
-                  <th style={{ padding:'10px 6px' }}>Cleaner</th>
-                  <th style={{ padding:'10px 6px' }}>Submitted</th>
-                  <th style={{ padding:'10px 6px' }}>Approved</th>
-                  <th style={{ padding:'10px 6px' }}>Actions</th>
+                  <th style={{ padding:'8px 6px' }}>Created</th>
+                  <th style={{ padding:'8px 6px' }}>Property</th>
+                  <th style={{ padding:'8px 6px' }}>Status</th>
+                  <th style={{ padding:'8px 6px' }}>Submitted</th>
+                  <th style={{ padding:'8px 6px' }}></th>
                 </tr>
               </thead>
               <tbody>
-                {rows.map(r => (
-                  <tr key={r.id} style={{ borderBottom:'1px solid #f1f5f9' }}>
-                    <td style={{ padding:'8px 6px' }}>{fmtDate(r.turn_date)}</td>
-                    <td style={{ padding:'8px 6px', textTransform:'capitalize' }}>{(r.status || '').replace('_',' ')}</td>
-                    <td style={{ padding:'8px 6px' }}>{r.property_id || '—'}</td>
-                    <td style={{ padding:'8px 6px' }}>{r.cleaner_name || '—'}</td>
-                    <td style={{ padding:'8px 6px' }}>{r.submitted_at ? fmtTime(r.submitted_at) : '—'}</td>
-                    <td style={{ padding:'8px 6px' }}>{r.approved_at ? fmtTime(r.approved_at) : '—'}</td>
+                {filtered.map(t => (
+                  <tr key={t.id} style={{ borderBottom:'1px solid #f1f5f9' }}>
+                    <td style={{ padding:'8px 6px' }}>{niceDate(t.created_at)}</td>
+                    <td style={{ padding:'8px 6px' }}>{t.property_name}</td>
+                    <td style={{ padding:'8px 6px', textTransform:'capitalize' }}>{t.status || '—'}</td>
+                    <td style={{ padding:'8px 6px' }}>{t.submitted_at ? niceDate(t.submitted_at) : '—'}</td>
                     <td style={{ padding:'8px 6px' }}>
-                      <a
-                        href={`/turns/${r.id}/review?manager=1`}
-                        style={{ color:'#0369a1', textDecoration:'none', fontWeight:700 }}
-                        target="_blank" rel="noreferrer"
-                      >
-                        Open Review →
-                      </a>
+                      <Link href={`/turns/${t.id}/review`} legacyBehavior>
+                        <a style={{ padding:'6px 10px', border:'1px solid #94a3b8', borderRadius:8, textDecoration:'none' }}>Open</a>
+                      </a></Link>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
-          </div>
-        )}
+          )
+        }
+      </div>
+
+      <div style={{ marginTop:12 }}>
+        <Link href="/managers" legacyBehavior><a>← Back to Managers home</a></Link>
       </div>
     </div>
   );
