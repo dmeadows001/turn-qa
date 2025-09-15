@@ -1,62 +1,56 @@
 // pages/api/list-turns.js
-import { supabaseAdmin } from '../../lib/supabase';
+import { createClient } from '@supabase/supabase-js';
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY
+);
 
 export default async function handler(req, res) {
-  try {
-    const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
-    const {
-      status,          // 'submitted', 'approved', etc.
-      property_id,     // UUID
-      date_from,       // 'YYYY-MM-DD'
-      date_to,         // 'YYYY-MM-DD'
-      limit = 50,
-      offset = 0,
-    } = body;
+  if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
-    let q = supabaseAdmin
+  try {
+    const { status, from, to, limit = 200 } = req.query;
+
+    let query = supabase
       .from('turns')
+      // thanks to the FK, we can embed the related property row
       .select(`
         id,
-        status,
-        turn_date,
-        cleaner_name,
-        submitted_at,
         created_at,
+        submitted_at,
+        approved_at,
+        needs_fix_at,
+        status,
         property_id,
-        properties!inner ( name ),
-        turn_photos(count),
-        qa_findings(count)
-      `, { count: 'exact' })
+        properties:properties (
+          name
+        )
+      `)
       .order('created_at', { ascending: false })
-      .range(offset, offset + Math.max(0, Math.min(limit, 200)) - 1);
+      .limit(Number(limit));
 
-    if (status) q = q.eq('status', status);
-    if (property_id) q = q.eq('property_id', property_id);
-    if (date_from) q = q.gte('turn_date', date_from);
-    if (date_to) q = q.lte('turn_date', date_to);
+    if (status) query = query.eq('status', status);
+    if (from)   query = query.gte('created_at', from);
+    if (to)     query = query.lte('created_at', to);
 
-    const { data, error } = await q;
+    const { data, error } = await query;
     if (error) throw error;
 
-    // Flatten property name and counts
-    const turns = (data || []).map(row => ({
-      id: row.id,
-      status: row.status,
-      turn_date: row.turn_date,
-      cleaner_name: row.cleaner_name,
-      submitted_at: row.submitted_at,
-      created_at: row.created_at,
-      property_id: row.property_id,
-      property_name: row.properties?.name || null,
-      photo_count: Array.isArray(row.turn_photos) && row.turn_photos[0]?.count != null
-        ? row.turn_photos[0].count : 0,
-      finding_count: Array.isArray(row.qa_findings) && row.qa_findings[0]?.count != null
-        ? row.qa_findings[0].count : 0,
+    // shape into a simple list the UI can use
+    const rows = (data || []).map(r => ({
+      id: r.id,
+      created_at: r.created_at,
+      submitted_at: r.submitted_at,
+      approved_at: r.approved_at,
+      needs_fix_at: r.needs_fix_at,
+      status: r.status,
+      property_id: r.property_id,
+      property_name: r.properties?.name || '(unnamed)'
     }));
 
-    res.status(200).json({ turns });
+    res.json({ rows });
   } catch (e) {
-    console.error('list-turns error:', e);
-    res.status(500).json({ error: e.message || 'failed' });
+    res.status(500).json({ error: e.message || 'unexpected error' });
   }
 }
