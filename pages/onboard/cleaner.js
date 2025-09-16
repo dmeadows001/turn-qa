@@ -35,7 +35,7 @@ export default function CleanerOnboard() {
         })
       });
       const j = await r.json();
-      if (!r.ok) throw new Error(j.error || 'Failed to send code');
+      if (!r.ok) throw new Error(j.message || j.error || 'Failed to send code');
       if (j.subject_id) setCleanerId(j.subject_id); // IMPORTANT: keep the subject we just created/updated
       setStep('code');
       setMsg('Code sent via SMS. Check your messages and enter the 6-digit code.');
