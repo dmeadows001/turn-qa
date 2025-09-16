@@ -27,7 +27,7 @@ export default async function handler(req, res) {
     const { turn_id, approved_by, payout_amount_cents } = req.body || {};
     if (!turn_id) return res.status(400).json({ error: 'turn_id is required' });
 
-    // 1) Load the turn with property and cleaner
+    // 1) Load the turn + property (no cleaner embed to avoid FK requirement)
     const { data: turn, error: tErr } = await supabase
       .from('turns')
       .select(`
@@ -35,15 +35,26 @@ export default async function handler(req, res) {
         property_id,
         cleaner_id,
         status,
-        properties:property_id ( name ),
-        cleaners:cleaner_id ( id, name, phone )
+        properties:property_id ( name )
       `)
       .eq('id', turn_id)
       .single();
     if (tErr) throw tErr;
     if (!turn) return res.status(404).json({ error: 'Turn not found' });
 
-    // 2) Update status → approved
+    // 2) Fetch cleaner by id (separate query; no FK embed needed)
+    let cleaner = null;
+    if (turn.cleaner_id) {
+      const { data: c, error: cErr } = await supabase
+        .from('cleaners')
+        .select('id, name, phone')
+        .eq('id', turn.cleaner_id)
+        .single();
+      if (cErr) throw cErr;
+      cleaner = c;
+    }
+
+    // 3) Update status → approved
     const nowIso = new Date().toISOString();
     const { error: upErr } = await supabase
       .from('turns')
@@ -51,7 +62,7 @@ export default async function handler(req, res) {
       .eq('id', turn_id);
     if (upErr) throw upErr;
 
-    // 3) Log event
+    // 4) Log event
     const { error: evErr } = await supabase
       .from('turn_events')
       .insert({
@@ -61,30 +72,30 @@ export default async function handler(req, res) {
       });
     if (evErr) throw evErr;
 
-    // 4) Optional payout
+    // 5) Optional payout
     let payout = { ok: false, reason: 'no cleaner or amount' };
-    if (turn.cleaners?.id && Number.isFinite(Number(payout_amount_cents)) && Number(payout_amount_cents) > 0) {
+    if (cleaner?.id && Number.isFinite(Number(payout_amount_cents)) && Number(payout_amount_cents) > 0) {
       payout = await sendCleanerPayout({
         turnId: turn_id,
-        cleanerId: turn.cleaners.id,
+        cleanerId: cleaner.id,
         amountCents: Number(payout_amount_cents)
       });
     }
 
-    // 5) Notify cleaner (DB-driven) + compliance footer
-    const cleanerPhone = turn?.cleaners?.phone;
+    // 6) Notify cleaner
     const propertyName = turn?.properties?.name || 'Property';
     const FOOTER = ' Reply STOP to opt out, HELP for help.';
-
     let sms = 'skipped';
-    if (cleanerPhone && process.env.TWILIO_FROM_NUMBER) {
-      const paid = payout.ok ? ' Your payout is being processed.' : '';
-      const body = `TurnQA: Your turn for "${propertyName}" was approved.${paid}${FOOTER}`;
-      await twilioClient.messages.create({
-        from: process.env.TWILIO_FROM_NUMBER,
-        to: cleanerPhone,
-        body
-      });
+
+    if (cleaner?.phone && (process.env.TWILIO_MESSAGING_SERVICE_SID || process.env.TWILIO_FROM_NUMBER)) {
+      const body = `TurnQA: Your turn for "${propertyName}" was approved.${payout.ok ? ' Your payout is being processed.' : ''}${FOOTER}`;
+      const opts = { to: cleaner.phone, body };
+      if (process.env.TWILIO_MESSAGING_SERVICE_SID) {
+        opts.messagingServiceSid = process.env.TWILIO_MESSAGING_SERVICE_SID;
+      } else {
+        opts.from = process.env.TWILIO_FROM_NUMBER;
+      }
+      await twilioClient.messages.create(opts);
       sms = 'sent';
     }
 
