@@ -9,19 +9,20 @@ export default function CleanerOnboard() {
   const [step, setStep] = useState('form'); // form | code | done
   const [code, setCode] = useState('');
   const [msg, setMsg] = useState('');
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     const url = new URL(window.location.href);
     const id = url.searchParams.get('id') || '';
-    if (id) {
-      setCleanerId(id);
-      // Optionally you could fetch cleaner to prefill; skipping to keep lean.
-    }
+    if (id) setCleanerId(id);
   }, []);
 
   async function sendCode() {
     try {
       setMsg('');
+      if (!phone) throw new Error('Please enter your mobile number.');
+      if (!consent) throw new Error('Please agree to SMS consent.');
+      setLoading(true);
       const r = await fetch('/api/otp/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -35,22 +36,29 @@ export default function CleanerOnboard() {
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || 'Failed to send code');
+      if (j.subject_id) setCleanerId(j.subject_id); // IMPORTANT: keep the subject we just created/updated
       setStep('code');
-      setMsg('Code sent via SMS.');
+      setMsg('Code sent via SMS. Check your messages and enter the 6-digit code.');
     } catch (e) {
       setMsg(e.message || 'Failed to send code');
+    } finally {
+      setLoading(false);
     }
   }
 
   async function verifyCode() {
     try {
       setMsg('');
+      if (!cleanerId) throw new Error('Missing cleaner ID. Please click “Send Code” again.');
+      if (!phone) throw new Error('Missing phone number.');
+      if (!code) throw new Error('Enter the 6-digit code.');
+      setLoading(true);
       const r = await fetch('/api/otp/verify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           role: 'cleaner',
-          subject_id: cleanerId || null,
+          subject_id: cleanerId,
           phone,
           code
         })
@@ -61,6 +69,8 @@ export default function CleanerOnboard() {
       setMsg('Phone verified and SMS consent recorded. You are good to go!');
     } catch (e) {
       setMsg(e.message || 'Verification failed');
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -68,6 +78,7 @@ export default function CleanerOnboard() {
   const card = { border:'1px solid #e5e7eb', borderRadius:12, padding:16, background:'#fff' };
   const label = { fontSize:12, color:'#475569', marginBottom:6 };
   const input = { width:'100%', padding:10, borderRadius:8, border:'1px solid #cbd5e1', marginBottom:12 };
+  const btn = { padding:'10px 14px', borderRadius:10, border:'1px solid #0ea5e9', background:'#e0f2fe', cursor:'pointer' };
 
   return (
     <main style={wrap}>
@@ -86,8 +97,8 @@ export default function CleanerOnboard() {
               <span>I agree to receive transactional SMS from TurnQA. Message &amp; data rates may apply. Reply STOP to opt out, HELP for help. Consent is not a condition of purchase. See <a href="/legal/sms-terms" target="_blank" rel="noreferrer">SMS Terms</a>.</span>
             </label>
 
-            <button onClick={sendCode} style={{padding:'10px 14px', borderRadius:10, border:'1px solid #0ea5e9', background:'#e0f2fe', cursor:'pointer'}}>
-              Send Code
+            <button disabled={loading} onClick={sendCode} style={btn}>
+              {loading ? 'Sending…' : 'Send Code'}
             </button>
           </>
         )}
@@ -96,7 +107,9 @@ export default function CleanerOnboard() {
           <>
             <div style={label}>Enter the 6-digit code we sent to {phone}</div>
             <input style={input} value={code} onChange={e=>setCode(e.target.value)} placeholder="123456" />
-            <button onClick={verifyCode} style={{padding:'10px 14px', borderRadius:10, border:'1px solid #0ea5e9', background:'#e0f2fe', cursor:'pointer'}}>Verify</button>
+            <button disabled={loading} onClick={verifyCode} style={btn}>
+              {loading ? 'Verifying…' : 'Verify'}
+            </button>
           </>
         )}
 
