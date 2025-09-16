@@ -9,31 +9,35 @@ const supabase = createClient(
 export default async function handler(req, res) {
   if (req.method !== 'POST') { res.setHeader('Allow',['POST']); return res.status(405).json({ error: 'Method not allowed' }); }
   try {
-    const { role, subject_id, phone, code } = req.body || {};
+    let { role, subject_id, phone, code } = req.body || {};
     if (!role || !['manager','cleaner'].includes(role)) return res.status(400).json({ error: 'invalid role' });
-    if (!subject_id || !phone || !code) return res.status(400).json({ error: 'subject_id, phone, code required' });
+    if (!phone || !code) return res.status(400).json({ error: 'phone and code required' });
 
-    const { data: otp, error: oErr } = await supabase
+    // Find the latest unused OTP; if subject_id missing, infer it
+    const otpQuery = supabase
       .from('phone_otps')
       .select('*')
       .eq('role', role)
-      .eq('subject_id', subject_id)
       .eq('phone', phone)
       .is('used_at', null)
       .order('created_at', { ascending: false })
-      .limit(1)
-      .single();
+      .limit(1);
+    const { data: otp, error: oErr } = await otpQuery.single();
     if (oErr || !otp) return res.status(400).json({ error: 'code not found' });
 
-    if (otp.code !== String(code)) return res.status(400).json({ error: 'invalid code' });
+    if (String(otp.code) !== String(code)) return res.status(400).json({ error: 'invalid code' });
     if (new Date(otp.expires_at).getTime() < Date.now()) return res.status(400).json({ error: 'code expired' });
+
+    // Use the subject_id from the OTP if not provided
+    const sid = subject_id || otp.subject_id;
 
     // Mark OTP used
     await supabase.from('phone_otps').update({ used_at: new Date().toISOString() }).eq('id', otp.id);
 
-    // Record consent + verification
+    // Record consent + verification on the right table
     const table = role === 'manager' ? 'managers' : 'cleaners';
     const ip = (req.headers['x-forwarded-for'] || '').toString().split(',')[0] || req.socket?.remoteAddress || null;
+
     const { error: upErr } = await supabase
       .from(table)
       .update({
@@ -44,10 +48,10 @@ export default async function handler(req, res) {
         sms_consent_ip: ip,
         consent_text_snapshot: 'I agree to receive transactional SMS from TurnQA. Message & data rates may apply. Reply STOP to opt out, HELP for help. Consent is not a condition of purchase.'
       })
-      .eq('id', subject_id);
+      .eq('id', sid);
     if (upErr) throw upErr;
 
-    return res.status(200).json({ ok: true });
+    return res.status(200).json({ ok: true, subject_id: sid });
   } catch (e) {
     return res.status(500).json({ error: e.message || 'unexpected error' });
   }
