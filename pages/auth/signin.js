@@ -12,13 +12,18 @@ export default function SignIn() {
   const [msg, setMsg] = useState('');
   const [loading, setLoading] = useState(false);
 
+  // Use an explicit base so emails never point to localhost
+  const base =
+    process.env.NEXT_PUBLIC_APP_BASE_URL // set this in Vercel to https://www.turnqa.com
+    || (typeof window !== 'undefined' ? window.location.origin : '');
+
   async function sendLink() {
     try {
       setMsg('');
       setLoading(true);
       const { error } = await supabase.auth.signInWithOtp({
         email,
-        options: { emailRedirectTo: `${window.location.origin}/dashboard` }
+        options: { emailRedirectTo: `${base}/dashboard` }
       });
       if (error) throw error;
       setMsg('Check your email for a sign-in link.');
