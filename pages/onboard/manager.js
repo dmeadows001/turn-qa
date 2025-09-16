@@ -94,6 +94,7 @@ export default function ManagerOnboard() {
   const label = { fontSize:12, color:'#475569', marginBottom:6 };
   const input = { width:'100%', padding:10, borderRadius:8, border:'1px solid #cbd5e1', marginBottom:12 };
   const btn = { padding:'10px 14px', borderRadius:10, border:'1px solid #0ea5e9', background:'#e0f2fe', cursor:'pointer' };
+  const cta = { display:'inline-block', marginRight:8, padding:'10px 14px', borderRadius:10, border:'1px solid #94a3b8', background:'#f8fafc', textDecoration:'none' };
 
   return (
     <main style={wrap}>
@@ -136,6 +137,16 @@ export default function ManagerOnboard() {
                 Property link status: {linkResult === 'linked' ? 'Linked to property.' : (linkResult || 'Linking…')}
               </p>
             )}
+
+            <div style={{ marginTop: 16 }}>
+              {propertyId && (
+                <>
+                  <a style={cta} href={`/properties/${propertyId}/invite`}>Invite a cleaner</a>
+                  <a style={cta} href={`/properties/${propertyId}/template`}>Create template</a>
+                </>
+              )}
+              <a style={cta} href="/dashboard">Go to Dashboard</a>
+            </div>
           </>
         )}
 
