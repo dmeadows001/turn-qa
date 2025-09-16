@@ -6,9 +6,20 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY
 );
 
-// Replace later with Stripe Connect / Routable / PayPal Payouts
+// Placeholder for future payouts integration
 async function sendCleanerPayout({ turnId, cleanerId, amountCents, currency = 'USD' }) {
   return { ok: true, id: `demo_${turnId}` };
+}
+
+// Utils
+function canSendSMS(rec) {
+  if (!rec) return { ok: false, reason: 'no_recipient' };
+  if (!rec.phone) return { ok: false, reason: 'no_phone' };
+  if (rec.sms_consent !== true) return { ok: false, reason: 'no_consent' };
+  if (rec.sms_opt_out_at) return { ok: false, reason: 'opted_out' };
+  // Optional: require verified phones only
+  // if (!rec.phone_verified_at) return { ok: false, reason: 'unverified_phone' };
+  return { ok: true };
 }
 
 export default async function handler(req, res) {
@@ -18,16 +29,10 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { default: twilio } = await import('twilio');
-    const twilioClient = twilio(
-      process.env.TWILIO_ACCOUNT_SID,
-      process.env.TWILIO_AUTH_TOKEN
-    );
-
     const { turn_id, approved_by, payout_amount_cents } = req.body || {};
     if (!turn_id) return res.status(400).json({ error: 'turn_id is required' });
 
-    // 1) Load the turn + property (no cleaner embed to avoid FK requirement)
+    // 1) Load the turn + property (no cleaner embed; we fetch cleaner separately to avoid FK assumptions)
     const { data: turn, error: tErr } = await supabase
       .from('turns')
       .select(`
@@ -42,12 +47,12 @@ export default async function handler(req, res) {
     if (tErr) throw tErr;
     if (!turn) return res.status(404).json({ error: 'Turn not found' });
 
-    // 2) Fetch cleaner by id (separate query; no FK embed needed)
+    // 2) Fetch cleaner by id
     let cleaner = null;
     if (turn.cleaner_id) {
       const { data: c, error: cErr } = await supabase
         .from('cleaners')
-        .select('id, name, phone')
+        .select('id, name, phone, sms_consent, sms_opt_out_at, phone_verified_at')
         .eq('id', turn.cleaner_id)
         .single();
       if (cErr) throw cErr;
@@ -82,12 +87,16 @@ export default async function handler(req, res) {
       });
     }
 
-    // 6) Notify cleaner
+    // 6) Consent guard + notify cleaner
+    const guard = canSendSMS(cleaner);
     const propertyName = turn?.properties?.name || 'Property';
     const FOOTER = ' Reply STOP to opt out, HELP for help.';
-    let sms = 'skipped';
+    let sms = { attempted: false, sent: false, reason: null, sid: null };
 
-    if (cleaner?.phone && (process.env.TWILIO_MESSAGING_SERVICE_SID || process.env.TWILIO_FROM_NUMBER)) {
+    if (guard.ok && (process.env.TWILIO_MESSAGING_SERVICE_SID || process.env.TWILIO_FROM_NUMBER)) {
+      const { default: twilio } = await import('twilio');
+      const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+
       const body = `TurnQA: Your turn for "${propertyName}" was approved.${payout.ok ? ' Your payout is being processed.' : ''}${FOOTER}`;
       const opts = { to: cleaner.phone, body };
       if (process.env.TWILIO_MESSAGING_SERVICE_SID) {
@@ -95,8 +104,13 @@ export default async function handler(req, res) {
       } else {
         opts.from = process.env.TWILIO_FROM_NUMBER;
       }
-      await twilioClient.messages.create(opts);
-      sms = 'sent';
+
+      sms.attempted = true;
+      const msg = await client.messages.create(opts);
+      sms.sent = true;
+      sms.sid = msg.sid;
+    } else {
+      sms.reason = guard.ok ? 'no_sender_config' : guard.reason;
     }
 
     return res.status(200).json({ ok: true, payout_ok: !!payout.ok, sms });
