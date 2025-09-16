@@ -1,21 +1,13 @@
 // pages/api/approve-turn.js
 import { createClient } from '@supabase/supabase-js';
-import twilio from 'twilio';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY
 );
 
-const twilioClient = twilio(
-  process.env.TWILIO_ACCOUNT_SID,
-  process.env.TWILIO_AUTH_TOKEN
-);
-
-// ----- Replace this with your real payout integration -----
-// For example, Stripe Connect, PayPal Payouts, Tipalti, Routable, etc.
+// Replace later with Stripe Connect / Routable / PayPal Payouts
 async function sendCleanerPayout({ turnId, cleanerId, amountCents, currency = 'USD' }) {
-  // TODO: Implement payout. For now, pretend success.
   return { ok: true, id: `demo_${turnId}` };
 }
 
@@ -26,14 +18,16 @@ export default async function handler(req, res) {
   }
 
   try {
+    const { default: twilio } = await import('twilio');
+    const twilioClient = twilio(
+      process.env.TWILIO_ACCOUNT_SID,
+      process.env.TWILIO_AUTH_TOKEN
+    );
+
     const { turn_id, approved_by, payout_amount_cents } = req.body || {};
     if (!turn_id) return res.status(400).json({ error: 'turn_id is required' });
 
-    // 1) Fetch turn with property + cleaner relationship
-    // Adjust to your schema:
-    // - turns has cleaner_id (assigned cleaner)
-    // - cleaners has phone and name
-    // - properties has name
+    // 1) Load the turn with property and cleaner
     const { data: turn, error: tErr } = await supabase
       .from('turns')
       .select(`
@@ -49,7 +43,7 @@ export default async function handler(req, res) {
     if (tErr) throw tErr;
     if (!turn) return res.status(404).json({ error: 'Turn not found' });
 
-    // 2) Update status to approved
+    // 2) Update status → approved
     const nowIso = new Date().toISOString();
     const { error: upErr } = await supabase
       .from('turns')
@@ -57,7 +51,7 @@ export default async function handler(req, res) {
       .eq('id', turn_id);
     if (upErr) throw upErr;
 
-    // 3) Log approval event
+    // 3) Log event
     const { error: evErr } = await supabase
       .from('turn_events')
       .insert({
@@ -67,7 +61,7 @@ export default async function handler(req, res) {
       });
     if (evErr) throw evErr;
 
-    // 4) Payout the cleaner (if amount provided and cleaner present)
+    // 4) Optional payout
     let payout = { ok: false, reason: 'no cleaner or amount' };
     if (turn.cleaners?.id && Number.isFinite(Number(payout_amount_cents)) && Number(payout_amount_cents) > 0) {
       payout = await sendCleanerPayout({
@@ -77,31 +71,23 @@ export default async function handler(req, res) {
       });
     }
 
-    // 5) SMS notify cleaner of approval and (if applicable) payout
-    let smsStatus = 'skipped';
-    const cleanerPhone = turn.cleaners?.phone;
-    const cleanerName  = turn.cleaners?.name || 'Cleaner';
-    const propertyName = turn.properties?.name || 'Property';
+    // 5) Notify cleaner (DB-driven)
+    const cleanerPhone = turn?.cleaners?.phone;
+    const propertyName = turn?.properties?.name || 'Property';
 
-    if (cleanerPhone) {
-      const paidLine = payout.ok
-        ? ` Your payout is being processed.`
-        : ``;
-
-      const body = `TurnQA: Your turn for "${propertyName}" was approved.${paidLine}`;
+    let sms = 'skipped';
+    if (cleanerPhone && process.env.TWILIO_FROM_NUMBER) {
+      const paid = payout.ok ? ' Your payout is being processed.' : '';
+      const body = `TurnQA: Your turn for "${propertyName}" was approved.${paid}`;
       await twilioClient.messages.create({
         from: process.env.TWILIO_FROM_NUMBER,
         to: cleanerPhone,
         body
       });
-      smsStatus = 'sent';
+      sms = 'sent';
     }
 
-    return res.status(200).json({
-      ok: true,
-      payout_ok: !!payout.ok,
-      sms: smsStatus
-    });
+    return res.status(200).json({ ok: true, payout_ok: !!payout.ok, sms });
   } catch (e) {
     return res.status(500).json({ error: e.message || 'unexpected error' });
   }
