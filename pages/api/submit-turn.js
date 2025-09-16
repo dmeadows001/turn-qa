@@ -60,14 +60,15 @@ export default async function handler(req, res) {
       });
     if (evErr) throw evErr;
 
-    // 4) Notify manager (DB-driven)
+    // 4) Notify manager (DB-driven) + compliance footer
     const managerPhone = turn?.properties?.managers?.phone;
     const propertyName = turn?.properties?.name || 'Property';
+    const FOOTER = ' Reply STOP to opt out, HELP for help.';
 
     let sms = 'skipped';
     if (managerPhone && process.env.TWILIO_FROM_NUMBER) {
       const reviewUrl = `${process.env.APP_BASE_URL || ''}/turns/${turn_id}/review`;
-      const body = `TurnQA: A turn was submitted for "${propertyName}". Review: ${reviewUrl}`;
+      const body = `TurnQA: A turn was submitted for "${propertyName}". Review: ${reviewUrl}.${FOOTER}`;
       await twilioClient.messages.create({
         from: process.env.TWILIO_FROM_NUMBER,
         to: managerPhone,
