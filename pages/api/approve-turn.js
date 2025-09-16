@@ -71,14 +71,15 @@ export default async function handler(req, res) {
       });
     }
 
-    // 5) Notify cleaner (DB-driven)
+    // 5) Notify cleaner (DB-driven) + compliance footer
     const cleanerPhone = turn?.cleaners?.phone;
     const propertyName = turn?.properties?.name || 'Property';
+    const FOOTER = ' Reply STOP to opt out, HELP for help.';
 
     let sms = 'skipped';
     if (cleanerPhone && process.env.TWILIO_FROM_NUMBER) {
       const paid = payout.ok ? ' Your payout is being processed.' : '';
-      const body = `TurnQA: Your turn for "${propertyName}" was approved.${paid}`;
+      const body = `TurnQA: Your turn for "${propertyName}" was approved.${paid}${FOOTER}`;
       await twilioClient.messages.create({
         from: process.env.TWILIO_FROM_NUMBER,
         to: cleanerPhone,
