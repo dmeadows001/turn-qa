@@ -1,25 +1,155 @@
-// ...keep the rest of your file the same...
+// pages/onboard/manager.js
+import { useEffect, useState } from 'react';
 
-{step === 'done' && (
-  <>
-    <p>All set! You’ll receive TurnQA job alerts to {phone}.</p>
-    {propertyId && (
-      <p style={{ marginTop: 8 }}>
-        Property link status: {linkResult === 'linked' ? 'Linked to property.' : (linkResult || 'Linking…')}
-      </p>
-    )}
+export default function ManagerOnboard() {
+  const [managerId, setManagerId] = useState('');
+  const [name, setName] = useState('');
+  const [phone, setPhone] = useState('');
+  const [consent, setConsent] = useState(false);
+  const [propertyId, setPropertyId] = useState('');
+  const [step, setStep] = useState('form'); // form | code | done
+  const [code, setCode] = useState('');
+  const [msg, setMsg] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [linkResult, setLinkResult] = useState(null);
 
-    <div style={{ marginTop: 16 }}>
-      {propertyId && (
-        <a style={{ display:'inline-block', marginRight:8, padding:'10px 14px', borderRadius:10, border:'1px solid #94a3b8', background:'#f8fafc', textDecoration:'none' }}
-           href={`/properties/${propertyId}/template`}>
-          Create template
-        </a>
-      )}
-      <a style={{ display:'inline-block', padding:'10px 14px', borderRadius:10, border:'1px solid #94a3b8', background:'#f8fafc', textDecoration:'none' }}
-         href="/dashboard">
-        Go to Dashboard
-      </a>
-    </div>
-  </>
-)}
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const url = new URL(window.location.href);
+    const pid = url.searchParams.get('property_id') || '';
+    if (pid) setPropertyId(pid);
+    const id = url.searchParams.get('id') || '';
+    if (id) setManagerId(id);
+  }, []);
+
+  async function sendCode() {
+    try {
+      setMsg('');
+      if (!phone) throw new Error('Please enter your mobile number.');
+      if (!consent) throw new Error('Please agree to SMS consent.');
+      setLoading(true);
+      const r = await fetch('/api/otp/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          role: 'manager',
+          subject_id: managerId || null,
+          name,
+          phone,
+          consent
+        })
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.message || j.error || 'Failed to send code');
+      if (j.subject_id) setManagerId(j.subject_id);
+      setStep('code');
+      setMsg('Code sent via SMS. Check your messages and enter the 6-digit code.');
+    } catch (e) {
+      setMsg(e.message || 'Failed to send code');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function verifyCode() {
+    try {
+      setMsg('');
+      if (!managerId) throw new Error('Missing manager ID. Please click “Send Code” again.');
+      if (!phone) throw new Error('Missing phone number.');
+      if (!code) throw new Error('Enter the 6-digit code.');
+      setLoading(true);
+      const r = await fetch('/api/otp/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          role: 'manager',
+          subject_id: managerId,
+          phone,
+          code
+        })
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || 'Failed to verify');
+      setStep('done');
+      setMsg('Phone verified and SMS consent recorded. You are good to go!');
+
+      // Auto-link to a property if property_id was provided
+      if (propertyId) {
+        const lr = await fetch('/api/property/assign-manager', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ property_id: propertyId, manager_id: j.subject_id || managerId })
+        });
+        const lj = await lr.json();
+        setLinkResult(lj?.ok ? 'linked' : `link_failed: ${lj?.error || 'unknown error'}`);
+      }
+    } catch (e) {
+      setMsg(e.message || 'Verification failed');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const wrap = { maxWidth: 520, margin: '40px auto', padding: '0 16px', fontFamily: 'ui-sans-serif' };
+  const card = { border:'1px solid #e5e7eb', borderRadius:12, padding:16, background:'#fff' };
+  const label = { fontSize:12, color:'#475569', marginBottom:6 };
+  const input = { width:'100%', padding:10, borderRadius:8, border:'1px solid #cbd5e1', marginBottom:12 };
+  const btn = { padding:'10px 14px', borderRadius:10, border:'1px solid #0ea5e9', background:'#e0f2fe', cursor:'pointer' };
+  const cta = { display:'inline-block', marginRight:8, padding:'10px 14px', borderRadius:10, border:'1px solid #94a3b8', background:'#f8fafc', textDecoration:'none' };
+
+  return (
+    <main style={wrap}>
+      <h1>Manager Onboarding</h1>
+      <div style={card}>
+        {step === 'form' && (
+          <>
+            <div style={label}>Name</div>
+            <input style={input} value={name} onChange={e=>setName(e.target.value)} placeholder="Your name" />
+
+            <div style={label}>Mobile Phone (E.164)</div>
+            <input style={input} value={phone} onChange={e=>setPhone(e.target.value)} placeholder="+15105551234" />
+
+            <label style={{display:'flex', gap:8, alignItems:'flex-start', margin:'8px 0 16px'}}>
+              <input type="checkbox" checked={consent} onChange={e=>setConsent(e.target.checked)} />
+              <span>I agree to receive transactional SMS from TurnQA. Message &amp; data rates may apply. Reply STOP to opt out, HELP for help. Consent is not a condition of purchase. See <a href="/legal/sms-terms" target="_blank" rel="noreferrer">SMS Terms</a>.</span>
+            </label>
+
+            <button disabled={loading} onClick={sendCode} style={btn}>
+              {loading ? 'Sending…' : 'Send Code'}
+            </button>
+          </>
+        )}
+
+        {step === 'code' && (
+          <>
+            <div style={label}>Enter the 6-digit code we sent to {phone}</div>
+            <input style={input} value={code} onChange={e=>setCode(e.target.value)} placeholder="123456" />
+            <button disabled={loading} onClick={verifyCode} style={btn}>
+              {loading ? 'Verifying…' : 'Verify'}
+            </button>
+          </>
+        )}
+
+        {step === 'done' && (
+          <>
+            <p>All set! You’ll receive TurnQA job alerts to {phone}.</p>
+            {propertyId && (
+              <p style={{ marginTop: 8 }}>
+                Property link status: {linkResult === 'linked' ? 'Linked to property.' : (linkResult || 'Linking…')}
+              </p>
+            )}
+
+            <div style={{ marginTop: 16 }}>
+              {propertyId && (
+                <a style={cta} href={`/properties/${propertyId}/template`}>Create template</a>
+              )}
+              <a style={cta} href="/dashboard">Go to Dashboard</a>
+            </div>
+          </>
+        )}
+
+        {msg && <div style={{marginTop:12, color:'#0f172a'}}>{msg}</div>}
+      </div>
+    </main>
+  );
+}
