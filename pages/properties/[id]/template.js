@@ -194,6 +194,17 @@ export default function TemplateBuilder() {
       <div style={{ marginTop:16 }}>
         <a href="/dashboard">← Back to dashboard</a>
       </div>
+      <div style={{ marginTop:16, display:'flex', gap:8, flexWrap:'wrap' }}>
+        <a href={`/properties/${propertyId}/invite`} style={{ padding:'10px 14px', borderRadius:10, border:'1px solid #94a3b8', background:'#f8fafc', textDecoration:'none' }}>
+          Invite cleaner
+        </a>
+        <a href={`/properties/${propertyId}/start-turn`} style={{ padding:'10px 14px', borderRadius:10, border:'1px solid #94a3b8', background:'#f8fafc', textDecoration:'none' }}>
+          Start turn
+        </a>
+        <a href="/dashboard" style={{ padding:'10px 14px', borderRadius:10, border:'1px solid #94a3b8', background:'#f8fafc', textDecoration:'none' }}>
+          Back to dashboard
+        </a>
+      </div>
 
       {msg && <div style={{ marginTop:12, color:'#b91c1c' }}>{msg}</div>}
     </main>
