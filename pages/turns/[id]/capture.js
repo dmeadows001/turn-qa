@@ -395,7 +395,8 @@ export default function Capture() {
       const resp = await fetch('/api/submit-turn', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ turnId, photos })
+        body: JSON.stringify({ turn_id: turnId, photos })
+
       });
 
       if (!resp.ok) {
