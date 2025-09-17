@@ -1,0 +1,87 @@
+// pages/properties/[id]/start-turn.js
+import { useEffect, useState } from 'react';
+import { useRouter } from 'next/router';
+
+export default function StartTurn() {
+  const router = useRouter();
+  const { id: propertyId } = router.query;
+
+  const [cleaners, setCleaners] = useState([]);
+  const [selected, setSelected] = useState('');
+  const [notes, setNotes] = useState('');
+  const [msg, setMsg] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [sending, setSending] = useState(false);
+
+  useEffect(() => {
+    if (!propertyId) return;
+    (async () => {
+      try {
+        setLoading(true);
+        const r = await fetch(`/api/org/cleaners?property_id=${propertyId}`);
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || 'Failed to load cleaners');
+        setCleaners(j.cleaners || []);
+        setMsg('');
+      } catch (e) {
+        setMsg(e.message || 'Failed to load');
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [propertyId]);
+
+  async function startTurn() {
+    try {
+      if (!selected) throw new Error('Choose a cleaner');
+      setSending(true);
+      const r = await fetch('/api/turns/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ property_id: propertyId, cleaner_id: selected, notes })
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || 'Failed to start turn');
+      setMsg(`Turn started and capture link SMS sent. Turn ID: ${j.turn?.id}`);
+    } catch (e) {
+      setMsg(e.message || 'Failed to start turn');
+    } finally {
+      setSending(false);
+    }
+  }
+
+  const wrap = { maxWidth: 560, margin: '40px auto', padding: '0 16px', fontFamily: 'ui-sans-serif' };
+  const card = { border:'1px solid #e5e7eb', borderRadius:12, padding:16, background:'#fff' };
+  const input = { width:'100%', padding:10, borderRadius:8, border:'1px solid #cbd5e1', marginBottom:12 };
+  const btn = { padding:'10px 14px', borderRadius:10, border:'1px solid #0ea5e9', background:'#e0f2fe', cursor:'pointer' };
+
+  return (
+    <main style={wrap}>
+      <h1>Start Turn</h1>
+      <div style={card}>
+        <div style={{fontSize:12, color:'#475569', marginBottom:4}}>Cleaner</div>
+        {loading ? <div>Loading…</div> : (
+          <select value={selected} onChange={e=>setSelected(e.target.value)} style={input}>
+            <option value="">Select a cleaner</option>
+            {cleaners.map(c => (
+              <option key={c.id} value={c.id}>{c.name || '(Unnamed)'} — {c.phone}</option>
+            ))}
+          </select>
+        )}
+
+        <div style={{fontSize:12, color:'#475569', margin:'8px 0 4px'}}>Notes (optional)</div>
+        <textarea style={{...input, minHeight:100}} value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Any special instructions" />
+
+        <button disabled={sending || !selected} onClick={startTurn} style={btn}>
+          {sending ? 'Sending…' : 'Send capture link & start'}
+        </button>
+
+        <div style={{marginTop:12}}>
+          <a href={`/properties/${propertyId}/template`}>← Back to template</a> · <a href="/dashboard">Back to dashboard</a>
+        </div>
+
+        {msg && <div style={{marginTop:12, color: msg.startsWith('Turn started') ? '#065f46' : '#b91c1c'}}>{msg}</div>}
+      </div>
+    </main>
+  );
+}
