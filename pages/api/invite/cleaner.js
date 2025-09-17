@@ -18,6 +18,12 @@ export default async function handler(req, res) {
     if (!property_id || !cleaner_phone) return res.status(400).json({ error: 'property_id and cleaner_phone are required' });
 
     const phone = ensureE164(cleaner_phone);
+
+    // OPTIONAL guard: prevent sending to your Virtual Phone by accident
+    // if (process.env.TWILIO_VIRTUAL_INBOX && phone === process.env.TWILIO_VIRTUAL_INBOX) {
+    //   return res.status(400).json({ error: 'That number is your Twilio Virtual Phone inbox. Use a real mobile or switch the Virtual Phone viewer to this sender to see it.' });
+    // }
+
     // 1) Load property (need org_id + name)
     const { data: prop, error: pErr } = await srv
       .from('properties')
@@ -46,14 +52,16 @@ export default async function handler(req, res) {
       await srv.from('cleaners').update({ name: cleaner_name }).eq('id', cleanerId);
     }
 
-    // 3) Build onboarding link
+    // 3) Build onboarding link (short & trial-safe)
     const base = process.env.APP_BASE_URL || process.env.NEXT_PUBLIC_APP_BASE_URL || '';
     const link = `${base}/onboard/cleaner?id=${cleanerId}`;
 
-    // 4) Send SMS
+    // 4) Send SMS (trimmed for Twilio trial)
     const { default: twilio } = await import('twilio');
     const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
-    const body = `TurnQA: You’ve been invited to clean at "${prop.name}". Open to verify your phone & get job alerts: ${link}. Reply STOP to opt out, HELP for help.`;
+
+    // Keep this VERY short for trial (Twilio adds its own prefix on trial)
+    const body = `TurnQA: Onboard: ${link} STOP=stop`;
 
     const opts = { to: phone, body };
     if (process.env.TWILIO_MESSAGING_SERVICE_SID) {
