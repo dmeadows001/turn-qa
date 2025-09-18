@@ -1,20 +1,14 @@
 // pages/api/submit-turn.js
 import { createClient } from '@supabase/supabase-js';
 
-const supabase = createClient(
+const supa = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY
 );
 
-// Utils
-function canSendSMS(rec) {
-  if (!rec) return { ok: false, reason: 'no_recipient' };
-  if (!rec.phone) return { ok: false, reason: 'no_phone' };
-  if (rec.sms_consent !== true) return { ok: false, reason: 'no_consent' };
-  if (rec.sms_opt_out_at) return { ok: false, reason: 'opted_out' };
-  // Optional: require verified phones only
-  // if (!rec.phone_verified_at) return { ok: false, reason: 'unverified_phone' };
-  return { ok: true };
+function baseUrl() {
+  return (process.env.APP_BASE_URL || process.env.NEXT_PUBLIC_APP_BASE_URL || 'https://www.turnqa.com')
+    .replace(/\/+$/, '');
 }
 
 export default async function handler(req, res) {
@@ -24,82 +18,107 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { turn_id, submitted_by, notes } = req.body || {};
+    const body = req.body || {};
+    // tolerant inputs
+    const turn_id = body.turn_id || body.turnId;
+    const submitted_by = body.submitted_by || body.submittedBy || 'Cleaner';
+    const notes = body.notes || body.message || '';
+    // photos may be present; we ignore them for now to keep this endpoint lean
+    // const photos = Array.isArray(body.photos) ? body.photos : [];
+
     if (!turn_id) return res.status(400).json({ error: 'turn_id is required' });
 
-    // 1) Load the turn and its property (get manager_id + property name)
-    const { data: turn, error: tErr } = await supabase
+    // 1) Load the turn (need property_id for manager lookup)
+    const { data: turn, error: tErr } = await supa
       .from('turns')
-      .select(`
-        id,
-        property_id,
-        status,
-        submitted_at,
-        properties:property_id ( id, name, manager_id )
-      `)
+      .select('id, property_id, status, submitted_at')
       .eq('id', turn_id)
       .single();
-    if (tErr) throw tErr;
-    if (!turn) return res.status(404).json({ error: 'Turn not found' });
+    if (tErr || !turn) throw new Error('Turn not found');
 
-    // 2) Fetch the manager (separate query so we don't depend on FK embeds)
-    let manager = null;
-    if (turn.properties?.manager_id) {
-      const { data: m, error: mErr } = await supabase
-        .from('managers')
-        .select('id, name, phone, sms_consent, sms_opt_out_at, phone_verified_at')
-        .eq('id', turn.properties.manager_id)
-        .single();
-      if (mErr) throw mErr;
-      manager = m;
+    // 2) Update the turn as submitted (keep update minimal to avoid schema mismatches)
+    const { error: uErr } = await supa
+      .from('turns')
+      .update({ submitted_at: new Date().toISOString(), status: 'submitted' })
+      .eq('id', turn_id);
+    if (uErr) throw uErr;
+
+    // 3) Resolve manager phone + consent
+    // Try manager_turns first (most flexible: many managers per property over time)
+    let managerPhone = null;
+    let managerConsent = false;
+    let managerName = null;
+
+    const { data: mt } = await supa
+      .from('manager_turns')
+      .select('manager_id')
+      .eq('property_id', turn.property_id)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    let managerId = mt?.manager_id;
+
+    // Fallback to properties.manager_id if present in your schema
+    if (!managerId) {
+      const { data: propRow } = await supa
+        .from('properties')
+        .select('manager_id')
+        .eq('id', turn.property_id)
+        .maybeSingle();
+      managerId = propRow?.manager_id || null;
     }
 
-    // 3) Update turn status → submitted
-    const nowIso = new Date().toISOString();
-    const { error: upErr } = await supabase
-      .from('turns')
-      .update({ status: 'submitted', submitted_at: nowIso })
-      .eq('id', turn_id);
-    if (upErr) throw upErr;
+    if (managerId) {
+      const { data: mgr } = await supa
+        .from('managers')
+        .select('name, phone, sms_consent')
+        .eq('id', managerId)
+        .maybeSingle();
+      managerPhone = mgr?.phone || null;
+      managerConsent = !!mgr?.sms_consent;
+      managerName = mgr?.name || null;
+    }
 
-    // 4) Log event
-    const { error: evErr } = await supabase
-      .from('turn_events')
-      .insert({
-        turn_id,
-        event: 'submitted',
-        meta: { submitted_by, notes }
-      });
-    if (evErr) throw evErr;
+    // Also load property name for the message (optional; we’ll keep body short on trial)
+    const { data: prop } = await supa
+      .from('properties')
+      .select('name')
+      .eq('id', turn.property_id)
+      .maybeSingle();
 
-    // 5) Consent guard + send SMS
-    const guard = canSendSMS(manager);
-    const propertyName = turn?.properties?.name || 'Property';
-    const reviewUrl = `${process.env.APP_BASE_URL || ''}/turns/${turn_id}/review`;
-    const FOOTER = ' Reply STOP to opt out, HELP for help.';
-    let sms = { attempted: false, sent: false, reason: null, sid: null };
+    const reviewLink = `${baseUrl()}/turns/${turn_id}/review`;
 
-    if (guard.ok && (process.env.TWILIO_MESSAGING_SERVICE_SID || process.env.TWILIO_FROM_NUMBER)) {
+    // 4) Send SMS to manager (only if consented and phone present)
+    let sms = 'skipped';
+    if (managerPhone && managerConsent) {
       const { default: twilio } = await import('twilio');
       const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 
-      const body = `TurnQA: A turn was submitted for "${propertyName}". Review: ${reviewUrl}.${FOOTER}`;
-      const opts = { to: manager.phone, body };
+      // keep short for Twilio trial accounts
+      const bodyText = `TurnQA: Submitted. Review: ${reviewLink} STOP=stop`;
+
+      const opts = { to: managerPhone, body: bodyText };
       if (process.env.TWILIO_MESSAGING_SERVICE_SID) {
         opts.messagingServiceSid = process.env.TWILIO_MESSAGING_SERVICE_SID;
       } else {
         opts.from = process.env.TWILIO_FROM_NUMBER;
       }
 
-      sms.attempted = true;
       const msg = await client.messages.create(opts);
-      sms.sent = true;
-      sms.sid = msg.sid;
-    } else {
-      sms.reason = guard.ok ? 'no_sender_config' : guard.reason;
+      sms = msg?.sid ? 'sent' : 'queued';
     }
 
-    return res.status(200).json({ ok: true, sms });
+    // (Optional) you could insert an audit log row here if you have audit_log table
+
+    return res.status(200).json({
+      ok: true,
+      turn_id,
+      manager_sms: sms,
+      review_link: reviewLink,
+      submitted_by,
+      notes
+    });
   } catch (e) {
     return res.status(500).json({ error: e.message || 'unexpected error' });
   }
