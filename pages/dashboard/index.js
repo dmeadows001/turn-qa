@@ -12,11 +12,13 @@ const supabase = createClient(
 export default function Dashboard() {
   const router = useRouter();
   const [session, setSession] = useState(null);
+
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [propName, setPropName] = useState('');
   const [propsList, setPropsList] = useState([]);
   const [msg, setMsg] = useState('');
+  const [managerId, setManagerId] = useState(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session || null));
@@ -24,12 +26,35 @@ export default function Dashboard() {
     return () => sub.subscription.unsubscribe();
   }, []);
 
+  // Ensure the user has a managers row; capture its id
   useEffect(() => {
     if (!session) return;
     (async () => {
       try {
+        // 1) Try to find existing manager for this user
+        const { data: m } = await supabase
+          .from('managers')
+          .select('id')
+          .eq('user_id', session.user.id)
+          .maybeSingle();
+
+        let id = m?.id;
+
+        // 2) If missing, create it (RLS policy mgr_insert_self allows this)
+        if (!id) {
+          const { data: created, error: cErr } = await supabase
+            .from('managers')
+            .insert({ user_id: session.user.id, name: session.user.email })
+            .select('id')
+            .single();
+          if (cErr) throw cErr;
+          id = created.id;
+        }
+
+        setManagerId(id);
+
+        // 3) Load this manager's properties (prop_select_own limits results)
         setLoading(true);
-        setMsg('');
         const { data, error } = await supabase
           .from('properties')
           .select('id, name, created_at')
@@ -37,7 +62,7 @@ export default function Dashboard() {
         if (error) throw error;
         setPropsList(data || []);
       } catch (e) {
-        setMsg(e.message || 'Failed to load properties');
+        setMsg(e.message || 'Failed to initialize dashboard');
       } finally {
         setLoading(false);
       }
@@ -51,11 +76,17 @@ export default function Dashboard() {
         setMsg('Enter a property name.');
         return;
       }
+      if (!managerId) {
+        setMsg('Your account is initializing. Try again in a moment.');
+        return;
+      }
       setCreating(true);
       setMsg('');
+
+      // IMPORTANT: include manager_id so the INSERT passes the RLS WITH CHECK policy
       const { data, error } = await supabase
         .from('properties')
-        .insert({ name: propName.trim() })
+        .insert({ name: propName.trim(), manager_id: managerId })
         .select('id')
         .single();
       if (error) throw error;
