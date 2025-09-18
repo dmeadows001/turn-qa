@@ -1,77 +1,48 @@
 // pages/managers/index.js
 import Link from 'next/link';
+import { useEffect, useState } from 'react';
+import { createClient } from '@supabase/supabase-js';
 
-function Card({ href, title, desc, emoji }) {
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+);
+
+export default function Managers() {
+  const [session, setSession] = useState(null);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => setSession(data.session || null));
+    const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => setSession(s));
+    return () => sub.subscription.unsubscribe();
+  }, []);
+
+  const wrap = { maxWidth: 720, margin: '40px auto', padding: '0 16px', fontFamily: 'ui-sans-serif' };
+  const card = { border:'1px solid #e5e7eb', borderRadius:16, padding:20, background:'#fff' };
+  const btnP = { padding:'12px 16px', borderRadius:12, border:'1px solid #0ea5e9', background:'#e0f2fe', textDecoration:'none', display:'inline-block' };
+  const btnS = { padding:'12px 16px', borderRadius:12, border:'1px solid #94a3b8', background:'#f8fafc', textDecoration:'none', display:'inline-block' };
+  const muted= { color:'#475569' };
+
   return (
-    <Link
-      href={href}
-      style={{
-        display:'block',
-        padding:'16px',
-        border:'1px solid #e5e7eb',
-        borderRadius:12,
-        background:'#fff',
-        color:'#0f172a',
-        textDecoration:'none'
-      }}
-    >
-      <div style={{ display:'flex', alignItems:'center', gap:12 }}>
-        <div style={{ fontSize:26 }}>{emoji}</div>
-        <div>
-          <div style={{ fontWeight:700, fontSize:18 }}>{title}</div>
-          <div style={{ color:'#475569', marginTop:4, fontSize:14 }}>{desc}</div>
+    <main style={wrap}>
+      <h1>Managers — Admin &amp; Review</h1>
+      <div style={card}>
+        <p style={muted}>New to TurnQA? Start a free trial. Already have an account? Sign in.</p>
+        <div style={{ display:'flex', gap:8, flexWrap:'wrap', marginTop:8 }}>
+          {session ? (
+            <Link href="/dashboard" style={btnP}>Go to dashboard</Link>
+          ) : (
+            <>
+              <Link href="/auth/signin" style={btnP}>Start free trial</Link>
+              <Link href="/auth/signin" style={btnS}>Manager sign in</Link>
+            </>
+          )}
         </div>
       </div>
-    </Link>
-  );
-}
 
-export default function ManagersHome() {
-  return (
-    <div style={{ minHeight:'100vh', background:'#f8fafc' }}>
-      <header style={{ padding:'22px 16px', borderBottom:'1px solid #e5e7eb', background:'#ffffff' }}>
-        <div style={{ maxWidth:1000, margin:'0 auto' }}>
-          <h1 style={{ margin:0, fontSize:28, color:'#0f172a' }}>Managers</h1>
-          <div style={{ color:'#64748b', marginTop:6 }}>
-            Review submitted turns, manage properties & templates.
-          </div>
-        </div>
-      </header>
-
-      <main style={{ maxWidth:1000, margin:'0 auto', padding:'18px 16px' }}>
-        <div style={{
-          display:'grid',
-          gridTemplateColumns:'repeat(auto-fit, minmax(260px, 1fr))',
-          gap:16
-        }}>
-          <Card
-            href="/managers/turns"
-            title="Review Turns"
-            desc="See submitted turns, open the photo review screen, approve or request fixes."
-            emoji="🧹"
-          />
-          <Card
-            href="/admin/properties"
-            title="Properties"
-            desc="Add/edit properties and house rules used by AI pre-check."
-            emoji="🏡"
-          />
-          <Card
-            href="/admin/templates"
-            title="Templates"
-            desc="Define required shots per property (areas, labels, counts)."
-            emoji="📋"
-          />
-        </div>
-
-        <div style={{ marginTop:24, fontSize:12, color:'#94a3b8' }}>
-          Tip: You can bookmark <code>/managers/turns</code> to jump straight to today’s work.
-        </div>
-
-        <div style={{ marginTop:18 }}>
-          <Link href="/" style={{ color:'#0369a1', textDecoration:'none' }}>← Back to home</Link>
-        </div>
-      </main>
-    </div>
+      <div style={{ ...card, marginTop: 16 }}>
+        <p style={muted}>After you sign in, you’ll land on your dashboard to create a property, build the photo checklist, invite cleaners, and review/approve turns.</p>
+      </div>
+    </main>
   );
 }
