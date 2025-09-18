@@ -114,7 +114,7 @@ export default function SignIn() {
   const title = { fontSize: 36, fontWeight: 800, letterSpacing: '-0.02em' };
   const card = {
     background: '#0f172a',
-    border: '1px solid '#1f2937',
+    border: '1px solid #1f2937',
     borderRadius: 16,
     padding: 20,
     maxWidth: '100%',
