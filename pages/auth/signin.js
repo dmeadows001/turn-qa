@@ -12,7 +12,7 @@ const supabase = createClient(
 export default function SignIn() {
   const router = useRouter();
   const urlMode = (router.query?.mode || '').toString();
-  const [mode, setMode] = useState(urlMode === 'signup' ? 'signup' : 'signin');
+  const [mode, setMode] = useState(urlMode === 'signup' ? 'signup' : 'signin'); // 'signin' | 'signup'
   const [session, setSession] = useState(null);
 
   const [email, setEmail] = useState('');
@@ -66,7 +66,10 @@ export default function SignIn() {
         email, password, options: { emailRedirectTo: redirectTo }
       });
       if (error) throw error;
-      setMsg(data.session ? 'Account created — redirecting…' : 'Account created. Check your email to confirm, then sign in.');
+      // If confirm-email is enabled, no session yet—tell user to check email once.
+      setMsg(data.session
+        ? 'Account created — redirecting…'
+        : 'Account created. If email confirmation is required, check your inbox and then sign in.');
     } catch (err) {
       setMsg(err.message || 'Sign-up failed');
     } finally {
@@ -78,15 +81,15 @@ export default function SignIn() {
     e.preventDefault();
     try {
       setMsg('');
-      if (!email) throw new Error('Enter your email.');
+      if (!email) throw new Error('Enter your email to receive a link.');
       setLoading(true);
       const { error } = await supabase.auth.signInWithOtp({
         email, options: { emailRedirectTo: redirectTo }
       });
       if (error) throw error;
-      setMsg('Magic link sent. Check your email.');
+      setMsg('We emailed you a one-click sign-in link.');
     } catch (err) {
-      setMsg(err.message || 'Failed to send magic link');
+      setMsg(err.message || 'Failed to send sign-in link');
     } finally {
       setLoading(false);
     }
@@ -178,6 +181,8 @@ export default function SignIn() {
     boxSizing: 'border-box',
   };
   const muted = { color: '#9ca3af' };
+  const helper = { color: '#9ca3af', fontSize: 12, marginTop: 6 };
+  const linky = { color: '#93c5fd', textDecoration: 'underline', cursor: 'pointer', marginLeft: 6 };
   const footer = { textAlign: 'center', marginTop: 16, color: '#6b7280', fontSize: 13 };
 
   return (
@@ -209,26 +214,59 @@ export default function SignIn() {
                 <button onClick={() => setMode('signup')} style={tab(mode === 'signup')}>Create account</button>
               </div>
 
-              <form onSubmit={mode === 'signin' ? doSignIn : doSignUp}>
-                <label style={label} htmlFor="email">Email</label>
-                <input id="email" type="email" placeholder="you@example.com" style={input}
-                  value={email} onChange={e => setEmail(e.target.value)} />
+              {mode === 'signin' ? (
+                <>
+                  <form onSubmit={doSignIn}>
+                    <label style={label} htmlFor="email">Email</label>
+                    <input id="email" type="email" placeholder="you@example.com" style={input}
+                      value={email} onChange={e => setEmail(e.target.value)} />
 
-                <label style={label} htmlFor="password">Password</label>
-                <input id="password" type="password" placeholder="••••••••" style={input}
-                  value={password} onChange={e => setPassword(e.target.value)} />
+                    <label style={label} htmlFor="password">Password</label>
+                    <input id="password" type="password" placeholder="••••••••" style={input}
+                      value={password} onChange={e => setPassword(e.target.value)} />
 
-                <button type="submit" disabled={loading} style={btnPrimary}>
-                  {loading ? (mode === 'signin' ? 'Signing in…' : 'Creating…') : (mode === 'signin' ? 'Sign in' : 'Create account')}
-                </button>
-              </form>
+                    <button type="submit" disabled={loading} style={btnPrimary}>
+                      {loading ? 'Signing in…' : 'Sign in'}
+                    </button>
+                  </form>
 
-              <div style={{ ...row, marginTop: 10 }}>
-                <button onClick={sendMagicLink} disabled={loading || !email} style={btnAlt}>
-                  {loading ? 'Sending…' : 'Send magic link instead'}
-                </button>
-                <a href="/" style={btnAlt}>Back to home</a>
-              </div>
+                  <div style={helper}>
+                    Prefer not to type a password?
+                    <a href="#" onClick={sendMagicLink} style={linky}>
+                      Email me a one-click sign-in link
+                    </a>
+                    . (We’ll send it to the email above.)
+                  </div>
+
+                  <div style={{ ...row, marginTop: 10 }}>
+                    <a href="/" style={btnAlt}>Back to home</a>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <form onSubmit={doSignUp}>
+                    <label style={label} htmlFor="email">Email</label>
+                    <input id="email" type="email" placeholder="you@example.com" style={input}
+                      value={email} onChange={e => setEmail(e.target.value)} />
+
+                    <label style={label} htmlFor="password">Password</label>
+                    <input id="password" type="password" placeholder="Choose a secure password" style={input}
+                      value={password} onChange={e => setPassword(e.target.value)} />
+
+                    <button type="submit" disabled={loading} style={btnPrimary}>
+                      {loading ? 'Creating…' : 'Create account'}
+                    </button>
+                  </form>
+
+                  <div style={helper}>
+                    We’ll sign you in right away. If your email requires confirmation, we’ll also send a quick verification.
+                  </div>
+
+                  <div style={{ ...row, marginTop: 10 }}>
+                    <a href="/" style={btnAlt}>Back to home</a>
+                  </div>
+                </>
+              )}
 
               {msg && (
                 <div style={{ marginTop: 12, color: msg.match(/link|Signed in|created|redirecting/i) ? '#22c55e' : '#fca5a5' }}>
