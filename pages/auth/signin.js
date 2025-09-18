@@ -66,7 +66,6 @@ export default function SignIn() {
         email, password, options: { emailRedirectTo: redirectTo }
       });
       if (error) throw error;
-      // If confirm-email is enabled, no session yet—tell user to check email once.
       setMsg(data.session
         ? 'Account created — redirecting…'
         : 'Account created. If email confirmation is required, check your inbox and then sign in.');
@@ -100,7 +99,7 @@ export default function SignIn() {
     window.location.href = '/';
   }
 
-  // ---------- Dark theme + no-overflow ----------
+  // ---------- Dark theme + spacing ----------
   const page = {
     minHeight: '100vh',
     background: '#0b0b0f',
@@ -115,7 +114,7 @@ export default function SignIn() {
   const title = { fontSize: 36, fontWeight: 800, letterSpacing: '-0.02em' };
   const card = {
     background: '#0f172a',
-    border: '1px solid #1f2937',
+    border: '1px solid '#1f2937',
     borderRadius: 16,
     padding: 20,
     maxWidth: '100%',
@@ -155,7 +154,7 @@ export default function SignIn() {
     width: '100%',
     maxWidth: '100%',
     boxSizing: 'border-box',
-    marginTop: 6,
+    marginTop: 10, // was 6 → add a bit more space
     padding: '12px 16px',
     borderRadius: 12,
     border: '1px solid #38bdf8',
@@ -181,7 +180,7 @@ export default function SignIn() {
     boxSizing: 'border-box',
   };
   const muted = { color: '#9ca3af' };
-  const helper = { color: '#9ca3af', fontSize: 12, marginTop: 6 };
+  const helper = { color: '#9ca3af', fontSize: 12, marginTop: 14 }; // was 6 → more breathing room
   const linky = { color: '#93c5fd', textDecoration: 'underline', cursor: 'pointer', marginLeft: 6 };
   const footer = { textAlign: 'center', marginTop: 16, color: '#6b7280', fontSize: 13 };
 
@@ -197,7 +196,7 @@ export default function SignIn() {
             <>
               <h2 style={{ marginTop: 0, marginBottom: 8 }}>You’re signed in 🎉</h2>
               <p style={muted}>Go to your dashboard to create a property, build your photo checklist, and invite a cleaner.</p>
-              <div style={{ ...row, marginTop: 12 }}>
+              <div style={{ ...row, marginTop: 14 }}>
                 <Link href="/dashboard" style={{ ...btnPrimary, flex: 1, textAlign: 'center' }}>Go to dashboard</Link>
                 <button onClick={signOut} style={{
                   ...btnAlt,
@@ -238,7 +237,7 @@ export default function SignIn() {
                     . (We’ll send it to the email above.)
                   </div>
 
-                  <div style={{ ...row, marginTop: 10 }}>
+                  <div style={{ ...row, marginTop: 16 }}>
                     <a href="/" style={btnAlt}>Back to home</a>
                   </div>
                 </>
@@ -258,11 +257,7 @@ export default function SignIn() {
                     </button>
                   </form>
 
-                  <div style={helper}>
-                    We’ll sign you in right away. If your email requires confirmation, we’ll also send a quick verification.
-                  </div>
-
-                  <div style={{ ...row, marginTop: 10 }}>
+                  <div style={{ ...row, marginTop: 16 }}>
                     <a href="/" style={btnAlt}>Back to home</a>
                   </div>
                 </>
