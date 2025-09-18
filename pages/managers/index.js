@@ -17,32 +17,71 @@ export default function Managers() {
     return () => sub.subscription.unsubscribe();
   }, []);
 
-  const wrap = { maxWidth: 720, margin: '40px auto', padding: '0 16px', fontFamily: 'ui-sans-serif' };
-  const card = { border:'1px solid #e5e7eb', borderRadius:16, padding:20, background:'#fff' };
-  const btnP = { padding:'12px 16px', borderRadius:12, border:'1px solid #0ea5e9', background:'#e0f2fe', textDecoration:'none', display:'inline-block' };
-  const btnS = { padding:'12px 16px', borderRadius:12, border:'1px solid #94a3b8', background:'#f8fafc', textDecoration:'none', display:'inline-block' };
-  const muted= { color:'#475569' };
+  const page = {
+    minHeight: '100vh',
+    background: '#0b0b0f',
+    color: '#e5e7eb',
+    fontFamily: 'ui-sans-serif'
+  };
+  const wrap = { maxWidth: 780, margin: '0 auto', padding: '32px 16px' };
+  const header = { textAlign: 'center', marginBottom: 18 };
+  const title = { fontSize: 32, fontWeight: 800, letterSpacing: '-0.02em' };
+  const card = {
+    background: '#0f172a',
+    border: '1px solid #1f2937',
+    borderRadius: 16,
+    padding: 20
+  };
+  const btnRow = { display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 };
+  const btnPrimary = {
+    padding: '12px 16px',
+    borderRadius: 12,
+    border: '1px solid #38bdf8',
+    background: '#0ea5e9',
+    color: '#0b0b0f',
+    textDecoration: 'none',
+    fontWeight: 600
+  };
+  const btnSecondary = {
+    padding: '12px 16px',
+    borderRadius: 12,
+    border: '1px solid #334155',
+    background: '#111827',
+    color: '#e5e7eb',
+    textDecoration: 'none',
+    fontWeight: 600
+  };
+  const muted = { color: '#9ca3af' };
 
   return (
-    <main style={wrap}>
-      <h1>Managers — Admin &amp; Review</h1>
-      <div style={card}>
-        <p style={muted}>New to TurnQA? Start a free trial. Already have an account? Sign in.</p>
-        <div style={{ display:'flex', gap:8, flexWrap:'wrap', marginTop:8 }}>
-          {session ? (
-            <Link href="/dashboard" style={btnP}>Go to dashboard</Link>
-          ) : (
-            <>
-              <Link href="/auth/signin" style={btnP}>Start free trial</Link>
-              <Link href="/auth/signin" style={btnS}>Manager sign in</Link>
-            </>
-          )}
-        </div>
-      </div>
+    <div style={page}>
+      <main style={wrap}>
+        <header style={header}>
+          <div style={title}>TurnQA</div>
+        </header>
 
-      <div style={{ ...card, marginTop: 16 }}>
-        <p style={muted}>After you sign in, you’ll land on your dashboard to create a property, build the photo checklist, invite cleaners, and review/approve turns.</p>
-      </div>
-    </main>
+        <div style={card}>
+          <h1 style={{ marginTop: 0, marginBottom: 6 }}>Managers — Admin &amp; Review</h1>
+          <p style={muted}>New to TurnQA? Start a free trial. Already have an account? Sign in.</p>
+          <div style={btnRow}>
+            {session ? (
+              <Link href="/dashboard" style={btnPrimary}>Go to dashboard</Link>
+            ) : (
+              <>
+                <Link href="/auth/signin" style={btnPrimary}>Start free trial</Link>
+                <Link href="/auth/signin" style={btnSecondary}>Manager sign in</Link>
+              </>
+            )}
+          </div>
+        </div>
+
+        <div style={{ ...card, marginTop: 16 }}>
+          <p style={muted}>
+            After you sign in, you’ll land on your dashboard to create a property, build the photo checklist,
+            invite cleaners, and review/approve turns.
+          </p>
+        </div>
+      </main>
+    </div>
   );
 }
