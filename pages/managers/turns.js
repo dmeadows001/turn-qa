@@ -1,6 +1,8 @@
 // pages/managers/turns.js
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import ChromeDark from '../../components/ChromeDark';
+import { ui } from '../../lib/theme';
 
 function niceDate(s) {
   try { return new Date(s).toLocaleString(); } catch { return s || '—'; }
@@ -45,89 +47,84 @@ export default function ManagerTurns() {
 
   const filtered = useMemo(() => rows, [rows]);
 
-  const wrap = {
-    maxWidth: 1100, margin: '24px auto', padding: '0 16px', fontFamily: 'ui-sans-serif'
-  };
-  const card = {
-    border:'1px solid #e5e7eb', borderRadius:12, padding:12, background:'#fff'
-  };
-
   return (
-    <div style={wrap}>
-      <h1>Manager — Turns</h1>
+    <ChromeDark title="Manager — Turns">
+      <section style={ui.sectionGrid}>
+        {/* Filters */}
+        <div style={ui.card}>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))', gap:12 }}>
+            <div>
+              <div style={ui.label}>Status</div>
+              <select
+                value={status}
+                onChange={e=>setStatus(e.target.value)}
+                style={{ ...ui.input, background: '#0b1220', cursor:'pointer' }}
+              >
+                {statuses.map(s => <option key={s.v} value={s.v}>{s.label}</option>)}
+              </select>
+            </div>
+            <div>
+              <div style={ui.label}>From</div>
+              <input type="date" value={from} onChange={e=>setFrom(e.target.value)} style={ui.input}/>
+            </div>
+            <div>
+              <div style={ui.label}>To</div>
+              <input type="date" value={to} onChange={e=>setTo(e.target.value)} style={ui.input}/>
+            </div>
+            <div style={{ alignSelf:'end' }}>
+              <button onClick={load} style={{ ...ui.btnPrimary, width:'100%' }}>
+                {loading ? 'Loading…' : 'Apply filters'}
+              </button>
+            </div>
+          </div>
+          {err && <div style={{ color:'#fca5a5', marginTop:12 }}>{err}</div>}
+        </div>
 
-      {/* Filters */}
-      <div style={{ ...card, display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))', gap:12 }}>
-        <div>
-          <div style={{ fontSize:12, color:'#475569', marginBottom:4 }}>Status</div>
-          <select value={status} onChange={e=>setStatus(e.target.value)} style={{ width:'100%', padding:8, borderRadius:8, border:'1px solid #cbd5e1' }}>
-            {statuses.map(s => <option key={s.v} value={s.v}>{s.label}</option>)}
-          </select>
-        </div>
-        <div>
-          <div style={{ fontSize:12, color:'#475569', marginBottom:4 }}>From</div>
-          <input type="date" value={from} onChange={e=>setFrom(e.target.value)} style={{ width:'100%', padding:8, borderRadius:8, border:'1px solid #cbd5e1' }}/>
-        </div>
-        <div>
-          <div style={{ fontSize:12, color:'#475569', marginBottom:4 }}>To</div>
-          <input type="date" value={to} onChange={e=>setTo(e.target.value)} style={{ width:'100%', padding:8, borderRadius:8, border:'1px solid #cbd5e1' }}/>
-        </div>
-        <div style={{ alignSelf:'end' }}>
-          <button onClick={load} style={{ padding:'10px 14px', borderRadius:10, border:'1px solid #0ea5e9', background:'#e0f2fe', cursor:'pointer', width:'100%' }}>
-            {loading ? 'Loading…' : 'Apply Filters'}
-          </button>
-        </div>
-      </div>
-
-      {err && <div style={{ color:'#b91c1c', marginTop:12 }}>{err}</div>}
-
-      {/* Results */}
-      <div style={{ ...card, marginTop:16 }}>
-        {loading ? <div>Loading…</div> :
-          filtered.length === 0 ? <div>No turns match these filters.</div> :
-          (
-            <table style={{ width:'100%', borderCollapse:'collapse' }}>
-              <thead>
-                <tr style={{ textAlign:'left', borderBottom:'1px solid #e5e7eb' }}>
-                  <th style={{ padding:'8px 6px' }}>Created</th>
-                  <th style={{ padding:'8px 6px' }}>Property</th>
-                  <th style={{ padding:'8px 6px' }}>Status</th>
-                  <th style={{ padding:'8px 6px' }}>Submitted</th>
-                  <th style={{ padding:'8px 6px' }}></th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map(t => (
-                  <tr key={t.id} style={{ borderBottom:'1px solid #f1f5f9' }}>
-                    <td style={{ padding:'8px 6px' }}>{niceDate(t.created_at)}</td>
-                    <td style={{ padding:'8px 6px' }}>{t.property_name}</td>
-                    <td style={{ padding:'8px 6px', textTransform:'capitalize' }}>{t.status || '—'}</td>
-                    <td style={{ padding:'8px 6px' }}>{t.submitted_at ? niceDate(t.submitted_at) : '—'}</td>
-                    <td style={{ padding:'8px 6px' }}>
-                      <Link
-                        href={`/turns/${t.id}/review`}
-                        style={{
-                          padding:'6px 10px',
-                          border:'1px solid #94a3b8',
-                          borderRadius:8,
-                          textDecoration:'none',
-                          display:'inline-block'
-                        }}
-                      >
-                        Open
-                      </Link>
-                    </td>
+        {/* Results */}
+        <div style={ui.card}>
+          {loading ? (
+            <div>Loading…</div>
+          ) : filtered.length === 0 ? (
+            <div style={ui.muted}>No turns match these filters.</div>
+          ) : (
+            <div style={{ overflowX:'auto' }}>
+              <table style={{ width:'100%', borderCollapse:'collapse', minWidth: 700 }}>
+                <thead>
+                  <tr style={{ textAlign:'left', borderBottom:'1px solid #1f2937' }}>
+                    <th style={{ padding:'10px 8px' }}>Created</th>
+                    <th style={{ padding:'10px 8px' }}>Property</th>
+                    <th style={{ padding:'10px 8px' }}>Status</th>
+                    <th style={{ padding:'10px 8px' }}>Submitted</th>
+                    <th style={{ padding:'10px 8px' }}></th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          )
-        }
-      </div>
+                </thead>
+                <tbody>
+                  {filtered.map(t => (
+                    <tr key={t.id} style={{ borderBottom:'1px solid #111827' }}>
+                      <td style={{ padding:'10px 8px', color:'#cbd5e1' }}>{niceDate(t.created_at)}</td>
+                      <td style={{ padding:'10px 8px' }}>{t.property_name}</td>
+                      <td style={{ padding:'10px 8px', textTransform:'capitalize' }}>{t.status || '—'}</td>
+                      <td style={{ padding:'10px 8px' }}>{t.submitted_at ? niceDate(t.submitted_at) : '—'}</td>
+                      <td style={{ padding:'10px 8px' }}>
+                        <Link
+                          href={`/turns/${t.id}/review`}
+                          style={{ ...ui.btnSecondary, display:'inline-block' }}
+                        >
+                          Open
+                        </Link>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
 
-      <div style={{ marginTop:12 }}>
-        <Link href="/managers">← Back to Managers home</Link>
-      </div>
-    </div>
+        <div style={{ ...ui.subtle }}>
+          <Link href="/managers" style={{ color:'#9ca3af' }}>← Back to Managers home</Link>
+        </div>
+      </section>
+    </ChromeDark>
   );
 }
