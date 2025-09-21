@@ -2,13 +2,15 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
 import { createClient } from '@supabase/supabase-js';
+import ChromeDark from '../../../components/ChromeDark';
+import { ui } from '../../../lib/theme';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 );
 
-// simple, opinionated areas; tweak to your needs
+// Opinionated areas; tweak as needed
 const AREAS = [
   ['general', 'General'],
   ['kitchen', 'Kitchen'],
@@ -31,6 +33,7 @@ export default function TemplateBuilder() {
   const [shots, setShots]       = useState([]);
   const [newLabel, setNewLabel] = useState('');
   const [newArea, setNewArea]   = useState('general');
+  const [newRequired, setNewRequired] = useState(1);
 
   useEffect(() => {
     if (!propertyId) return;
@@ -68,7 +71,7 @@ export default function TemplateBuilder() {
         }
         setTemplate(tpl);
 
-        // 3) Load template shots (include area_key)
+        // 3) Load template shots
         const { data: s, error: sErr } = await supabase
           .from('template_shots')
           .select('id, template_id, label, required, area_key, created_at')
@@ -78,135 +81,247 @@ export default function TemplateBuilder() {
         setShots(s || []);
         setMsg('');
       } catch (e) {
-        setMsg(e.message || 'Failed to load');
+        setMsg(e.message || 'Failed to load template');
       } finally {
         setLoading(false);
       }
     })();
   }, [propertyId]);
 
-  async function addShot() {
+  async function addShot(e) {
+    e?.preventDefault?.();
     try {
-      if (!newLabel.trim() || !template?.id) return;
-      const payload = {
-        template_id: template.id,
-        label: newLabel.trim(),
-        required: true,
-        area_key: newArea || 'general',
-      };
-      const { data, error } = await supabase
+      setMsg('');
+      const label = newLabel.trim();
+      const required = Math.max(1, parseInt(newRequired || 1, 10));
+      if (!template?.id) throw new Error('Template not ready.');
+      if (!label) throw new Error('Enter a label for the checklist item.');
+
+      const { data: created, error } = await supabase
         .from('template_shots')
-        .insert(payload)
+        .insert({
+          template_id: template.id,
+          label,
+          area_key: newArea,
+          required
+        })
         .select('id, template_id, label, required, area_key, created_at')
         .single();
       if (error) throw error;
-      setShots(prev => [...prev, data]);
+
+      setShots(prev => [...prev, created]);
       setNewLabel('');
       setNewArea('general');
+      setNewRequired(1);
+      setMsg('Added.');
+      setTimeout(() => setMsg(''), 1200);
     } catch (e) {
-      setMsg(e.message || 'Failed to add shot');
+      setMsg(e.message || 'Could not add item');
     }
   }
 
-  async function updateShot(id, patch) {
+  async function updateLabel(id, label) {
     try {
-      const { error } = await supabase.from('template_shots').update(patch).eq('id', id);
+      setShots(prev => prev.map(s => s.id === id ? { ...s, label } : s));
+      const { error } = await supabase.from('template_shots').update({ label }).eq('id', id);
       if (error) throw error;
-      setShots(prev => prev.map(s => s.id === id ? { ...s, ...patch } : s));
     } catch (e) {
-      setMsg(e.message || 'Failed to update');
+      setMsg(e.message || 'Update failed');
+    }
+  }
+
+  async function updateArea(id, area_key) {
+    try {
+      setShots(prev => prev.map(s => s.id === id ? { ...s, area_key } : s));
+      const { error } = await supabase.from('template_shots').update({ area_key }).eq('id', id);
+      if (error) throw error;
+    } catch (e) {
+      setMsg(e.message || 'Update failed');
+    }
+  }
+
+  async function updateRequired(id, val) {
+    const required = Math.max(1, parseInt(val || 1, 10));
+    try {
+      setShots(prev => prev.map(s => s.id === id ? { ...s, required } : s));
+      const { error } = await supabase.from('template_shots').update({ required }).eq('id', id);
+      if (error) throw error;
+    } catch (e) {
+      setMsg(e.message || 'Update failed');
     }
   }
 
   async function deleteShot(id) {
     try {
+      setShots(prev => prev.filter(s => s.id !== id));
       const { error } = await supabase.from('template_shots').delete().eq('id', id);
       if (error) throw error;
-      setShots(prev => prev.filter(s => s.id !== id));
     } catch (e) {
-      setMsg(e.message || 'Failed to delete');
+      setMsg(e.message || 'Delete failed');
     }
   }
 
-  const wrap  = { maxWidth: 860, margin: '40px auto', padding: '0 16px', fontFamily: 'ui-sans-serif' };
-  const card  = { border:'1px solid #e5e7eb', borderRadius:12, padding:16, background:'#fff', marginTop:16 };
-  const input = { width:'100%', padding:10, borderRadius:8, border:'1px solid #cbd5e1' };
-  const btn   = { padding:'8px 12px', borderRadius:8, border:'1px solid #94a3b8', background:'#f8fafc', cursor:'pointer' };
-  const select= { ...input, width:'auto' };
+  // -------------- Render --------------
+  if (loading) {
+    return (
+      <ChromeDark title="Property Template">
+        <section style={ui.sectionGrid}>
+          <div style={ui.card}>Loading…</div>
+        </section>
+      </ChromeDark>
+    );
+  }
+
+  if (!property || !template) {
+    return (
+      <ChromeDark title="Property Template">
+        <section style={ui.sectionGrid}>
+          <div style={ui.card}>
+            Could not load this property/template.
+          </div>
+        </section>
+      </ChromeDark>
+    );
+  }
 
   return (
-    <main style={wrap}>
-      <h1>Property Template {property ? `— ${property.name}` : ''}</h1>
+    <ChromeDark title={`${property.name} — Template`}>
+      <section style={ui.sectionGrid}>
+        {/* Builder */}
+        <div style={ui.card}>
+          <h2 style={{ marginTop: 0, marginBottom: 8 }}>
+            Checklist for <span style={{ color: '#cbd5e1' }}>{property.name}</span>
+          </h2>
+          <div style={ui.subtle}>Define the photos your cleaner must capture per area.</div>
 
-      <div style={card}>
-        <h3>Add a checklist item</h3>
-        <div style={{ display:'flex', gap:8, alignItems:'center' }}>
-          <input style={{ ...input, flex:1 }} placeholder="e.g., Kitchen — sink close-up"
-                 value={newLabel} onChange={e=>setNewLabel(e.target.value)} />
-          <select style={select} value={newArea} onChange={e=>setNewArea(e.target.value)}>
-            {AREAS.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
-          </select>
-          <button style={btn} onClick={addShot} disabled={!template || !newLabel.trim()}>Add</button>
-        </div>
-      </div>
-
-      <div style={card}>
-        <h3>Checklist items</h3>
-        {loading ? <div>Loading…</div> : (
-          shots.length === 0 ? <div>No items yet. Add your first one above.</div> : (
-            <table style={{ width:'100%', borderCollapse:'collapse' }}>
-              <thead>
-                <tr style={{ textAlign:'left', borderBottom:'1px solid #e5e7eb' }}>
-                  <th style={{ padding:'8px 6px' }}>Label</th>
-                  <th style={{ padding:'8px 6px' }}>Area</th>
-                  <th style={{ padding:'8px 6px' }}>Required</th>
-                  <th style={{ padding:'8px 6px' }}></th>
-                </tr>
-              </thead>
-              <tbody>
-                {shots.map(s => (
-                  <tr key={s.id} style={{ borderBottom:'1px solid #f1f5f9' }}>
-                    <td style={{ padding:'8px 6px' }}>
-                      <input style={input} value={s.label || ''} onChange={e=>updateShot(s.id, { label: e.target.value })} />
-                    </td>
-                    <td style={{ padding:'8px 6px' }}>
-                      <select style={select} value={s.area_key || 'general'} onChange={e=>updateShot(s.id, { area_key: e.target.value })}>
-                        {AREAS.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
-                      </select>
-                    </td>
-                    <td style={{ padding:'8px 6px' }}>
-                      <label style={{ display:'inline-flex', alignItems:'center', gap:6 }}>
-                        <input type="checkbox" checked={!!s.required} onChange={e=>updateShot(s.id, { required: e.target.checked })} />
-                        Required
-                      </label>
-                    </td>
-                    <td style={{ padding:'8px 6px', textAlign:'right' }}>
-                      <button style={{...btn, borderColor:'#ef4444', background:'#fee2e2'}} onClick={()=>deleteShot(s.id)}>Delete</button>
-                    </td>
-                  </tr>
+          {/* Add new item */}
+          <form onSubmit={addShot} style={{ marginTop: 14 }}>
+            <label style={ui.label}>Add checklist item</label>
+            <div style={{ ...ui.row }}>
+              <input
+                type="text"
+                placeholder="e.g., Kitchen — Overall"
+                style={{ ...ui.input, flex: 2, minWidth: 240 }}
+                value={newLabel}
+                onChange={e => setNewLabel(e.target.value)}
+              />
+              <select
+                style={{ ...ui.input, flex: 1, minWidth: 160, background: '#0b1220', cursor:'pointer' }}
+                value={newArea}
+                onChange={e => setNewArea(e.target.value)}
+              >
+                {AREAS.map(([v, label]) => (
+                  <option key={v} value={v}>{label}</option>
                 ))}
-              </tbody>
-            </table>
-          )
-        )}
-      </div>
+              </select>
+              <input
+                type="number"
+                min={1}
+                step={1}
+                style={{ ...ui.input, width: 120 }}
+                value={newRequired}
+                onChange={e => setNewRequired(e.target.value)}
+              />
+              <button type="submit" style={ui.btnPrimary}>Add</button>
+            </div>
+            <div style={{ ...ui.subtle, marginTop: 6 }}>
+              “Required” = minimum number of photos for this item.
+            </div>
+          </form>
 
-      <div style={{ marginTop:16 }}>
-        <a href="/dashboard">← Back to dashboard</a>
-      </div>
-      <div style={{ marginTop:16, display:'flex', gap:8, flexWrap:'wrap' }}>
-        <a href={`/properties/${propertyId}/invite`} style={{ padding:'10px 14px', borderRadius:10, border:'1px solid #94a3b8', background:'#f8fafc', textDecoration:'none' }}>
-          Invite cleaner
-        </a>
-        <a href={`/properties/${propertyId}/start-turn`} style={{ padding:'10px 14px', borderRadius:10, border:'1px solid #94a3b8', background:'#f8fafc', textDecoration:'none' }}>
-          Start turn
-        </a>
-        <a href="/dashboard" style={{ padding:'10px 14px', borderRadius:10, border:'1px solid #94a3b8', background:'#f8fafc', textDecoration:'none' }}>
-          Back to dashboard
-        </a>
-      </div>
+          {msg && (
+            <div style={{ marginTop: 10, color: msg.match(/Added|Saved|Updated/i) ? '#22c55e' : '#fca5a5' }}>
+              {msg}
+            </div>
+          )}
 
-      {msg && <div style={{ marginTop:12, color:'#b91c1c' }}>{msg}</div>}
-    </main>
+          {/* Existing items */}
+          <div style={{ marginTop: 18, overflowX:'auto' }}>
+            {shots.length === 0 ? (
+              <div style={ui.muted}>No items yet — add your first checklist item above.</div>
+            ) : (
+              <table style={{ width:'100%', minWidth: 720, borderCollapse:'collapse' }}>
+                <thead>
+                  <tr style={{ textAlign:'left', borderBottom:'1px solid #1f2937' }}>
+                    <th style={{ padding:'10px 8px' }}>Label</th>
+                    <th style={{ padding:'10px 8px' }}>Area</th>
+                    <th style={{ padding:'10px 8px', width:120 }}>Required</th>
+                    <th style={{ padding:'10px 8px', width:120 }}></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {shots.map(s => (
+                    <tr key={s.id} style={{ borderBottom:'1px solid #111827' }}>
+                      <td style={{ padding:'10px 8px' }}>
+                        <input
+                          type="text"
+                          value={s.label || ''}
+                          onChange={e => updateLabel(s.id, e.target.value)}
+                          style={{ ...ui.input }}
+                        />
+                      </td>
+                      <td style={{ padding:'10px 8px' }}>
+                        <select
+                          value={s.area_key || 'general'}
+                          onChange={e => updateArea(s.id, e.target.value)}
+                          style={{ ...ui.input, background: '#0b1220', cursor:'pointer' }}
+                        >
+                          {AREAS.map(([v, label]) => (
+                            <option key={v} value={v}>{label}</option>
+                          ))}
+                        </select>
+                      </td>
+                      <td style={{ padding:'10px 8px' }}>
+                        <input
+                          type="number"
+                          min={1}
+                          step={1}
+                          value={s.required || 1}
+                          onChange={e => updateRequired(s.id, e.target.value)}
+                          style={{ ...ui.input }}
+                        />
+                      </td>
+                      <td style={{ padding:'10px 8px' }}>
+                        <button onClick={() => deleteShot(s.id)} style={ui.btnSecondary}>
+                          Delete
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+
+        {/* Actions / Next steps */}
+        <div style={ui.card}>
+          <h2 style={{ marginTop: 0, marginBottom: 8 }}>Next steps</h2>
+          <div style={{ ...ui.row }}>
+            <button
+              onClick={() => router.push(`/properties/${property.id}/invite`)}
+              style={ui.btnPrimary}
+            >
+              Invite cleaner
+            </button>
+            <button
+              onClick={() => router.push(`/properties/${property.id}/start-turn`)}
+              style={ui.btnSecondary}
+            >
+              Start a test turn
+            </button>
+            <button
+              onClick={() => router.push('/dashboard')}
+              style={ui.btnSecondary}
+            >
+              Back to dashboard
+            </button>
+          </div>
+          <div style={{ ...ui.subtle, marginTop: 10 }}>
+            When a cleaner submits a turn, you’ll review it under <b>Manager → Turns</b>.
+          </div>
+        </div>
+      </section>
+    </ChromeDark>
   );
 }
