@@ -3,6 +3,8 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { createClient } from '@supabase/supabase-js';
+import ChromeDark from '../../components/ChromeDark';
+import { ui } from '../../lib/theme';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -26,12 +28,11 @@ export default function Dashboard() {
     return () => sub.subscription.unsubscribe();
   }, []);
 
-  // Ensure the user has a managers row; capture its id
+  // Ensure the user has a managers row; capture its id and load properties
   useEffect(() => {
     if (!session) return;
     (async () => {
       try {
-        // 1) Try to find existing manager for this user
         const { data: m } = await supabase
           .from('managers')
           .select('id')
@@ -39,8 +40,6 @@ export default function Dashboard() {
           .maybeSingle();
 
         let id = m?.id;
-
-        // 2) If missing, create it (RLS policy mgr_insert_self allows this)
         if (!id) {
           const { data: created, error: cErr } = await supabase
             .from('managers')
@@ -50,10 +49,8 @@ export default function Dashboard() {
           if (cErr) throw cErr;
           id = created.id;
         }
-
         setManagerId(id);
 
-        // 3) Load this manager's properties (prop_select_own limits results)
         setLoading(true);
         const { data, error } = await supabase
           .from('properties')
@@ -72,18 +69,10 @@ export default function Dashboard() {
   async function createProperty(e) {
     e?.preventDefault?.();
     try {
-      if (!propName.trim()) {
-        setMsg('Enter a property name.');
-        return;
-      }
-      if (!managerId) {
-        setMsg('Your account is initializing. Try again in a moment.');
-        return;
-      }
+      if (!propName.trim()) return setMsg('Enter a property name.');
+      if (!managerId) return setMsg('Your account is initializing. Try again in a moment.');
       setCreating(true);
       setMsg('');
-
-      // IMPORTANT: include manager_id so the INSERT passes the RLS WITH CHECK policy
       const { data, error } = await supabase
         .from('properties')
         .insert({ name: propName.trim(), manager_id: managerId })
@@ -101,131 +90,58 @@ export default function Dashboard() {
     }
   }
 
-  // -------------- Dark theme styles with safe sizing --------------
-  const page = {
-    minHeight: '100vh',
-    background: '#0b0b0f',
-    color: '#e5e7eb',
-    fontFamily: 'ui-sans-serif',
-    padding: '32px 16px'
-  };
-  const wrap = { maxWidth: 1040, margin: '0 auto' };
-  const header = { textAlign: 'center', marginBottom: 18 };
-  const title = { fontSize: 36, fontWeight: 800, letterSpacing: '-0.02em' };
-  const cards = { display: 'grid', gap: 16, gridTemplateColumns: '1fr' };
-  const card = {
-    background: '#0f172a',
-    border: '1px solid #1f2937',
-    borderRadius: 16,
-    padding: 20,
-    maxWidth: '100%',
-    overflow: 'hidden'
-  };
-  const label = { fontSize: 13, color: '#9ca3af', marginBottom: 6, display: 'block' };
-  const row = { display: 'flex', gap: 8, flexWrap: 'wrap' };
-  const input = {
-    display: 'block',
-    width: '100%',
-    maxWidth: '100%',
-    boxSizing: 'border-box',
-    minWidth: 0,
-    padding: '12px 14px',
-    borderRadius: 12,
-    border: '1px solid #334155',
-    background: '#111827',
-    color: '#e5e7eb',
-    outline: 'none'
-  };
-  const btnPrimary = {
-    padding: '12px 16px',
-    borderRadius: 12,
-    border: '1px solid #38bdf8',
-    background: '#0ea5e9',
-    color: '#0b0b0f',
-    textDecoration: 'none',
-    fontWeight: 700,
-    cursor: 'pointer',
-    boxSizing: 'border-box'
-  };
-  const btnSecondary = {
-    padding: '10px 14px',
-    borderRadius: 10,
-    border: '1px solid #334155',
-    background: '#111827',
-    color: '#e5e7eb',
-    textDecoration: 'none',
-    fontWeight: 600,
-    boxSizing: 'border-box'
-  };
-  const muted = { color: '#9ca3af' };
-  const list = { display: 'grid', gap: 10, marginTop: 8 };
-
   return (
-    <div style={page}>
-      <div style={wrap}>
-        <header style={header}>
-          <div style={title}>Dashboard</div>
-          <div style={{ color: '#9ca3af', marginTop: 4 }}>
-            Create a property, build your photo checklist, invite cleaners, and review turns.
-          </div>
-        </header>
+    <ChromeDark title="Dashboard">
+      <section style={ui.sectionGrid}>
+        {/* Create Property */}
+        <div style={ui.card}>
+          <h2 style={{ marginTop: 0, marginBottom: 8 }}>Create a property</h2>
+          <form onSubmit={createProperty}>
+            <label htmlFor="propname" style={ui.label}>Property name</label>
+            <div style={{ ...ui.row }}>
+              <input
+                id="propname"
+                type="text"
+                placeholder="e.g., Glendale — 2BR Condo"
+                style={{ ...ui.input, flex: 1, minWidth: 220 }}
+                value={propName}
+                onChange={e => setPropName(e.target.value)}
+              />
+              <button type="submit" disabled={creating} style={ui.btnPrimary}>
+                {creating ? 'Creating…' : 'Create & build checklist'}
+              </button>
+            </div>
+          </form>
+          {msg && <div style={{ marginTop: 10, color: '#fca5a5' }}>{msg}</div>}
+        </div>
 
-        <section style={cards}>
-          {/* Create Property */}
-          <div style={card}>
-            <h2 style={{ marginTop: 0, marginBottom: 8 }}>Create a property</h2>
-            <form onSubmit={createProperty}>
-              <label htmlFor="propname" style={label}>Property name</label>
-              <div style={{ ...row }}>
-                <input
-                  id="propname"
-                  type="text"
-                  placeholder="e.g., Glendale — 2BR Condo"
-                  style={{ ...input, flex: 1, minWidth: 220 }}
-                  value={propName}
-                  onChange={e => setPropName(e.target.value)}
-                />
-                <button type="submit" disabled={creating} style={btnPrimary}>
-                  {creating ? 'Creating…' : 'Create & build checklist'}
-                </button>
-              </div>
-            </form>
-            {msg && <div style={{ marginTop: 10, color: '#fca5a5' }}>{msg}</div>}
-          </div>
-
-          {/* Your Properties */}
-          <div style={card}>
-            <h2 style={{ marginTop: 0, marginBottom: 8 }}>Your properties</h2>
-            {loading ? (
-              <div>Loading…</div>
-            ) : propsList.length === 0 ? (
-              <div style={muted}>No properties yet. Create one above to get started.</div>
-            ) : (
-              <div style={list}>
-                {propsList.map(p => (
-                  <div key={p.id} style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: 8,
-                    border: '1px solid #1f2937',
-                    borderRadius: 12,
-                    padding: 12
-                  }}>
-                    <div style={{ fontWeight: 600 }}>{p.name}</div>
-                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                      <Link href={`/properties/${p.id}/template`} style={btnSecondary}>Checklist</Link>
-                      <Link href={`/properties/${p.id}/invite`} style={btnSecondary}>Invite cleaner</Link>
-                      <Link href={`/properties/${p.id}/start-turn`} style={btnSecondary}>Start turn</Link>
-                      <Link href={`/managers/turns`} style={btnSecondary}>Review turns</Link>
-                    </div>
+        {/* Your Properties */}
+        <div style={ui.card}>
+          <h2 style={{ marginTop: 0, marginBottom: 8 }}>Your properties</h2>
+          {loading ? (
+            <div>Loading…</div>
+          ) : propsList.length === 0 ? (
+            <div style={ui.muted}>No properties yet. Create one above to get started.</div>
+          ) : (
+            <div style={{ display: 'grid', gap: 10, marginTop: 8 }}>
+              {propsList.map(p => (
+                <div key={p.id} style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  gap: 8, border: '1px solid #1f2937', borderRadius: 12, padding: 12
+                }}>
+                  <div style={{ fontWeight: 600 }}>{p.name}</div>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <Link href={`/properties/${p.id}/template`} style={ui.btnSecondary}>Checklist</Link>
+                    <Link href={`/properties/${p.id}/invite`} style={ui.btnSecondary}>Invite cleaner</Link>
+                    <Link href={`/properties/${p.id}/start-turn`} style={ui.btnSecondary}>Start turn</Link>
+                    <Link href={`/managers/turns`} style={ui.btnSecondary}>Review turns</Link>
                   </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </section>
-      </div>
-    </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
+    </ChromeDark>
   );
 }
