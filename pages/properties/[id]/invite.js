@@ -50,15 +50,17 @@ export default function InviteCleanerPage() {
       if (!phone.trim()) throw new Error('Enter a phone number.');
       setSending(true);
 
-      const r = await fetch('/api/invite-cleaner', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          property_id: propertyId,
-          cleaner_name: name.trim(),
-          phone: phone.trim()
-        })
-      });
+      - const r = await fetch('/api/invite-cleaner', {
++ const r = await fetch('/api/invite/cleaner', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      property_id: propertyId,
+      cleaner_name: name.trim(),
+      phone: phone.trim()
+    })
+  });
+
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error || 'Invite failed');
       setMsg('Invite sent ✅');
