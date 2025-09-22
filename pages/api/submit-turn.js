@@ -1,5 +1,6 @@
 // pages/api/submit-turn.js
 import { createClient } from '@supabase/supabase-js';
+import { absUrl } from '../../lib/origin'; // adjust the relative path if needed
 
 const supa = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
