@@ -1,5 +1,7 @@
 // pages/api/invite/cleaner.js
 import { createClient } from '@supabase/supabase-js';
+import { absUrl } from '../../../lib/origin';
+
 
 // --- Twilio (optional; we'll no-op if not configured) ---
 function getTwilio() {
@@ -98,7 +100,7 @@ export default async function handler(req, res) {
         ? `https://${process.env.VERCEL_URL}`
         : process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000';
 
-    const inviteUrl = `${origin}/onboard/cleaner?id=${encodeURIComponent(cleaner.id)}`;
+    const inviteUrl = absUrl(req, `/onboard/cleaner?id=${inviteId}`);
 
     // 5) Send SMS via Twilio (if configured), otherwise no-op
     let sms = 'skipped_no_twilio';
