@@ -2,142 +2,109 @@
 import { createClient } from '@supabase/supabase-js';
 import { absUrl } from '../../../lib/origin';
 
-
-// --- Twilio (optional; we'll no-op if not configured) ---
-function getTwilio() {
-  const sid = process.env.TWILIO_ACCOUNT_SID;
-  const token = process.env.TWILIO_AUTH_TOKEN;
-  if (!sid || !token) return null;
-  // lazy import to avoid bundling if unused
-  // eslint-disable-next-line global-require
-  const twilio = require('twilio');
-  return twilio(sid, token);
-}
-
-// Normalize to a simple E.164-ish form (very light check)
-function normalizePhone(s = '') {
-  // keep only digits; always prefix '+' to make E.164-ish
-  const digitsOnly = (s || '').replace(/[^\d]/g, '');
-  return digitsOnly ? `+${digitsOnly}` : '';
-}
-
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
-  // use service role if available so we can insert regardless of RLS on this secure API
+  // service role for secure server mutations (bypasses RLS)
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY
 );
 
+// Lazy Twilio init so local builds don't crash without creds
+function getTwilio() {
+  const sid = process.env.TWILIO_ACCOUNT_SID;
+  const tok = process.env.TWILIO_AUTH_TOKEN;
+  if (!sid || !tok) return null;
+  // eslint-disable-next-line global-require
+  const Twilio = require('twilio');
+  return new Twilio(sid, tok);
+}
+
+function normalizeUSPhone(raw = '') {
+  // Keep digits; add + prefix for E.164 (trial-safe shortest)
+  const digits = String(raw).replace(/[^\d]/g, '');
+  if (!digits) return '';
+  return digits.startsWith('1') ? `+${digits}` : `+1${digits}`;
+}
+
 export default async function handler(req, res) {
+  if (req.method === 'OPTIONS') {
+    res.setHeader('Allow', 'POST,OPTIONS');
+    return res.status(200).end();
+  }
   if (req.method !== 'POST') {
-    res.setHeader('Allow', 'POST');
+    res.setHeader('Allow', 'POST,OPTIONS');
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
   try {
-    const { property_id, cleaner_name, phone } = req.body || {};
+    const { property_id, phone, name } = req.body || {};
     if (!property_id) return res.status(400).json({ error: 'property_id is required' });
-    if (!cleaner_name || !cleaner_name.trim()) return res.status(400).json({ error: 'cleaner_name is required' });
-    if (!phone || !phone.trim()) return res.status(400).json({ error: 'phone is required' });
+    if (!phone)       return res.status(400).json({ error: 'phone is required' });
 
-    const phoneE164 = normalizePhone(phone);
-
-    // 1) Load property (robust)
-    const { data: property, error: pErr } = await supabase
+    // 1) Confirm property (for the name in SMS)
+    const { data: prop, error: pErr } = await supabase
       .from('properties')
       .select('id, name')
       .eq('id', property_id)
-      .maybeSingle(); // <- tolerant to 0/1
+      .maybeSingle();
     if (pErr) throw pErr;
-    if (!property) {
-      return res.status(400).json({ error: 'Property not found. Create it first, then invite.' });
-    }
+    if (!prop) return res.status(404).json({ error: 'Property not found' });
 
-    // 2) Ensure a default template exists (the invite link doesn’t strictly need it,
-    //    but many flows assume one. We’ll create one if none exists.)
-    let { data: template, error: tErr } = await supabase
-      .from('property_templates')
-      .select('id, property_id, name, created_at')
-      .eq('property_id', property_id)
-      .order('created_at', { ascending: true })
-      .limit(1)
-      .maybeSingle();
-    if (tErr) throw tErr;
+    // 2) Upsert cleaner by phone (unique index on cleaners.phone)
+    const e164 = normalizeUSPhone(phone);
+    if (!e164) return res.status(400).json({ error: 'Invalid phone number' });
 
-    if (!template) {
-      const { data: created, error: cErr } = await supabase
-        .from('property_templates')
-        .insert({ property_id, name: 'Default' })
-        .select('id, property_id, name')
-        .maybeSingle();
-      if (cErr) throw cErr;
-      template = created || null;
-    }
-
-    // 3) Upsert the cleaner by phone (avoid duplicates)
-    //    If your schema requires property linkage, add property_id to the upsert.
-    const { data: cleaner, error: upErr } = await supabase
+    const { data: cleaner, error: cErr } = await supabase
       .from('cleaners')
-      .upsert(
-        {
-          name: cleaner_name.trim(),
-          phone: phoneE164,
-          // if you have these columns:
-          // property_id,
-          // sms_consent: false,
-        },
-        { onConflict: 'phone' } // assumes 'phone' is unique, adjust if different
-      )
-      .select('id, name, phone')
+      .upsert({ phone: e164, name: name || null }, { onConflict: 'phone' })
+      .select('id, phone, name')
       .maybeSingle();
-    if (upErr) throw upErr;
-    if (!cleaner) {
-      return res.status(500).json({ error: 'Could not create or find cleaner' });
-    }
+    if (cErr) throw cErr;
 
-    // 4) Build onboarding link (we’ll use cleaner.id directly)
-    const origin =
-      process.env.VERCEL_URL
-        ? `https://${process.env.VERCEL_URL}`
-        : process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000';
+    // 3) Create an invite row (uuid id) for this cleaner + property
+    const { data: inv, error: iErr } = await supabase
+      .from('cleaner_invites')
+      .insert({ cleaner_id: cleaner.id, property_id })
+      .select('id')
+      .single();
+    if (iErr) throw iErr;
 
+    // 4) Build absolute onboarding URL
+    const inviteId = inv.id;                 // <-- this is the defined ID
     const inviteUrl = absUrl(req, `/onboard/cleaner?id=${inviteId}`);
 
-    // 5) Send SMS via Twilio (if configured), otherwise no-op
+    // 5) Send short SMS (trial safe). Prefer Messaging Service if present
     let sms = 'skipped_no_twilio';
     const tw = getTwilio();
-    if (tw) {
-      const messagingServiceSid = process.env.TWILIO_MESSAGING_SERVICE_SID;
-      const fromNumber = process.env.TWILIO_FROM_NUMBER;
+    if (tw && (process.env.TWILIO_MESSAGING_SERVICE_SID || process.env.TWILIO_FROM)) {
+      const body = `TurnQA: Join ${prop.name || 'property'}: ${inviteUrl} STOP=stop HELP=help`;
+      const msgOpts = {
+        to: e164,
+        body
+      };
+      if (process.env.TWILIO_MESSAGING_SERVICE_SID) {
+        msgOpts.messagingServiceSid = process.env.TWILIO_MESSAGING_SERVICE_SID;
+      } else {
+        msgOpts.from = process.env.TWILIO_FROM;
+      }
 
-      // Keep it short (esp. for Twilio trial)
-      const body = `TurnQA: ${property.name || 'Your property'} invite link: ${inviteUrl}`;
-
-      const msgOpts = messagingServiceSid
-        ? { to: phoneE164, body, messagingServiceSid }
-        : { to: phoneE164, body, from: fromNumber };
-
-      const sent = await tw.messages.create(msgOpts);
-      sms = sent?.sid ? 'sent' : 'not_sent';
+      try {
+        const sent = await tw.messages.create(msgOpts);
+        sms = sent?.sid ? 'sent' : 'not_sent';
+      } catch (e) {
+        console.error('[invite/cleaner] Twilio error:', e?.message || e);
+        sms = 'twilio_error';
+      }
     }
 
     return res.json({
       ok: true,
-      property: { id: property.id, name: property.name },
-      template_id: template?.id || null,
+      invite_id: inviteId,
+      invite_url: inviteUrl,
       cleaner_id: cleaner.id,
-      inviteUrl,
       sms
     });
   } catch (e) {
-    // Turn the common “single()” issue into a friendly message
-    const msg = String(e?.message || e);
-    if (/JSON object requested, multiple \(or no\) rows returned/i.test(msg)) {
-      return res.status(400).json({
-        error:
-          'A required lookup returned zero or multiple rows. Likely causes: no template for this property yet, or duplicate templates. I tried to auto-create a default template; please retry.',
-        detail: msg
-      });
-    }
-    return res.status(500).json({ error: msg });
+    console.error('[invite/cleaner] ERROR:', e);
+    return res.status(500).json({ error: e?.message || String(e) });
   }
 }
