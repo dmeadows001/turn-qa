@@ -50,7 +50,6 @@ export default function InviteCleanerPage() {
       if (!phone.trim()) throw new Error('Enter a phone number.');
       setSending(true);
 
-      - const r = await fetch('/api/invite-cleaner', {
 + const r = await fetch('/api/invite/cleaner', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
