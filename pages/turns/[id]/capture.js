@@ -1,6 +1,8 @@
 // pages/turns/[id]/capture.js
 import { useRouter } from 'next/router';
 import { useEffect, useRef, useState } from 'react';
+import ChromeDark from '../../../components/ChromeDark';
+import { ui } from '../../../lib/theme';
 
 // Fallback default shots if no template is linked to this turn
 const DEFAULT_SHOTS = [
@@ -52,10 +54,12 @@ function BigButton({ children, onPress, loading=false, kind='primary', full=fals
       width: full ? '100%' : 'auto',
       transition: 'transform 80ms ease, opacity 120ms ease',
       transform: loading ? 'scale(0.99)' : 'none',
-      opacity: loading ? 0.85 : 1
+      opacity: loading ? 0.85 : 1,
+      boxSizing: 'border-box'
     },
     primary: { background: '#0ea5e9', color: '#fff' },
-    secondary: { background: '#f8fafc', color: '#0f172a', border: '1px solid #e5e7eb' }
+    // Themed secondary (TurnQA Midnight)
+    secondary: { background: '#111827', color: '#e5e7eb', border: '1px solid #334155' }
   };
 
   const style = { ...styles.base, ...(kind === 'primary' ? styles.primary : styles.secondary) };
@@ -307,42 +311,40 @@ export default function Capture() {
       const results = [];
       let nextIndex = 0;
 
-     async function worker() {
-  while (nextIndex < chunks.length) {
-    const myIdx = nextIndex++;
-    const items = chunks[myIdx];
+      async function worker() {
+        while (nextIndex < chunks.length) {
+          const myIdx = nextIndex++;
+          const items = chunks[myIdx];
 
-    // Give half progress when dispatching this batch
-    setScanProgress(prev => ({
-      done: Math.min(prev.done + items.length * 0.5, prev.total),
-      total: prev.total
-    }));
+          // Give half progress when dispatching this batch
+          setScanProgress(prev => ({
+            done: Math.min(prev.done + items.length * 0.5, prev.total),
+            total: prev.total
+          }));
 
-    try {
-      const resp = await fetch('/api/vision-scan', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items, global_rules })
-      });
-      const json = await resp.json();
-      if (Array.isArray(json.results)) {
-        results.push(...json.results);
+          try {
+            const resp = await fetch('/api/vision-scan', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ items, global_rules })
+            });
+            const json = await resp.json();
+            if (Array.isArray(json.results)) {
+              results.push(...json.results);
+            }
+          } catch (e) {
+            console.warn('vision batch failed', e);
+            // If a batch fails, we won't add the second half; that's okay since no results came back.
+            continue;
+          }
+
+          // Grant the remaining half when the batch completes
+          setScanProgress(prev => ({
+            done: Math.min(prev.done + items.length * 0.5, prev.total),
+            total: prev.total
+          }));
+        }
       }
-    } catch (e) {
-      console.warn('vision batch failed', e);
-      // If a batch fails, we won't add the second half; that's okay since no results came back.
-      continue;
-    }
-
-    // Grant the remaining half when the batch completes
-    setScanProgress(prev => ({
-      done: Math.min(prev.done + items.length * 0.5, prev.total),
-      total: prev.total
-    }));
-  }
-}
-
-
 
       // run limited concurrency
       const workers = Array.from({ length: Math.min(PARALLEL, chunks.length) }, () => worker());
@@ -395,8 +397,7 @@ export default function Capture() {
       const resp = await fetch('/api/submit-turn', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ turn_id: turnId, photos })
-
+        body: JSON.stringify({ turnId, photos })
       });
 
       if (!resp.ok) {
@@ -405,200 +406,213 @@ export default function Capture() {
         return;
       }
       // after a successful submit:
-    window.location.href = `/turns/${turnId}/done`;
+      window.location.href = `/turns/${turnId}/done`;
     } finally {
       setTimeout(() => setSubmitting(false), 300);
     }
   }
 
   // -------- Render --------
-  if (!turnId || shots === null) return <div style={{ padding:24 }}>Loading…</div>;
+  if (!turnId || shots === null) {
+    return (
+      <ChromeDark title="Start Taking Photos">
+        <section style={ui.sectionGrid}>
+          <div style={ui.card}>Loading…</div>
+        </section>
+      </ChromeDark>
+    );
+  }
 
   const pct = scanProgress.total > 0
     ? Math.round((scanProgress.done / scanProgress.total) * 100)
     : null;
 
   return (
-    <div style={{ maxWidth: 980, margin: '24px auto', padding: '0 16px', fontFamily: 'ui-sans-serif' }}>
-     <h1>Start Taking Photos</h1>
+    <ChromeDark title="Start Taking Photos">
+      <section style={ui.sectionGrid}>
+        <div style={ui.card}>
+          <h2 style={{ marginTop: 0 }}>Start Taking Photos</h2>
 
-<div style={{ marginTop: 12, color: '#14532d', fontSize: 14 }}>
-  ✅ Tap + inside the box to take a picture
-</div>
-<div style={{ marginTop: 6, color: '#14532d', fontSize: 14 }}>
-  ✅ Run AI Pre-Check before submitting
-</div>
+          <div style={{ marginTop: 12, color: '#14532d', fontSize: 14 }}>
+            ✅ Tap + inside the box to take a picture
+          </div>
+          <div style={{ marginTop: 6, color: '#14532d', fontSize: 14 }}>
+            ✅ Run AI Pre-Check before submitting
+          </div>
 
-{/* small context line for cleaners (no UUID) */}
-<div style={{ color:'#475569', marginTop: 6, fontSize: 14 }}>
-  {templateRules?.property ? <span><b>Property:</b> {templateRules.property}</span> : null}
-  {templateRules?.template ? <span> • <b>Checklist:</b> {templateRules.template}</span> : null}
-</div>
+          {/* small context line for cleaners (no UUID) */}
+          <div style={{ color:'#9ca3af', marginTop: 6, fontSize: 14 }}>
+            {templateRules?.property ? <span><b>Property:</b> {templateRules.property}</span> : null}
+            {templateRules?.template ? <span> • <b>Checklist:</b> {templateRules.template}</span> : null}
+          </div>
 
-{/* Show Turn ID only if ?showId=1 is in the URL */}
-{typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('showId') === '1' && (
-  <div style={{ color:'#94a3b8', fontSize: 12, marginTop: 6 }}>
-    Turn ID: <code style={{ userSelect:'all' }}>{turnId}</code>
-  </div>
-)}
+          {/* Show Turn ID only if ?showId=1 is in the URL */}
+          {typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('showId') === '1' && (
+            <div style={{ color:'#94a3b8', fontSize: 12, marginTop: 6 }}>
+              Turn ID: <code style={{ userSelect:'all' }}>{turnId}</code>
+            </div>
+          )}
 
+          {shots.map(s => {
+            const files = uploadsByShot[s.shot_id] || [];
+            const required = s.min_count || 1;
+            const missing = Math.max(0, required - files.length);
 
-      {shots.map(s => {
-        const files = uploadsByShot[s.shot_id] || [];
-        const required = s.min_count || 1;
-        const missing = Math.max(0, required - files.length);
+            return (
+              <div key={s.shot_id} style={{ border:'1px solid #334155', borderRadius:12, padding:12, margin:'12px 0', background:'#0f172a' }}>
+                {/* Hidden input per shot */}
+                <input
+                  ref={el => { inputRefs.current[s.shot_id] = el; }}
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  multiple
+                  style={{ display:'none' }}
+                  onChange={(e)=>addFiles(s.shot_id, e.target.files)}
+                />
 
-        return (
-          <div key={s.shot_id} style={{ border:'1px solid #eee', borderRadius:12, padding:12, margin:'12px 0' }}>
-            {/* Hidden input per shot */}
-            <input
-              ref={el => { inputRefs.current[s.shot_id] = el; }}
-              type="file"
-              accept="image/*"
-              capture="environment"
-              multiple
-              style={{ display:'none' }}
-              onChange={(e)=>addFiles(s.shot_id, e.target.files)}
-            />
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:12 }}>
+                  <div>
+                    <b>{s.label}</b>
+                    {s.notes ? <div style={{ fontSize:12, color:'#94a3b8' }}>{s.notes}</div> : null}
+                    <div style={{ fontSize:12, marginTop:4, color: missing>0 ? '#f59e0b' : '#22c55e' }}>
+                      Required: {required} • Uploaded: {files.length} {missing>0 ? `• Missing: ${missing}` : '• ✅'}
+                    </div>
+                  </div>
+                  <BigButton kind="secondary" onPress={() => openPicker(s.shot_id)} ariaLabel={`Add photo for ${s.label}`}>
+                    ➕ Add photo
+                  </BigButton>
+                </div>
 
-            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:12 }}>
-              <div>
-                <b>{s.label}</b>
-                {s.notes ? <div style={{ fontSize:12, color:'#64748b' }}>{s.notes}</div> : null}
-                <div style={{ fontSize:12, marginTop:4, color: missing>0 ? '#9A3412' : '#0F766E' }}>
-                  Required: {required} • Uploaded: {files.length} {missing>0 ? `• Missing: ${missing}` : '• ✅'}
+                {/* File cards + placeholders */}
+                <div style={{ marginTop:10, display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(260px,1fr))', gap:16 }}>
+                  {/* Existing uploads */}
+                  {files.map(f => (
+                    <div key={f.url} style={{ border:'1px solid #334155', borderRadius:10, padding:10, background:'#0b1220' }}>
+                      {/* Thumbnail preview (local, immediate) */}
+                      {f.preview && (
+                        <div style={{ marginBottom:8 }}>
+                          <img
+                            src={f.preview}
+                            alt={f.name}
+                            style={{ width: '100%', height: 160, objectFit: 'cover', borderRadius: 8 }}
+                            draggable={false}
+                          />
+                        </div>
+                      )}
+
+                      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:6 }}>
+                        <div style={{ fontSize:13, maxWidth:'70%', color:'#e5e7eb' }}>
+                          <b title={f.name}>{f.name}</b><br/>
+                          {f.width}×{f.height}
+                        </div>
+                        <BigButton kind="secondary" onPress={() => viewPhoto(f.url)} ariaLabel={`View ${f.name}`}>
+                          👁️ View
+                        </BigButton>
+                      </div>
+
+                      {/* AI flags under each photo */}
+                      {Array.isArray(aiByPath[f.url]) && aiByPath[f.url].length > 0 && (
+                        <div>
+                          {aiByPath[f.url].map((iss, idx) => (
+                            <div key={idx} style={{ marginBottom:4 }}>
+                              <span style={sevStyle(iss.severity)}>{(iss.severity || 'info').toUpperCase()}</span>
+                              <span style={{ fontSize:13, color:'#e5e7eb' }}>
+                                {iss.label}
+                                {typeof iss.confidence === 'number' ? ` (${Math.round(iss.confidence * 100)}%)` : ''}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+
+                  {/* Placeholders for missing photos */}
+                  {Array.from({ length: missing }).map((_, i) => (
+                    <button
+                      key={`ph-${s.shot_id}-${i}`}
+                      onPointerUp={() => openPicker(s.shot_id)}
+                      aria-label={`Add required photo for ${s.label}`}
+                      style={{
+                        border:'2px dashed #334155',
+                        borderRadius:12,
+                        padding:'20px 14px',
+                        background:'transparent',
+                        cursor:'pointer',
+                        display:'flex',
+                        flexDirection:'column',
+                        alignItems:'center',
+                        justifyContent:'center',
+                        minHeight:160,
+                        userSelect:'none',
+                        WebkitTapHighlightColor:'transparent',
+                        color:'#cbd5e1'
+                      }}
+                    >
+                      <div style={{ fontSize:30, lineHeight:1, color:'#94a3b8', marginBottom:8 }}>＋</div>
+                      <div style={{ fontSize:15 }}>Tap to add required photo</div>
+                      <div style={{ fontSize:12, color:'#94a3b8', marginTop:4 }}>{s.label}</div>
+                    </button>
+                  ))}
                 </div>
               </div>
-              <BigButton kind="secondary" onPress={() => openPicker(s.shot_id)} ariaLabel={`Add photo for ${s.label}`}>
-                ➕ Add photo
-              </BigButton>
-            </div>
+            );
+          })}
 
-            {/* File cards + placeholders */}
-            <div style={{ marginTop:10, display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(260px,1fr))', gap:16 }}>
-              {/* Existing uploads */}
-              {files.map(f => (
-                <div key={f.url} style={{ border:'1px solid #eee', borderRadius:10, padding:10 }}>
-                  {/* Thumbnail preview (local, immediate) */}
-                  {f.preview && (
-                    <div style={{ marginBottom:8 }}>
-                      <img
-                        src={f.preview}
-                        alt={f.name}
-                        style={{ width: '100%', height: 160, objectFit: 'cover', borderRadius: 8 }}
-                        draggable={false}
-                      />
-                    </div>
-                  )}
+          {/* AI findings summary */}
+          <div style={{ border:'1px dashed #334155', borderRadius:12, padding:12, marginTop:16, background:'#0f172a' }}>
+            <div style={{ fontWeight:600, marginBottom:8 }}>AI Findings</div>
+            {aiFlags.length === 0 ? (
+              <div style={{ color:'#94a3b8' }}>No findings yet — tap “Run AI Pre-Check”.</div>
+            ) : (
+              <ul style={{ marginLeft:18 }}>
+                {aiFlags.map((f, i) => <li key={i}>{f}</li>)}
+              </ul>
+            )}
+          </div>
 
-                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:6 }}>
-                    <div style={{ fontSize:13, maxWidth:'70%' }}>
-                      <b title={f.name}>{f.name}</b><br/>
-                      {f.width}×{f.height}
-                    </div>
-                    <BigButton kind="secondary" onPress={() => viewPhoto(f.url)} ariaLabel={`View ${f.name}`}>
-                      👁️ View
-                    </BigButton>
-                  </div>
+          {/* Buttons + progress */}
+          <div style={{ display:'flex', flexDirection:'column', gap:12, marginTop:16, maxWidth:420 }}>
+            <BigButton
+              onPress={runPrecheck}
+              loading={prechecking}
+              kind="primary"
+              ariaLabel="Run AI Pre-Check"
+            >
+              {prechecking && scanProgress.total > 0
+                ? `🔎 Scanning ${scanProgress.done}/${scanProgress.total} (${pct}%)`
+                : '🔎 Run AI Pre-Check'}
+            </BigButton>
 
-                  {/* AI flags under each photo */}
-                  {Array.isArray(aiByPath[f.url]) && aiByPath[f.url].length > 0 && (
-                    <div>
-                      {aiByPath[f.url].map((iss, idx) => (
-                        <div key={idx} style={{ marginBottom:4 }}>
-                          <span style={sevStyle(iss.severity)}>{(iss.severity || 'info').toUpperCase()}</span>
-                          <span style={{ fontSize:13 }}>
-                            {iss.label}
-                            {typeof iss.confidence === 'number' ? ` (${Math.round(iss.confidence * 100)}%)` : ''}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+            {prechecking && scanProgress.total > 0 && (
+              <div>
+                <div style={{ height:8, background:'#1f2937', borderRadius:6, overflow:'hidden' }}>
+                  <div style={{
+                    height:'100%',
+                    width: `${pct}%`,
+                    background:'#0ea5e9',
+                    transition:'width 200ms ease'
+                  }} />
                 </div>
-              ))}
+                <div style={{ fontSize:12, color:'#94a3b8', marginTop:6 }}>
+                  Scanning {scanProgress.done} of {scanProgress.total}…
+                </div>
+              </div>
+            )}
 
-              {/* Placeholders for missing photos */}
-              {Array.from({ length: missing }).map((_, i) => (
-                <button
-                  key={`ph-${s.shot_id}-${i}`}
-                  onPointerUp={() => openPicker(s.shot_id)}
-                  aria-label={`Add required photo for ${s.label}`}
-                  style={{
-                    border:'2px dashed #cbd5e1',
-                    borderRadius:12,
-                    padding:'20px 14px',
-                    background:'transparent',
-                    cursor:'pointer',
-                    display:'flex',
-                    flexDirection:'column',
-                    alignItems:'center',
-                    justifyContent:'center',
-                    minHeight:160,
-                    userSelect:'none',
-                    WebkitTapHighlightColor:'transparent'
-                  }}
-                >
-                  <div style={{ fontSize:30, lineHeight:1, color:'#64748b', marginBottom:8 }}>＋</div>
-                  <div style={{ fontSize:15, color:'#475569' }}>Tap to add required photo</div>
-                  <div style={{ fontSize:12, color:'#94a3b8', marginTop:4 }}>{s.label}</div>
-                </button>
-              ))}
-            </div>
+            <BigButton
+              onPress={submitAll}
+              loading={submitting}
+              kind="secondary"
+              ariaLabel="Submit Turn"
+              full
+            >
+              ✅ Submit Turn
+            </BigButton>
           </div>
-        );
-      })}
-
-      {/* AI findings summary */}
-      <div style={{ border:'1px dashed #cbd5e1', borderRadius:12, padding:12, marginTop:16 }}>
-        <div style={{ fontWeight:600, marginBottom:8 }}>AI Findings</div>
-        {aiFlags.length === 0 ? (
-          <div style={{ color:'#64748b' }}>No findings yet — tap “Run AI Pre-Check”.</div>
-        ) : (
-          <ul style={{ marginLeft:18 }}>
-            {aiFlags.map((f, i) => <li key={i}>{f}</li>)}
-          </ul>
-        )}
-      </div>
-
-      {/* Buttons + progress */}
-      <div style={{ display:'flex', flexDirection:'column', gap:12, marginTop:16, maxWidth:420 }}>
-        <BigButton
-          onPress={runPrecheck}
-          loading={prechecking}
-          kind="primary"
-          ariaLabel="Run AI Pre-Check"
-        >
-          {prechecking && scanProgress.total > 0
-            ? `🔎 Scanning ${scanProgress.done}/${scanProgress.total} (${pct}%)`
-            : '🔎 Run AI Pre-Check'}
-        </BigButton>
-
-        {prechecking && scanProgress.total > 0 && (
-          <div>
-            <div style={{ height:8, background:'#e5e7eb', borderRadius:6, overflow:'hidden' }}>
-              <div style={{
-                height:'100%',
-                width: `${pct}%`,
-                background:'#0ea5e9',
-                transition:'width 200ms ease'
-              }} />
-            </div>
-            <div style={{ fontSize:12, color:'#475569', marginTop:6 }}>
-              Scanning {scanProgress.done} of {scanProgress.total}…
-            </div>
-          </div>
-        )}
-
-        <BigButton
-          onPress={submitAll}
-          loading={submitting}
-          kind="secondary"
-          ariaLabel="Submit Turn"
-        >
-          ✅ Submit Turn
-        </BigButton>
-      </div>
+        </div>
+      </section>
 
       {/* --- LIGHTBOX MODAL --- */}
       {lightboxOpen && (
@@ -644,6 +658,6 @@ export default function Capture() {
           </div>
         </div>
       )}
-    </div>
+    </ChromeDark>
   );
 }
