@@ -10,144 +10,109 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 );
 
-export default function InviteCleanerPage() {
+export default function InviteCleaner() {
   const router = useRouter();
-  const { id: propertyId } = router.query;
+  const propertyId = router.query.id;
 
-  const [loading, setLoading] = useState(true);
-  const [property, setProperty] = useState(null);
-  const [msg, setMsg] = useState('');
+  const [prop, setProp] = useState(null);
   const [name, setName] = useState('');
-  const [phone, setPhone] = useState(''); // Expect E.164 or raw digits; backend can normalize
+  const [phone, setPhone] = useState('');
   const [sending, setSending] = useState(false);
+  const [msg, setMsg] = useState('');
+  const [err, setErr] = useState('');
 
   useEffect(() => {
     if (!propertyId) return;
     (async () => {
-      try {
-        setLoading(true);
-        const { data, error } = await supabase
-          .from('properties')
-          .select('id, name')
-          .eq('id', propertyId)
-          .single();
-        if (error) throw error;
-        setProperty(data);
-        setMsg('');
-      } catch (e) {
-        setMsg(e.message || 'Failed to load property');
-      } finally {
-        setLoading(false);
-      }
+      const { data, error } = await supabase
+        .from('properties')
+        .select('id, name')
+        .eq('id', propertyId)
+        .single();
+      if (!error) setProp(data);
     })();
   }, [propertyId]);
 
-  async function sendInvite(e) {
-    e?.preventDefault?.();
+  async function onSubmit(e) {
+    e.preventDefault();
+    setMsg('');
+    setErr('');
     try {
-      setMsg('');
-      if (!name.trim()) throw new Error('Enter the cleaner’s name.');
+      if (!propertyId) throw new Error('Missing property id.');
+      if (!name.trim()) throw new Error('Enter a cleaner name.');
       if (!phone.trim()) throw new Error('Enter a phone number.');
       setSending(true);
 
-+ const r = await fetch('/api/invite/cleaner', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      property_id: propertyId,
-      cleaner_name: name.trim(),
-      phone: phone.trim()
-    })
-  });
+      const r = await fetch('/api/invite/cleaner', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          property_id: propertyId,
+          cleaner_name: name.trim(),
+          phone: phone.trim(),
+        }),
+      });
 
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error || 'Invite failed');
-      setMsg('Invite sent ✅');
-      setName('');
-      setPhone('');
+
+      setMsg('Invite sent! If you are on a Twilio trial, the number must be verified and the SMS will be short.');
     } catch (e) {
-      setMsg(e.message || 'Could not send invite');
+      setErr(e.message || 'Invite failed');
     } finally {
       setSending(false);
     }
   }
 
-  if (loading) {
-    return (
-      <ChromeDark title="Invite Cleaner">
-        <section style={ui.sectionGrid}>
-          <div style={ui.card}>Loading…</div>
-        </section>
-      </ChromeDark>
-    );
-  }
-
-  if (!property) {
-    return (
-      <ChromeDark title="Invite Cleaner">
-        <section style={ui.sectionGrid}>
-          <div style={ui.card}>Property not found.</div>
-        </section>
-      </ChromeDark>
-    );
-  }
-
   return (
-    <ChromeDark title={`Invite Cleaner — ${property.name}`}>
-      <section style={ui.sectionGrid}>
+    <ChromeDark title={`Invite Cleaner — ${prop?.name || ''}`}>
+      <div style={{ maxWidth: 760, margin: '0 auto', padding: 16 }}>
+        <h1 style={ui.h1}>Invite Cleaner — {prop?.name || '…'}</h1>
+
         <div style={ui.card}>
-          <h2 style={{ marginTop: 0, marginBottom: 8 }}>
-            Invite a cleaner to <span style={{ color: '#cbd5e1' }}>{property.name}</span>
-          </h2>
-          <div style={ui.subtle}>
+          <div style={{ color: ui.muted, marginBottom: 12 }}>
             We’ll text them a secure link to verify consent and access the photo capture page.
           </div>
 
-          <form onSubmit={sendInvite} style={{ marginTop: 14 }}>
-            <label style={ui.label} htmlFor="cleanerName">Cleaner name</label>
+          <form onSubmit={onSubmit}>
+            <label style={ui.label}>Cleaner name</label>
             <input
-              id="cleanerName"
-              type="text"
-              placeholder="e.g., Alex R."
-              style={ui.input}
               value={name}
-              onChange={e => setName(e.target.value)}
-            />
-
-            <label style={{ ...ui.label, marginTop: 10 }} htmlFor="cleanerPhone">Phone number</label>
-            <input
-              id="cleanerPhone"
-              type="tel"
-              placeholder="e.g., +16265551234"
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g., Sam Rivera"
               style={ui.input}
-              value={phone}
-              onChange={e => setPhone(e.target.value)}
             />
 
-            <div style={{ ...ui.row, marginTop: 12 }}>
-              <button type="submit" disabled={sending} style={ui.btnPrimary}>
+            <label style={{ ...ui.label, marginTop: 12 }}>Phone number</label>
+            <input
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              placeholder="+1 555 555 1234"
+              style={ui.input}
+            />
+
+            <div style={{ display: 'flex', gap: 10, marginTop: 14, flexWrap: 'wrap' }}>
+              <button
+                type="submit"
+                disabled={sending}
+                style={ui.buttonPrimary}
+              >
                 {sending ? 'Sending…' : 'Send SMS invite'}
               </button>
-              <button type="button" onClick={() => router.push(`/properties/${property.id}/template`)} style={ui.btnSecondary}>
-                Back to template
-              </button>
-              <button type="button" onClick={() => router.push('/dashboard')} style={ui.btnSecondary}>
-                Dashboard
-              </button>
+
+              <a href={`/properties/${propertyId}/template`} style={ui.linkButton}>← Back to template</a>
+              <a href="/dashboard" style={ui.linkButton}>Dashboard</a>
+            </div>
+
+            {msg ? <div style={{ ...ui.good, marginTop: 10 }}>{msg}</div> : null}
+            {err ? <div style={{ ...ui.bad, marginTop: 10 }}>Invite failed: {err}</div> : null}
+
+            <div style={{ color: ui.muted, fontSize: 13, marginTop: 12 }}>
+              Tip: On a Twilio <b>trial</b>, messages can only go to verified numbers and must be short.
             </div>
           </form>
-
-          {msg && (
-            <div style={{ marginTop: 10, color: msg.includes('✅') ? '#22c55e' : '#fca5a5' }}>
-              {msg}
-            </div>
-          )}
-
-          <div style={{ ...ui.subtle, marginTop: 12 }}>
-            Tip: For testing on a Twilio trial, messages can only go to verified numbers and must be short.
-          </div>
         </div>
-      </section>
+      </div>
     </ChromeDark>
   );
 }
