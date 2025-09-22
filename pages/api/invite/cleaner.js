@@ -14,9 +14,9 @@ function getTwilio() {
 
 // Normalize to a simple E.164-ish form (very light check)
 function normalizePhone(s = '') {
-  const digits = (s || '').replace(/[^\d+]/g, '');
-  if (!digits.startsWith('+')) return '+' + digits.replace(/^+/,'');
-  return digits;
+  // keep only digits; always prefix '+' to make E.164-ish
+  const digitsOnly = (s || '').replace(/[^\d]/g, '');
+  return digitsOnly ? `+${digitsOnly}` : '';
 }
 
 const supabase = createClient(
