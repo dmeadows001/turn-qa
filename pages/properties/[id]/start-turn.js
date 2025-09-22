@@ -1,151 +1,232 @@
 // pages/properties/[id]/start-turn.js
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/router';
 import { createClient } from '@supabase/supabase-js';
+import ChromeDark from '../../../components/ChromeDark';
+import { ui } from '../../../lib/theme';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 );
 
-export default function StartTurn() {
+export default function StartTurnPage() {
   const router = useRouter();
   const { id: propertyId } = router.query;
 
-  const [session, setSession] = useState(null);
-  const [prop, setProp] = useState(null);
-  const [cleaners, setCleaners] = useState([]);
-  const [selected, setSelected] = useState('');
-  const [notes, setNotes] = useState('');
-  const [msg, setMsg] = useState('');
   const [loading, setLoading] = useState(true);
-  const [sending, setSending] = useState(false);
+  const [property, setProperty] = useState(null);
+  const [links, setLinks] = useState({}); // response details
+  const [msg, setMsg] = useState('');
 
-  // get the Supabase session (for access_token)
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => setSession(data.session || null));
-    const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => setSession(s));
-    return () => sub.subscription.unsubscribe();
-  }, []);
+  // Cleaners linked to this property
+  const [pcRows, setPcRows] = useState([]); // [{ cleaner_id, cleaners: { id, name, phone } }]
+  const [selectedCleanerId, setSelectedCleanerId] = useState('');
+  const [notes, setNotes] = useState('');
+  const [starting, setStarting] = useState(false);
 
-  // load property + cleaners (requires auth header)
   useEffect(() => {
-    if (!propertyId || !session?.access_token) return;
+    if (!propertyId) return;
     (async () => {
       try {
         setLoading(true);
         setMsg('Loading…');
 
-        // load property name (for page title)
-        const { data: p, error: pErr } = await supabase
+        // 1) Property
+        const { data: prop, error: pErr } = await supabase
           .from('properties')
           .select('id, name')
           .eq('id', propertyId)
           .single();
         if (pErr) throw pErr;
-        setProp(p);
+        setProperty(prop);
 
-        // load SMS-consented cleaners in org via secure API
-        const r = await fetch(`/api/org/cleaners?property_id=${propertyId}`, {
-          headers: { Authorization: `Bearer ${session.access_token}` }
-        });
-        const j = await r.json();
-        if (!r.ok) throw new Error(j.error || 'Failed to load cleaners');
-        setCleaners(j.cleaners || []);
+        // 2) Cleaners assigned to this property (requires FK property_cleaners.cleaner_id -> cleaners.id)
+        const { data: rels, error: rErr } = await supabase
+          .from('property_cleaners')
+          .select('cleaner_id, cleaners:cleaner_id ( id, name, phone )')
+          .eq('property_id', propertyId)
+          .order('cleaner_id', { ascending: true });
+        if (rErr) throw rErr;
+
+        setPcRows(rels || []);
+        if ((rels || []).length > 0) {
+          setSelectedCleanerId(rels[0].cleaner_id);
+        } else {
+          setSelectedCleanerId('');
+        }
+
         setMsg('');
       } catch (e) {
-        setMsg(e.message || 'Failed to load');
+        setMsg(e.message || 'Failed to load start-turn data');
       } finally {
         setLoading(false);
       }
     })();
-  }, [propertyId, session?.access_token]);
+  }, [propertyId]);
 
-  async function startTurn() {
+  const cleaners = useMemo(() => {
+    return (pcRows || []).map(r => ({
+      id: r.cleaners?.id || r.cleaner_id,
+      name: r.cleaners?.name || 'Unnamed cleaner',
+      phone: r.cleaners?.phone || ''
+    }));
+  }, [pcRows]);
+
+  async function startTurn(e) {
+    e?.preventDefault?.();
     try {
-      if (!selected) throw new Error('Choose a cleaner first.');
-      setSending(true);
       setMsg('');
-      const r = await fetch('/api/turns/create', {
+      if (!selectedCleanerId) throw new Error('Select a cleaner.');
+      setStarting(true);
+
+      // Calls your server route that creates a turn and (optionally) sends SMS
+      const resp = await fetch('/api/start-turn', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${session?.access_token || ''}`
-        },
-        body: JSON.stringify({ property_id: propertyId, cleaner_id: selected, notes })
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          property_id: propertyId,
+          cleaner_id: selectedCleanerId,
+          notes: notes || ''
+        })
       });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.error || 'Failed to start turn');
-      setMsg(`Turn started and capture link SMS sent. Turn ID: ${j.turn?.id}`);
+      const json = await resp.json().catch(() => ({}));
+      if (!resp.ok) throw new Error(json.error || 'Could not start turn');
+
+      // Expecting e.g. { ok:true, turn_id, capture_url, sms:"sent"|"skipped" }
+      setLinks(json);
+      setMsg('Turn started ✅');
     } catch (e) {
       setMsg(e.message || 'Failed to start turn');
     } finally {
-      setSending(false);
+      setStarting(false);
     }
   }
 
-  const wrap = { maxWidth: 560, margin: '40px auto', padding: '0 16px', fontFamily: 'ui-sans-serif' };
-  const card = { border:'1px solid #e5e7eb', borderRadius:12, padding:16, background:'#fff' };
-  const input = { width:'100%', padding:10, borderRadius:8, border:'1px solid #cbd5e1', marginBottom:12 };
-  const btn = { padding:'10px 14px', borderRadius:10, border:'1px solid #0ea5e9', background:'#e0f2fe', cursor:'pointer' };
-  const muted = { fontSize:12, color:'#475569', marginBottom:4 };
+  if (loading) {
+    return (
+      <ChromeDark title="Start Turn">
+        <section style={ui.sectionGrid}>
+          <div style={ui.card}>Loading…</div>
+        </section>
+      </ChromeDark>
+    );
+  }
 
-  const noneFound = !loading && cleaners.length === 0;
+  if (!property) {
+    return (
+      <ChromeDark title="Start Turn">
+        <section style={ui.sectionGrid}>
+          <div style={ui.card}>Property not found.</div>
+        </section>
+      </ChromeDark>
+    );
+  }
 
   return (
-    <main style={wrap}>
-      <h1>Start Turn{prop ? ` — ${prop.name}` : ''}</h1>
-
-      <div style={card}>
-        <div style={muted}>Cleaner</div>
-
-        {loading ? (
-          <div>Loading…</div>
-        ) : noneFound ? (
-          <div style={{marginBottom:12}}>
-            No SMS-ready cleaners found for this property’s organization.
-            <div style={{marginTop:8}}>
-              <a href={`/properties/${propertyId}/invite`}>Invite a cleaner</a> and have them complete SMS verification,
-              then return here.
-            </div>
+    <ChromeDark title={`Start Turn — ${property.name}`}>
+      <section style={ui.sectionGrid}>
+        <div style={ui.card}>
+          <h2 style={{ marginTop: 0, marginBottom: 8 }}>
+            Start a turn at <span style={{ color: '#cbd5e1' }}>{property.name}</span>
+          </h2>
+          <div style={ui.subtle}>
+            Pick a cleaner and (optionally) add notes. We’ll create a new turn and send the capture link.
           </div>
-        ) : (
-          <select value={selected} onChange={e=>setSelected(e.target.value)} style={input}>
-            <option value="">Select a cleaner</option>
-            {cleaners.map(c => (
-              <option key={c.id} value={c.id}>
-                {(c.name || 'Cleaner')} — {c.phone}
-              </option>
-            ))}
-          </select>
-        )}
 
-        <div style={muted}>Notes (optional)</div>
-        <textarea
-          style={{...input, minHeight:100}}
-          value={notes}
-          onChange={e=>setNotes(e.target.value)}
-          placeholder="Any special instructions"
-        />
+          {cleaners.length === 0 ? (
+            <div style={{ marginTop: 12 }}>
+              <div style={{ color: '#fca5a5', marginBottom: 8 }}>
+                No cleaners are assigned to this property yet.
+              </div>
+              <div style={ui.row}>
+                <button onClick={() => router.push(`/properties/${property.id}/invite`)} style={ui.btnPrimary}>
+                  Invite a cleaner
+                </button>
+                <button onClick={() => router.push(`/properties/${property.id}/template`)} style={ui.btnSecondary}>
+                  Back to template
+                </button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <form onSubmit={startTurn} style={{ marginTop: 14 }}>
+                <label style={ui.label} htmlFor="cleaner">Cleaner</label>
+                <select
+                  id="cleaner"
+                  style={{ ...ui.input, background: '#0b1220', cursor: 'pointer' }}
+                  value={selectedCleanerId}
+                  onChange={e => setSelectedCleanerId(e.target.value)}
+                >
+                  {cleaners.map(c => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}{c.phone ? ` — ${c.phone}` : ''}
+                    </option>
+                  ))}
+                </select>
 
-        <button
-          disabled={sending || noneFound || !selected}
-          onClick={startTurn}
-          style={btn}
-        >
-          {sending ? 'Sending…' : 'Send capture link & start'}
-        </button>
+                <label style={{ ...ui.label, marginTop: 10 }} htmlFor="notes">Notes (optional)</label>
+                <textarea
+                  id="notes"
+                  rows={3}
+                  placeholder="Any details for this turn…"
+                  style={{ ...ui.input, padding: '12px 14px', resize: 'vertical' }}
+                  value={notes}
+                  onChange={e => setNotes(e.target.value)}
+                />
 
-        <div style={{ marginTop:12 }}>
-          <a href={`/properties/${propertyId}/template`}>← Back to template</a> · <a href="/dashboard">Back to dashboard</a>
+                <div style={{ ...ui.row, marginTop: 12 }}>
+                  <button type="submit" disabled={starting} style={ui.btnPrimary}>
+                    {starting ? 'Starting…' : 'Start turn & send link'}
+                  </button>
+                  <button type="button" onClick={() => router.push('/dashboard')} style={ui.btnSecondary}>
+                    Dashboard
+                  </button>
+                </div>
+              </form>
+
+              {msg && (
+                <div style={{ marginTop: 10, color: msg.includes('✅') ? '#22c55e' : '#fca5a5' }}>
+                  {msg}
+                </div>
+              )}
+
+              {/* Show useful return details */}
+              {links?.turn_id && (
+                <div style={{ marginTop: 12 }}>
+                  <div style={ui.subtle}>
+                    Turn ID: <code style={{ userSelect: 'all' }}>{links.turn_id}</code>
+                  </div>
+                  {links?.capture_url && (
+                    <div style={{ marginTop: 8 }}>
+                      <a href={links.capture_url} target="_blank" rel="noreferrer" style={ui.btnSecondary}>
+                        Open capture link
+                      </a>
+                    </div>
+                  )}
+                  {typeof links?.sms === 'string' && (
+                    <div style={{ ...ui.subtle, marginTop: 8 }}>
+                      SMS: <b>{links.sms}</b>
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          )}
         </div>
 
-        {msg && (
-          <div style={{marginTop:12, color: msg.startsWith('Turn started') ? '#065f46' : '#b91c1c'}}>
-            {msg}
+        <div style={ui.card}>
+          <h2 style={{ marginTop: 0, marginBottom: 8 }}>Need a checklist?</h2>
+          <div style={ui.row}>
+            <button onClick={() => router.push(`/properties/${property.id}/template`)} style={ui.btnSecondary}>
+              Build checklist
+            </button>
+            <button onClick={() => router.push(`/managers/turns`)} style={ui.btnSecondary}>
+              Review turns
+            </button>
           </div>
-        )}
-      </div>
-    </main>
+        </div>
+      </section>
+    </ChromeDark>
   );
 }
