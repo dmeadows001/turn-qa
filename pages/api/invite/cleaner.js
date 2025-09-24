@@ -8,15 +8,14 @@ const supabase = createClient(
 );
 
 function normalizePhone(s = '') {
-  // keep digits and leading +; ensure leading + for E.164 if missing
   const digits = (s || '').replace(/[^\d+]/g, '');
   if (!digits) return '';
   return digits.startsWith('+') ? digits : `+${digits}`;
 }
 
 function absUrl(req, path = '/') {
-  const proto = (req.headers['x-forwarded-proto'] || 'https').toString();
-  const host  = (req.headers['x-forwarded-host'] || req.headers.host || '').toString();
+  const proto = String(req.headers['x-forwarded-proto'] || 'https');
+  const host  = String(req.headers['x-forwarded-host'] || req.headers.host || '');
   const p     = path.startsWith('/') ? path : `/${path}`;
   return `${proto}://${host}${p}`;
 }
@@ -31,7 +30,7 @@ export default async function handler(req, res) {
     if (!property_id) return res.status(400).json({ error: 'property_id is required' });
     if (!e164)        return res.status(400).json({ error: 'Valid phone is required' });
 
-    // 1) Make sure property exists (and get its name for the message)
+    // 1) Property
     const { data: prop, error: pErr } = await supabase
       .from('properties')
       .select('id, name')
@@ -39,32 +38,60 @@ export default async function handler(req, res) {
       .single();
     if (pErr || !prop) throw new Error('Property not found');
 
-    // 2) Upsert cleaner by phone (unique on phone)
+    // 2) Cleaner — upsert by phone (ok if your cleaners table ignores name)
     const { data: cleanerRow, error: cErr } = await supabase
       .from('cleaners')
       .upsert({ phone: e164, name }, { onConflict: 'phone' })
-      .select('id, phone')
+      .select('id')
       .single();
     if (cErr) throw cErr;
 
-    // 3) Upsert invite (unique on property_id + phone)
-    const { data: inviteRow, error: iErr } = await supabase
+    // 3) Invite — NO 'name' column here; be tolerant if unique index is missing
+    let inviteId;
+
+    const { data: inv, error: iErr } = await supabase
       .from('cleaner_invites')
       .upsert(
-        { property_id, cleaner_id: cleanerRow.id, phone: e164, name },
+        { property_id, cleaner_id: cleanerRow.id, phone: e164 },
         { onConflict: 'property_id,phone' }
       )
       .select('id')
       .single();
-    if (iErr) throw iErr;
 
-    const inviteId = inviteRow.id;
+    if (!iErr && inv) {
+      inviteId = inv.id;
+    } else {
+      // Fallback path (e.g. unique index not present yet)
+      if (iErr && (iErr.code === '42704' || /schema|column|constraint/i.test(iErr.message || ''))) {
+        const { data: ins, error: insErr } = await supabase
+          .from('cleaner_invites')
+          .insert({ property_id, cleaner_id: cleanerRow.id, phone: e164 })
+          .select('id')
+          .single();
 
-    // 4) Build onboarding link (short and friendly for trial accounts)
+        if (!insErr && ins) {
+          inviteId = ins.id;
+        } else if (insErr && (insErr.code === '23505' || /duplicate key value/i.test(insErr.message || ''))) {
+          const { data: existing, error: selErr } = await supabase
+            .from('cleaner_invites')
+            .select('id')
+            .eq('property_id', property_id)
+            .eq('phone', e164)
+            .maybeSingle();
+          if (selErr || !existing) throw insErr;
+          inviteId = existing.id;
+        } else {
+          throw insErr || iErr;
+        }
+      } else {
+        throw iErr;
+      }
+    }
+
     const inviteUrl = absUrl(req, `/onboard/cleaner?id=${inviteId}`);
 
-    // 5) Send SMS via Twilio (Messaging Service preferred; fallback to single number)
-    const sid   = process.env.TWILIO_ACCOUNT_SID;
+    // 4) Twilio send (Messaging Service or single number)
+    const sid = process.env.TWILIO_ACCOUNT_SID;
     const token = process.env.TWILIO_AUTH_TOKEN;
     if (!sid || !token) throw new Error('Twilio credentials missing (set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN).');
 
@@ -72,41 +99,24 @@ export default async function handler(req, res) {
 
     const msgOpts = {
       to: e164,
-      // Keep it short—Twilio trial auto-prefixes “Sent from your Twilio trial account”.
-      body: `TurnQA: invite for “${prop.name}” → ${inviteUrl}`
+      // Keep short for trial accounts (Twilio adds its own prefix)
+      body: `TurnQA invite for “${prop.name}”: ${inviteUrl}`
     };
 
-    const fromEnv =
-      process.env.TWILIO_MESSAGING_SERVICE_SID
-        ? { messagingServiceSid: process.env.TWILIO_MESSAGING_SERVICE_SID }
-        : {
-            from:
-              process.env.TWILIO_FROM ||
-              process.env.TWILIO_SMS_FROM || // legacy/fallback
-              ''
-          };
+    const msid = process.env.TWILIO_MESSAGING_SERVICE_SID;
+    const from = process.env.TWILIO_FROM || process.env.TWILIO_SMS_FROM || '';
 
-    if ('messagingServiceSid' in fromEnv) {
-      msgOpts.messagingServiceSid = fromEnv.messagingServiceSid;
-    } else if (fromEnv.from) {
-      msgOpts.from = fromEnv.from;
-    } else {
-      throw new Error('Twilio sender not configured (set TWILIO_MESSAGING_SERVICE_SID or TWILIO_FROM).');
-    }
+    if (msid) msgOpts.messagingServiceSid = msid;
+    else if (from) msgOpts.from = from;
+    else throw new Error('Twilio sender not configured (set TWILIO_MESSAGING_SERVICE_SID or TWILIO_FROM).');
 
     await client.messages.create(msgOpts);
 
-    // 6) Success
-    return res.json({
-      ok: true,
-      invite_id: inviteId,
-      cleaner_id: cleanerRow.id,
-      sent_to: e164,
-      link: inviteUrl
-    });
+    res.json({ ok: true, invite_id: inviteId, link: inviteUrl, sent_to: e164 });
   } catch (e) {
-    const tip =
-      'Tip: On a Twilio trial, messages can only go to verified numbers and must be short.';
-    return res.status(500).json({ error: e.message || 'invite failed', tip });
+    res.status(500).json({
+      error: e.message || 'invite failed',
+      tip: 'On a Twilio trial, messages can only go to verified numbers and must be short.'
+    });
   }
 }
