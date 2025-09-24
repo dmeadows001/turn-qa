@@ -8,9 +8,9 @@ const supabase = createClient(
 );
 
 function normalizePhone(s = '') {
-  const digits = (s || '').replace(/[^\d+]/g, '');
-  if (!digits) return '';
-  return digits.startsWith('+') ? digits : `+${digits}`;
+  const d = (s || '').replace(/[^\d+]/g, '');
+  if (!d) return '';
+  return d.startsWith('+') ? d : `+${d}`;
 }
 
 function absUrl(req, path = '/') {
@@ -18,6 +18,79 @@ function absUrl(req, path = '/') {
   const host  = String(req.headers['x-forwarded-host'] || req.headers.host || '');
   const p     = path.startsWith('/') ? path : `/${path}`;
   return `${proto}://${host}${p}`;
+}
+
+// Try an upsert; if it fails because a column or conflict target doesn't exist,
+// run progressively simpler fallbacks so this works across slightly different schemas.
+async function upsertInviteTolerant({ property_id, cleaner_id, phone }) {
+  // 1) Preferred: has "phone" column + unique (property_id, phone)
+  try {
+    const { data, error } = await supabase
+      .from('cleaner_invites')
+      .upsert(
+        { property_id, cleaner_id, phone },
+        { onConflict: 'property_id,phone' }
+      )
+      .select('id')
+      .single();
+    if (!error && data) return data.id;
+    if (error) throw error;
+  } catch (e) {
+    // fall through
+  }
+
+  // 2) Alternate: no phone column or no unique target, use (property_id, cleaner_id)
+  try {
+    const { data, error } = await supabase
+      .from('cleaner_invites')
+      .upsert(
+        { property_id, cleaner_id }, // no phone here
+        { onConflict: 'property_id,cleaner_id' }
+      )
+      .select('id')
+      .single();
+    if (!error && data) return data.id;
+    if (error) throw error;
+  } catch (e) {
+    // fall through
+  }
+
+  // 3) Last resort: plain insert; if duplicate, select existing
+  try {
+    const { data: ins, error: insErr } = await supabase
+      .from('cleaner_invites')
+      .insert({ property_id, cleaner_id })
+      .select('id')
+      .single();
+
+    if (!insErr && ins) return ins.id;
+
+    // If duplicate key, try to find the existing row using either shape
+    if (insErr && /duplicate key value|23505/i.test(insErr.message || '')) {
+      // try (property_id, phone)
+      if (phone) {
+        const { data: ex1 } = await supabase
+          .from('cleaner_invites')
+          .select('id')
+          .eq('property_id', property_id)
+          .eq('phone', phone)
+          .maybeSingle();
+        if (ex1?.id) return ex1.id;
+      }
+      // try (property_id, cleaner_id)
+      const { data: ex2 } = await supabase
+        .from('cleaner_invites')
+        .select('id')
+        .eq('property_id', property_id)
+        .eq('cleaner_id', cleaner_id)
+        .maybeSingle();
+      if (ex2?.id) return ex2.id;
+    }
+
+    throw insErr || new Error('Could not insert invite');
+  } catch (e) {
+    throw e;
+  }
 }
 
 export default async function handler(req, res) {
@@ -30,7 +103,7 @@ export default async function handler(req, res) {
     if (!property_id) return res.status(400).json({ error: 'property_id is required' });
     if (!e164)        return res.status(400).json({ error: 'Valid phone is required' });
 
-    // 1) Property
+    // 1) Load property
     const { data: prop, error: pErr } = await supabase
       .from('properties')
       .select('id, name')
@@ -38,68 +111,33 @@ export default async function handler(req, res) {
       .single();
     if (pErr || !prop) throw new Error('Property not found');
 
-    // 2) Cleaner — upsert by phone (ok if your cleaners table ignores name)
-    const { data: cleanerRow, error: cErr } = await supabase
+    // 2) Upsert cleaner by phone (name is optional; ignored if your table lacks it)
+    const { data: cleaner, error: cErr } = await supabase
       .from('cleaners')
       .upsert({ phone: e164, name }, { onConflict: 'phone' })
       .select('id')
       .single();
-    if (cErr) throw cErr;
+    if (cErr || !cleaner?.id) throw (cErr || new Error('Could not upsert cleaner'));
 
-    // 3) Invite — NO 'name' column here; be tolerant if unique index is missing
-    let inviteId;
-
-    const { data: inv, error: iErr } = await supabase
-      .from('cleaner_invites')
-      .upsert(
-        { property_id, cleaner_id: cleanerRow.id, phone: e164 },
-        { onConflict: 'property_id,phone' }
-      )
-      .select('id')
-      .single();
-
-    if (!iErr && inv) {
-      inviteId = inv.id;
-    } else {
-      // Fallback path (e.g. unique index not present yet)
-      if (iErr && (iErr.code === '42704' || /schema|column|constraint/i.test(iErr.message || ''))) {
-        const { data: ins, error: insErr } = await supabase
-          .from('cleaner_invites')
-          .insert({ property_id, cleaner_id: cleanerRow.id, phone: e164 })
-          .select('id')
-          .single();
-
-        if (!insErr && ins) {
-          inviteId = ins.id;
-        } else if (insErr && (insErr.code === '23505' || /duplicate key value/i.test(insErr.message || ''))) {
-          const { data: existing, error: selErr } = await supabase
-            .from('cleaner_invites')
-            .select('id')
-            .eq('property_id', property_id)
-            .eq('phone', e164)
-            .maybeSingle();
-          if (selErr || !existing) throw insErr;
-          inviteId = existing.id;
-        } else {
-          throw insErr || iErr;
-        }
-      } else {
-        throw iErr;
-      }
-    }
+    // 3) Create/fetch invite row (tolerant to schema differences)
+    const inviteId = await upsertInviteTolerant({
+      property_id,
+      cleaner_id: cleaner.id,
+      phone: e164
+    });
 
     const inviteUrl = absUrl(req, `/onboard/cleaner?id=${inviteId}`);
 
-    // 4) Twilio send (Messaging Service or single number)
-    const sid = process.env.TWILIO_ACCOUNT_SID;
+    // 4) Send SMS via Twilio
+    const sid   = process.env.TWILIO_ACCOUNT_SID;
     const token = process.env.TWILIO_AUTH_TOKEN;
-    if (!sid || !token) throw new Error('Twilio credentials missing (set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN).');
+    if (!sid || !token) throw new Error('Twilio credentials missing (TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN).');
 
     const client = twilio(sid, token);
 
     const msgOpts = {
       to: e164,
-      // Keep short for trial accounts (Twilio adds its own prefix)
+      // Keep short for trial accounts (Twilio adds its own “Sent from…” prefix)
       body: `TurnQA invite for “${prop.name}”: ${inviteUrl}`
     };
 
