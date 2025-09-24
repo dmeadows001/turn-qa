@@ -4,104 +4,109 @@ import twilio from 'twilio';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
-  // Service role lets this route bypass RLS
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY
 );
 
-function absUrl(req, path = '/') {
-  const proto = req.headers['x-forwarded-proto'] || 'https';
-  const host  = req.headers['x-forwarded-host'] || req.headers.host;
-  return `${proto}://${host}${path.startsWith('/') ? path : `/${path}`}`;
+function normalizePhone(s = '') {
+  // keep digits and leading +; ensure leading + for E.164 if missing
+  const digits = (s || '').replace(/[^\d+]/g, '');
+  if (!digits) return '';
+  return digits.startsWith('+') ? digits : `+${digits}`;
 }
 
-function normalizePhone(s = '') {
-  const digits = String(s).replace(/[^\d+]/g, '');
-  if (digits.startsWith('+')) return digits;
-  // assume US 10-digit if no +country code
-  if (digits.length === 10) return `+1${digits}`;
-  return `+${digits}`;
+function absUrl(req, path = '/') {
+  const proto = (req.headers['x-forwarded-proto'] || 'https').toString();
+  const host  = (req.headers['x-forwarded-host'] || req.headers.host || '').toString();
+  const p     = path.startsWith('/') ? path : `/${path}`;
+  return `${proto}://${host}${p}`;
 }
 
 export default async function handler(req, res) {
-  if (req.method !== 'POST') {
-    res.setHeader('Allow', 'POST');
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   try {
-    const { property_id, phone: rawPhone, name = '' } = req.body || {};
-    if (!property_id) throw new Error('property_id is required');
-    if (!rawPhone)    throw new Error('phone is required');
+    const { property_id, phone, name = '' } = req.body || {};
+    const e164 = normalizePhone(phone);
 
-    const phone = normalizePhone(rawPhone);
+    if (!property_id) return res.status(400).json({ error: 'property_id is required' });
+    if (!e164)        return res.status(400).json({ error: 'Valid phone is required' });
 
-    // 1) Ensure property exists (for name in SMS)
+    // 1) Make sure property exists (and get its name for the message)
     const { data: prop, error: pErr } = await supabase
       .from('properties')
       .select('id, name')
       .eq('id', property_id)
       .single();
-    if (pErr) throw pErr;
+    if (pErr || !prop) throw new Error('Property not found');
 
-    // 2) Find or create the cleaner by phone
-    let { data: cleaner, error: cSelErr } = await supabase
+    // 2) Upsert cleaner by phone (unique on phone)
+    const { data: cleanerRow, error: cErr } = await supabase
       .from('cleaners')
-      .select('id, name, phone, sms_consent')
-      .eq('phone', phone)
-      .maybeSingle();
-    if (cSelErr) throw cSelErr;
+      .upsert({ phone: e164, name }, { onConflict: 'phone' })
+      .select('id, phone')
+      .single();
+    if (cErr) throw cErr;
 
-    if (!cleaner) {
-      const { data: created, error: cInsErr } = await supabase
-        .from('cleaners')
-        .insert({ name: name || null, phone })
-        .select('id, name, phone, sms_consent')
-        .single();
-      if (cInsErr) throw cInsErr;
-      cleaner = created;
-    }
-
-    // 3) Upsert the invite (idempotent if it already exists)
+    // 3) Upsert invite (unique on property_id + phone)
     const { data: inviteRow, error: iErr } = await supabase
       .from('cleaner_invites')
       .upsert(
-        { cleaner_id: cleaner.id, property_id },
-        { onConflict: 'cleaner_id,property_id' }
+        { property_id, cleaner_id: cleanerRow.id, phone: e164, name },
+        { onConflict: 'property_id,phone' }
       )
       .select('id')
       .single();
     if (iErr) throw iErr;
+
     const inviteId = inviteRow.id;
 
-    // 4) Build onboarding link (use absolute URL; the cleaner page reads ?id=<cleaner_id>)
-    const link = absUrl(req, `/onboard/cleaner?id=${cleaner.id}`);
+    // 4) Build onboarding link (short and friendly for trial accounts)
+    const inviteUrl = absUrl(req, `/onboard/cleaner?id=${inviteId}`);
 
-    // 5) Send SMS (Messaging Service preferred, else FROM)
-    const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+    // 5) Send SMS via Twilio (Messaging Service preferred; fallback to single number)
+    const sid   = process.env.TWILIO_ACCOUNT_SID;
+    const token = process.env.TWILIO_AUTH_TOKEN;
+    if (!sid || !token) throw new Error('Twilio credentials missing (set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN).');
 
-    const body = `TurnQA invite for ${prop.name}: ${link} Reply STOP to opt out.`;
+    const client = twilio(sid, token);
 
     const msgOpts = {
-      to: phone,
-      body
+      to: e164,
+      // Keep it short—Twilio trial auto-prefixes “Sent from your Twilio trial account”.
+      body: `TurnQA: invite for “${prop.name}” → ${inviteUrl}`
     };
-    if (process.env.TWILIO_MESSAGING_SERVICE_SID) {
-      msgOpts.messagingServiceSid = process.env.TWILIO_MESSAGING_SERVICE_SID;
-    } else if (process.env.TWILIO_FROM) {
-      msgOpts.from = process.env.TWILIO_FROM;
+
+    const fromEnv =
+      process.env.TWILIO_MESSAGING_SERVICE_SID
+        ? { messagingServiceSid: process.env.TWILIO_MESSAGING_SERVICE_SID }
+        : {
+            from:
+              process.env.TWILIO_FROM ||
+              process.env.TWILIO_SMS_FROM || // legacy/fallback
+              ''
+          };
+
+    if ('messagingServiceSid' in fromEnv) {
+      msgOpts.messagingServiceSid = fromEnv.messagingServiceSid;
+    } else if (fromEnv.from) {
+      msgOpts.from = fromEnv.from;
     } else {
       throw new Error('Twilio sender not configured (set TWILIO_MESSAGING_SERVICE_SID or TWILIO_FROM).');
     }
 
     await client.messages.create(msgOpts);
 
+    // 6) Success
     return res.json({
       ok: true,
       invite_id: inviteId,
-      cleaner_id: cleaner.id,
-      sent_to: phone
+      cleaner_id: cleanerRow.id,
+      sent_to: e164,
+      link: inviteUrl
     });
   } catch (e) {
-    return res.status(500).json({ error: e.message || 'internal error' });
+    const tip =
+      'Tip: On a Twilio trial, messages can only go to verified numbers and must be short.';
+    return res.status(500).json({ error: e.message || 'invite failed', tip });
   }
 }
