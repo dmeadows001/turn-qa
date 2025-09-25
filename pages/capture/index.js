@@ -1,15 +1,14 @@
 // pages/capture/index.js
 import { useEffect, useState } from 'react';
-
-// If you have ChromeDark, uncomment the next line and wrap <Page/> with it
-// import ChromeDark from '../../components/ChromeDark';
+import ChromeDark from '../../components/ChromeDark';
+import { ui } from '../../lib/theme';
 
 function normalizePhone(s = '') {
-  const d = (s || '').replace(/[^\d+]/g, '');
-  return d.startsWith('+') ? d : `+${d}`;
+  const digits = (s || '').replace(/[^\d+]/g, '');
+  return digits.startsWith('+') ? digits : `+${digits}`;
 }
 
-export default function Page() {
+export default function CaptureLanding() {
   const [step, setStep] = useState('phone'); // 'phone' | 'otp' | 'choose' | 'starting'
   const [phone, setPhone] = useState('');
   const [code, setCode] = useState('');
@@ -97,73 +96,114 @@ export default function Page() {
     finally { setBusy(false); }
   }
 
-  // ---- Simple dark styling so it matches your theme even without ChromeDark ----
-  const shell = { maxWidth: 640, margin: '24px auto', padding: '0 16px', color: '#e5e7eb' };
-  const input = { width:'100%', padding:12, borderRadius:12, border:'1px solid #334155', background:'#0b1220', color:'#e5e7eb' };
-  const btn   = (b='#0ea5e9', t='#e0f2fe') => ({
-    marginTop:12, padding:'12px 14px', borderRadius:12, border:`1px solid ${b}`,
-    background:'#05293a', color:t, cursor:'pointer'
-  });
-
-  const content = (
-    <div style={shell}>
-      <h1 style={{ fontSize:32, fontWeight:800, marginBottom:10 }}>Start a Turn</h1>
-      {msg && <div style={{ marginBottom:10, color:'#fca5a5' }}>{msg}</div>}
-
-      {step === 'phone' && (
-        <>
-          <div style={{ color:'#94a3b8', marginBottom:8 }}>
-            Enter your phone to get a verification code.
-          </div>
-          <input style={input} value={phone} onChange={e=>setPhone(e.target.value)} placeholder="+15551234567" />
-          <button onClick={sendOtp} disabled={busy || !phone} style={btn()}>
-            {busy ? 'Sending…' : 'Text me a code'}
-          </button>
-        </>
-      )}
-
-      {step === 'otp' && (
-        <>
-          <div style={{ color:'#94a3b8', marginBottom:8 }}>
-            Enter the 6-digit code sent to <b>{normalizePhone(phone)}</b>.
-          </div>
-          <input style={{ ...input, letterSpacing:3 }} value={code} onChange={e=>setCode(e.target.value)} placeholder="123456" maxLength={6} />
-          <button onClick={verifyOtp} disabled={busy || code.length < 4} style={btn('#16a34a', '#dcfce7')}>
-            {busy ? 'Verifying…' : 'Verify & continue'}
-          </button>
-        </>
-      )}
-
-      {step === 'choose' && (
-        <>
-          <div style={{ color:'#94a3b8', marginBottom:8 }}>
-            Welcome{cleaner?.name ? `, ${cleaner.name}` : ''}! Choose a property to start.
-          </div>
-          {properties.length === 0 ? (
-            <div style={{ color:'#f97316' }}>No properties assigned. Ask your manager to add you.</div>
-          ) : (
-            <>
-              <select style={input} value={propertyId} onChange={e=>setPropertyId(e.target.value)}>
-                {properties.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-              </select>
-              <textarea style={{ ...input, height:100, marginTop:12 }} value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Any special notes (optional)" />
-              <button onClick={startTurn} disabled={busy || !propertyId} style={btn()}>
-                {busy ? 'Starting…' : 'Start capture'}
-              </button>
-            </>
-          )}
-        </>
-      )}
-
-      {step === 'starting' && <div style={{ color:'#94a3b8' }}>Creating your turn…</div>}
-    </div>
-  );
-
-  // If you have ChromeDark, wrap it; otherwise render the content directly.
-  // return <ChromeDark title="Start a Turn">{content}</ChromeDark>;
   return (
-    <div style={{ minHeight:'100vh', background:'#0a0f1a' }}>
-      {content}
-    </div>
+    <ChromeDark title="Start a Turn">
+      <div style={{ maxWidth: 720, margin: '0 auto' }}>
+        <h1 style={{ ...ui.h1, textAlign: 'center' }}>Start a Turn</h1>
+
+        {msg && (
+          <div style={{ ...ui.noteError, marginTop: 8 }}>
+            {msg}
+          </div>
+        )}
+
+        {/* PHONE STEP */}
+        {step === 'phone' && (
+          <div style={{ ...ui.card, marginTop: 16 }}>
+            <div style={ui.textMuted}>Enter your phone to get a verification code.</div>
+            <input
+              style={{ ...ui.input, marginTop: 10 }}
+              value={phone}
+              onChange={e => setPhone(e.target.value)}
+              placeholder="+15551234567"
+            />
+            <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
+              <button
+                onClick={sendOtp}
+                disabled={busy || !phone}
+                style={ui.buttonPrimary}
+              >
+                {busy ? 'Sending…' : 'Text me a code'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* OTP STEP */}
+        {step === 'otp' && (
+          <div style={{ ...ui.card, marginTop: 16 }}>
+            <div style={ui.textMuted}>
+              Enter the 6-digit code sent to <b>{normalizePhone(phone)}</b>.
+            </div>
+            <input
+              style={{ ...ui.input, marginTop: 10, letterSpacing: 3 }}
+              value={code}
+              onChange={e => setCode(e.target.value)}
+              placeholder="123456"
+              maxLength={6}
+            />
+            <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
+              <button
+                onClick={verifyOtp}
+                disabled={busy || code.trim().length < 4}
+                style={ui.buttonSuccess}
+              >
+                {busy ? 'Verifying…' : 'Verify & continue'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* CHOOSE PROPERTY */}
+        {step === 'choose' && (
+          <div style={{ ...ui.card, marginTop: 16 }}>
+            <div style={ui.textMuted}>
+              Welcome{cleaner?.name ? `, ${cleaner.name}` : ''}! Choose a property to start.
+            </div>
+
+            {properties.length === 0 ? (
+              <div style={{ ...ui.noteWarn, marginTop: 10 }}>
+                No properties assigned. Ask your manager to add you.
+              </div>
+            ) : (
+              <>
+                <select
+                  style={{ ...ui.input, marginTop: 10 }}
+                  value={propertyId}
+                  onChange={e => setPropertyId(e.target.value)}
+                >
+                  {properties.map(p => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+
+                <textarea
+                  style={{ ...ui.input, height: 100, marginTop: 10 }}
+                  value={notes}
+                  onChange={e => setNotes(e.target.value)}
+                  placeholder="Any special notes (optional)"
+                />
+
+                <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
+                  <button
+                    onClick={startTurn}
+                    disabled={busy || !propertyId}
+                    style={ui.buttonPrimary}
+                  >
+                    {busy ? 'Starting…' : 'Start capture'}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {step === 'starting' && (
+          <div style={{ ...ui.card, marginTop: 16 }}>
+            <div style={ui.textMuted}>Creating your turn…</div>
+          </div>
+        )}
+      </div>
+    </ChromeDark>
   );
 }
