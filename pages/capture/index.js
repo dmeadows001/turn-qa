@@ -1,220 +1,306 @@
 // pages/capture/index.js
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import ChromeDark from '../../components/ChromeDark';
 import { ui } from '../../lib/theme';
 
+// ---------- small helpers ----------
 function normalizePhone(s = '') {
   const digits = (s || '').replace(/[^\d+]/g, '');
+  if (!digits) return '';
   return digits.startsWith('+') ? digits : `+${digits}`;
 }
-const looksLikeE164 = (s) => /^\+\d{10,15}$/.test(normalizePhone(s));
+function maskPhone(p) {
+  if (!p || p.length < 4) return p || '';
+  const last4 = p.slice(-4);
+  return `•• •• •• ${last4}`;
+}
+
+// Try a few endpoints so we’re resilient to naming
+async function fetchCleanerProperties(phone) {
+  const qs = `?phone=${encodeURIComponent(phone)}`;
+  const candidates = [
+    `/api/cleaner/properties${qs}`,
+    `/api/properties-for-cleaner${qs}`,
+    `/api/capture/properties${qs}`,
+    `/api/cleaner/props${qs}`,
+  ];
+  for (const url of candidates) {
+    try {
+      const r = await fetch(url);
+      if (!r.ok) continue;
+      const j = await r.json().catch(() => ({}));
+      // Accept a few shapes:
+      if (Array.isArray(j.properties)) return j.properties;
+      if (Array.isArray(j.props)) return j.props;
+      if (Array.isArray(j.data)) return j.data;
+      if (Array.isArray(j)) return j;
+    } catch {}
+  }
+  return [];
+}
+
+// Create a turn; accept multiple shapes
+async function createTurn({ phone, property_id, notes }) {
+  const body = { phone, property_id, notes: notes || '' };
+  const endpoints = ['/api/start-turn', '/api/turns/start', '/api/turn/start'];
+  for (const url of endpoints) {
+    try {
+      const r = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) continue;
+      const id = j.turn_id || j.id || j.turn?.id;
+      if (id) return String(id);
+    } catch {}
+  }
+  throw new Error('Could not start a turn.');
+}
 
 export default function CaptureLanding() {
-  const [step, setStep] = useState('phone'); // 'phone' | 'otp' | 'choose' | 'starting'
-  const [phone, setPhone] = useState('');
-  const [code, setCode] = useState('');
-  const [cleaner, setCleaner] = useState(null);
-  const [properties, setProperties] = useState([]);
-  const [propertyId, setPropertyId] = useState('');
-  const [notes, setNotes] = useState('');
-  const [msg, setMsg] = useState('');
-  const [busy, setBusy] = useState(false);
+  // Step 0: phone (pulled from localStorage if present)
+  const [phoneInput, setPhoneInput] = useState('');
+  const [knownPhone, setKnownPhone] = useState('');
+  const [otpSent, setOtpSent] = useState(false);
+  const [otpCode, setOtpCode] = useState('');
+  const [busySend, setBusySend] = useState(false);
+  const [busyVerify, setBusyVerify] = useState(false);
 
+  // Step 1: properties
+  const [loadingProps, setLoadingProps] = useState(false);
+  const [propsList, setPropsList] = useState([]);
+  const [propId, setPropId] = useState('');
+  const [notes, setNotes] = useState('');
+
+  // UX
+  const [err, setErr] = useState('');
+  const [starting, setStarting] = useState(false);
+
+  // restore cached phone (from onboarding or previous visits)
   useEffect(() => {
-    const saved = localStorage.getItem('turnqa_cleaner_phone');
-    if (saved) {
-      setPhone(saved);
-      fetchProperties(saved);
-    }
+    try {
+      const cached = localStorage.getItem('turnqa_cleaner_phone');
+      if (cached) {
+        setKnownPhone(cached);
+        setPhoneInput(cached);
+      }
+    } catch {}
   }, []);
 
-  async function sendOtp() {
-    setBusy(true); setMsg('');
+  const effectivePhone = useMemo(() => {
+    return normalizePhone(knownPhone || phoneInput);
+  }, [knownPhone, phoneInput]);
+
+  // when we have a known phone, fetch properties
+  useEffect(() => {
+    if (!effectivePhone) return;
+    (async () => {
+      setErr('');
+      setLoadingProps(true);
+      try {
+        const props = await fetchCleanerProperties(effectivePhone);
+        setPropsList(props || []);
+        // preselect if only one
+        if ((props || []).length === 1) {
+          const only = props[0];
+          setPropId(only?.id || only?.property_id || '');
+        }
+      } catch (e) {
+        setErr(e.message || 'Could not load your properties.');
+      } finally {
+        setLoadingProps(false);
+      }
+    })();
+  }, [effectivePhone]);
+
+  // ------------- OTP flow (only if no known phone) -------------
+  async function sendCode(e) {
+    e?.preventDefault?.();
+    setErr('');
+    if (!phoneInput) return setErr('Enter your mobile number.');
     try {
+      setBusySend(true);
       const r = await fetch('/api/sms/otp-send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone: normalizePhone(phone) })
+        body: JSON.stringify({ phone: normalizePhone(phoneInput), purpose: 'capture_login' }),
       });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.error || 'Could not send code');
-      setStep('otp');
-      setMsg('Code sent. Check your SMS.');
-    } catch (e) { setMsg(e.message); }
-    finally { setBusy(false); }
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || 'Could not send code.');
+      setOtpSent(true);
+    } catch (e) {
+      setErr(e.message || 'Could not send code.');
+    } finally {
+      setBusySend(false);
+    }
   }
 
-  async function verifyOtp() {
-    setBusy(true); setMsg('');
+  async function verifyCode(e) {
+    e?.preventDefault?.();
+    setErr('');
+    if (!otpCode || otpCode.length < 4) return setErr('Enter the 6-digit code.');
     try {
+      setBusyVerify(true);
       const r = await fetch('/api/sms/otp-verify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone: normalizePhone(phone), code: code.trim() })
+        body: JSON.stringify({ phone: normalizePhone(phoneInput), code: otpCode, purpose: 'capture_login' }),
       });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.error || 'Invalid code');
-      localStorage.setItem('turnqa_cleaner_phone', normalizePhone(phone));
-      await fetchProperties(phone);
-    } catch (e) { setMsg(e.message); }
-    finally { setBusy(false); }
-  }
-
-  async function fetchProperties(p) {
-    setBusy(true); setMsg('');
-    try {
-      const r = await fetch('/api/cleaner/properties', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone: normalizePhone(p) })
-      });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.error || 'Could not load properties');
-      setCleaner(j.cleaner);
-      setProperties(j.properties || []);
-      setPropertyId(j.properties?.[0]?.id || '');
-      setStep('choose');
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || 'Could not verify code.');
+      // success: cache & promote to known phone
+      const normalized = normalizePhone(phoneInput);
+      try { localStorage.setItem('turnqa_cleaner_phone', normalized); } catch {}
+      setKnownPhone(normalized);
+      setOtpSent(false);
+      setOtpCode('');
     } catch (e) {
-      setMsg(e.message);
-      setStep('phone');
-    } finally { setBusy(false); }
+      setErr(e.message || 'Could not verify code.');
+    } finally {
+      setBusyVerify(false);
+    }
   }
 
-  async function startTurn() {
-    if (!propertyId || !cleaner?.id) return;
-    setBusy(true); setMsg('');
+  // ------------- Start capture -------------
+  async function startCapture(e) {
+    e?.preventDefault?.();
+    setErr('');
+    if (!effectivePhone) return setErr('Missing phone.');
+    if (!propId) return setErr('Select a property to continue.');
     try {
-      const r = await fetch('/api/cleaner/start-turn', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cleaner_id: cleaner.id, property_id: propertyId, notes: notes || '' })
-      });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.error || 'Could not start turn');
-      setStep('starting');
-      window.location.href = `/turns/${j.turn_id}/capture`;
-    } catch (e) { setMsg(e.message); }
-    finally { setBusy(false); }
+      setStarting(true);
+      const id = await createTurn({ phone: effectivePhone, property_id: propId, notes });
+      window.location.href = `/turns/${id}/capture`;
+    } catch (e) {
+      setErr(e.message || 'Could not start a turn.');
+    } finally {
+      setStarting(false);
+    }
   }
 
-  // styles for disabled vs enabled button (better contrast)
-  const phoneValid = looksLikeE164(phone);
-  const btnDisabledStyle = {
-    ...ui.buttonPrimary,
-    background: '#1f2937',
-    color: '#cbd5e1',
-    border: '1px solid #334155',
-    opacity: 1,
-    cursor: 'not-allowed'
-  };
-
+  // ------------------- UI -------------------
+  // We set title on the Chrome so we don’t double-render a second H1.
   return (
-    // keep a single title – ChromeDark renders it, so we don't render our own <h1>
     <ChromeDark title="Start a Turn">
-      <div style={{ maxWidth: 720, margin: '0 auto' }}>
-        {msg && <div style={{ ...ui.noteError, marginTop: 8 }}>{msg}</div>}
-
-        {/* PHONE STEP */}
-        {step === 'phone' && (
-          <div style={{ ...ui.card, marginTop: 16 }}>
-            <div style={ui.textMuted}>Enter your phone to get a verification code.</div>
-            <input
-              style={{ ...ui.input, marginTop: 10 }}
-              value={phone}
-              onChange={e => setPhone(e.target.value)}
-              placeholder="+15551234567"
-              inputMode="tel"
-            />
-            <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 6 }}>
-              Tip: include the country code, e.g. <b>+1</b> for US/Canada.
+      <div style={{ ...ui.card, maxWidth: 860 }}>
+        {/* PHONE / OTP */}
+        {!effectivePhone ? (
+          <>
+            <div style={{ fontSize: 18, fontWeight: 700, color: '#e2e8f0' }}>
+              Enter your phone to get a verification code.
             </div>
-            <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
-              <button
-                onClick={sendOtp}
-                disabled={busy || !phoneValid}
-                style={busy || !phoneValid ? btnDisabledStyle : ui.buttonPrimary}
-              >
-                {busy ? 'Sending…' : 'Text me a code'}
+
+            <div style={{ marginTop: 10 }}>
+              <input
+                value={phoneInput}
+                onChange={e => setPhoneInput(e.target.value)}
+                placeholder="+15551234567"
+                inputMode="tel"
+                style={{ ...ui.input }}
+              />
+            </div>
+
+            <div style={{ display: 'flex', gap: 10, marginTop: 12, flexWrap: 'wrap' }}>
+              <button onClick={sendCode} disabled={busySend || !phoneInput} style={ui.buttonPrimary}>
+                {busySend ? 'Sending…' : 'Text me a code'}
               </button>
-            </div>
-          </div>
-        )}
-
-        {/* OTP STEP */}
-        {step === 'otp' && (
-          <div style={{ ...ui.card, marginTop: 16 }}>
-            <div style={ui.textMuted}>
-              Enter the 6-digit code sent to <b>{normalizePhone(phone)}</b>.
-            </div>
-            <input
-              style={{ ...ui.input, marginTop: 10, letterSpacing: 3 }}
-              value={code}
-              onChange={e => setCode(e.target.value)}
-              placeholder="123456"
-              maxLength={6}
-              inputMode="numeric"
-            />
-            <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
-              <button
-                onClick={verifyOtp}
-                disabled={busy || code.trim().length < 4}
-                style={busy || code.trim().length < 4 ? btnDisabledStyle : ui.buttonSuccess}
-              >
-                {busy ? 'Verifying…' : 'Verify & continue'}
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* CHOOSE PROPERTY */}
-        {step === 'choose' && (
-          <div style={{ ...ui.card, marginTop: 16 }}>
-            <div style={ui.textMuted}>
-              Welcome{cleaner?.name ? `, ${cleaner.name}` : ''}! Choose a property to start.
+              {otpSent && <div style={{ alignSelf: 'center', color:'#9ca3af', fontSize: 13 }}>Code sent. Check your SMS.</div>}
             </div>
 
-            {properties.length === 0 ? (
-              <div style={{ ...ui.noteWarn, marginTop: 10 }}>
-                No properties assigned. Ask your manager to add you.
-              </div>
-            ) : (
-              <>
-                <select
-                  style={{ ...ui.input, marginTop: 10 }}
-                  value={propertyId}
-                  onChange={e => setPropertyId(e.target.value)}
-                >
-                  {properties.map(p => (
-                    <option key={p.id} value={p.id}>{p.name}</option>
-                  ))}
-                </select>
-
-                <textarea
-                  style={{ ...ui.input, height: 100, marginTop: 10 }}
-                  value={notes}
-                  onChange={e => setNotes(e.target.value)}
-                  placeholder="Any special notes (optional)"
-                />
-
-                <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
-                  <button
-                    onClick={startTurn}
-                    disabled={busy || !propertyId}
-                    style={busy || !propertyId ? btnDisabledStyle : ui.buttonPrimary}
-                  >
-                    {busy ? 'Starting…' : 'Start capture'}
+            {otpSent && (
+              <div style={{ marginTop: 12 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: '#94a3b8', marginBottom: 6 }}>Enter the 6-digit code</div>
+                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <input
+                    value={otpCode}
+                    onChange={e => setOtpCode(e.target.value)}
+                    placeholder="123456"
+                    inputMode="numeric"
+                    maxLength={6}
+                    style={{ ...ui.input, width: 200 }}
+                  />
+                  <button onClick={verifyCode} disabled={busyVerify || !otpCode} style={ui.buttonSecondary}>
+                    {busyVerify ? 'Verifying…' : 'Verify'}
                   </button>
                 </div>
-              </>
+              </div>
             )}
-          </div>
+          </>
+        ) : (
+          <>
+            {/* KNOWN PHONE HEADER */}
+            <div style={{ color:'#cbd5e1' }}>
+              Signed in as <b>{maskPhone(effectivePhone)}</b>
+              <button
+                onClick={() => { try { localStorage.removeItem('turnqa_cleaner_phone'); } catch {} ; setKnownPhone(''); }}
+                style={{ marginLeft: 10, ...ui.linkButton }}
+                aria-label="Use a different phone"
+              >
+                use different phone
+              </button>
+            </div>
+
+            {/* PROPERTIES */}
+            <div style={{ marginTop: 16 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color:'#94a3b8', marginBottom: 6 }}>Select the property</div>
+              {loadingProps ? (
+                <div style={{ color:'#9ca3af' }}>Loading your properties…</div>
+              ) : propsList.length === 0 ? (
+                <div style={{ color:'#fca5a5' }}>
+                  We couldn’t find any properties for your phone. Ask your manager to assign you, or paste the property ID:
+                  <input
+                    value={propId}
+                    onChange={e=>setPropId(e.target.value)}
+                    placeholder="property-id"
+                    style={{ ...ui.input, marginTop: 8 }}
+                  />
+                </div>
+              ) : (
+                <select
+                  value={propId}
+                  onChange={e => setPropId(e.target.value)}
+                  style={{ ...ui.input }}
+                >
+                  <option value="">— Select —</option>
+                  {propsList.map(p => {
+                    const id = p.id || p.property_id;
+                    const name = p.name || p.property_name || id;
+                    return <option key={id} value={id}>{name}</option>;
+                  })}
+                </select>
+              )}
+            </div>
+
+            {/* OPTIONAL NOTES */}
+            <div style={{ marginTop: 14 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color:'#94a3b8', marginBottom: 6 }}>
+                Notes (optional — e.g., “extra attention to patio”)
+              </div>
+              <textarea
+                value={notes}
+                onChange={e=>setNotes(e.target.value)}
+                rows={3}
+                style={{ ...ui.textarea }}
+              />
+            </div>
+
+            {/* ACTIONS */}
+            <div style={{ display:'flex', gap:10, marginTop: 16, flexWrap:'wrap' }}>
+              <button
+                onClick={startCapture}
+                disabled={starting || !propId}
+                style={ui.buttonPrimary}
+              >
+                {starting ? 'Starting…' : 'Start capture'}
+              </button>
+              <a href="/" style={{ ...ui.buttonLink }}>Back home</a>
+            </div>
+          </>
         )}
 
-        {step === 'starting' && (
-          <div style={{ ...ui.card, marginTop: 16 }}>
-            <div style={ui.textMuted}>Creating your turn…</div>
-          </div>
-        )}
+        {err && <div style={{ marginTop: 12, color:'#fca5a5' }}>{err}</div>}
       </div>
     </ChromeDark>
   );
