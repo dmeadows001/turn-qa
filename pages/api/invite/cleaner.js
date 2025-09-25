@@ -2,116 +2,92 @@
 import { createClient } from '@supabase/supabase-js';
 import twilio from 'twilio';
 
+// --- Supabase (service role so RLS won't block server writes) ---
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY
 );
 
+// --- helpers ---
 function normalizePhone(s = '') {
-  const d = (s || '').replace(/[^\d+]/g, '');
+  const d = String(s || '').replace(/[^\d+]/g, '');
   if (!d) return '';
   return d.startsWith('+') ? d : `+${d}`;
 }
 
 function absUrl(req, path = '/') {
-  const proto = String(req.headers['x-forwarded-proto'] || 'https');
-  const host  = String(req.headers['x-forwarded-host'] || req.headers.host || '');
+  const proto = String(req.headers['x-forwarded-proto'] || 'https').split(',')[0];
+  const host  = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0];
   const p     = path.startsWith('/') ? path : `/${path}`;
   return `${proto}://${host}${p}`;
 }
 
-// Try an upsert; if it fails because a column or conflict target doesn't exist,
-// run progressively simpler fallbacks so this works across slightly different schemas.
-async function upsertInviteTolerant({ property_id, cleaner_id, phone }) {
-  // 1) Preferred: has "phone" column + unique (property_id, phone)
+// robust invite upsert using (property_id, cleaner_id)
+async function upsertInvite({ property_id, cleaner_id }) {
+  // preferred: onConflict composite unique (property_id, cleaner_id)
   try {
     const { data, error } = await supabase
       .from('cleaner_invites')
       .upsert(
-        { property_id, cleaner_id, phone },
-        { onConflict: 'property_id,phone' }
-      )
-      .select('id')
-      .single();
-    if (!error && data) return data.id;
-    if (error) throw error;
-  } catch (e) {
-    // fall through
-  }
-
-  // 2) Alternate: no phone column or no unique target, use (property_id, cleaner_id)
-  try {
-    const { data, error } = await supabase
-      .from('cleaner_invites')
-      .upsert(
-        { property_id, cleaner_id }, // no phone here
+        { property_id, cleaner_id },
         { onConflict: 'property_id,cleaner_id' }
       )
       .select('id')
       .single();
-    if (!error && data) return data.id;
+    if (!error && data?.id) return data.id;
     if (error) throw error;
-  } catch (e) {
-    // fall through
+  } catch (_e) {
+    // fall through to plain insert/select if unique index not present
   }
 
-  // 3) Last resort: plain insert; if duplicate, select existing
-  try {
-    const { data: ins, error: insErr } = await supabase
+  // plain insert → if duplicate, select existing
+  const ins = await supabase
+    .from('cleaner_invites')
+    .insert({ property_id, cleaner_id })
+    .select('id')
+    .maybeSingle();
+
+  if (ins.data?.id) return ins.data.id;
+
+  if (ins.error && /duplicate key value|23505/i.test(ins.error.message || '')) {
+    const sel = await supabase
       .from('cleaner_invites')
-      .insert({ property_id, cleaner_id })
       .select('id')
-      .single();
-
-    if (!insErr && ins) return ins.id;
-
-    // If duplicate key, try to find the existing row using either shape
-    if (insErr && /duplicate key value|23505/i.test(insErr.message || '')) {
-      // try (property_id, phone)
-      if (phone) {
-        const { data: ex1 } = await supabase
-          .from('cleaner_invites')
-          .select('id')
-          .eq('property_id', property_id)
-          .eq('phone', phone)
-          .maybeSingle();
-        if (ex1?.id) return ex1.id;
-      }
-      // try (property_id, cleaner_id)
-      const { data: ex2 } = await supabase
-        .from('cleaner_invites')
-        .select('id')
-        .eq('property_id', property_id)
-        .eq('cleaner_id', cleaner_id)
-        .maybeSingle();
-      if (ex2?.id) return ex2.id;
-    }
-
-    throw insErr || new Error('Could not insert invite');
-  } catch (e) {
-    throw e;
+      .eq('property_id', property_id)
+      .eq('cleaner_id', cleaner_id)
+      .maybeSingle();
+    if (sel.data?.id) return sel.data.id;
   }
+
+  // if we still couldn't get an id, throw the last error
+  throw new Error(ins.error?.message || 'Could not create or fetch invite');
 }
 
 export default async function handler(req, res) {
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+  if (req.method === 'OPTIONS') {
+    res.setHeader('Allow', 'POST,OPTIONS');
+    return res.status(200).end();
+  }
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'POST,OPTIONS');
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
 
   try {
     const { property_id, phone, name = '' } = req.body || {};
-    const e164 = normalizePhone(phone);
-
     if (!property_id) return res.status(400).json({ error: 'property_id is required' });
-    if (!e164)        return res.status(400).json({ error: 'Valid phone is required' });
+    const e164 = normalizePhone(phone);
+    if (!e164) return res.status(400).json({ error: 'Valid phone is required' });
 
-    // 1) Load property
+    // 1) Property (for SMS text)
     const { data: prop, error: pErr } = await supabase
       .from('properties')
       .select('id, name')
       .eq('id', property_id)
-      .single();
+      .maybeSingle();
     if (pErr || !prop) throw new Error('Property not found');
 
-    // 2) Upsert cleaner by phone (name is optional; ignored if your table lacks it)
+    // 2) Cleaner upsert by phone (requires unique index on cleaners.phone)
     const { data: cleaner, error: cErr } = await supabase
       .from('cleaners')
       .upsert({ phone: e164, name }, { onConflict: 'phone' })
@@ -119,16 +95,13 @@ export default async function handler(req, res) {
       .single();
     if (cErr || !cleaner?.id) throw (cErr || new Error('Could not upsert cleaner'));
 
-    // 3) Create/fetch invite row (tolerant to schema differences)
-    const inviteId = await upsertInviteTolerant({
-      property_id,
-      cleaner_id: cleaner.id,
-      phone: e164
-    });
+    // 3) Invite (idempotent)
+    const inviteId = await upsertInvite({ property_id, cleaner_id: cleaner.id });
 
+    // 4) Build invite URL
     const inviteUrl = absUrl(req, `/onboard/cleaner?id=${inviteId}`);
 
-    // 4) Send SMS via Twilio
+    // 5) Twilio send (Messaging Service preferred; fallback to single FROM)
     const sid   = process.env.TWILIO_ACCOUNT_SID;
     const token = process.env.TWILIO_AUTH_TOKEN;
     if (!sid || !token) throw new Error('Twilio credentials missing (TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN).');
@@ -137,22 +110,41 @@ export default async function handler(req, res) {
 
     const msgOpts = {
       to: e164,
-      // Keep short for trial accounts (Twilio adds its own “Sent from…” prefix)
-      body: `TurnQA invite for “${prop.name}”: ${inviteUrl}`
+      // keep short for trial accounts; Twilio adds its own trial prefix
+      body: `TurnQA invite for “${prop.name || 'your property'}”: ${inviteUrl}`
     };
 
-    const msid = process.env.TWILIO_MESSAGING_SERVICE_SID;
-    const from = process.env.TWILIO_FROM || process.env.TWILIO_SMS_FROM || '';
+    // tolerant sender lookup (Messaging Service SID OR any of several FROM vars)
+    const msid =
+      process.env.TWILIO_MESSAGING_SERVICE_SID ||
+      process.env.TWILIO_MSG_SID || null;
 
-    if (msid) msgOpts.messagingServiceSid = msid;
-    else if (from) msgOpts.from = from;
-    else throw new Error('Twilio sender not configured (set TWILIO_MESSAGING_SERVICE_SID or TWILIO_FROM).');
+    const fromNumber =
+      process.env.TWILIO_FROM ||
+      process.env.TWILIO_FROM_NUMBER ||
+      process.env.TWILIO_PHONE_NUMBER ||
+      process.env.TWILIO_SMS_FROM ||
+      process.env.NEXT_PUBLIC_TWILIO_FROM || '';
+
+    if (msid) {
+      msgOpts.messagingServiceSid = msid;
+    } else if (fromNumber) {
+      msgOpts.from = fromNumber;
+    } else {
+      throw new Error('Twilio sender not configured (set TWILIO_MESSAGING_SERVICE_SID or TWILIO_FROM).');
+    }
 
     await client.messages.create(msgOpts);
 
-    res.json({ ok: true, invite_id: inviteId, link: inviteUrl, sent_to: e164 });
+    return res.json({
+      ok: true,
+      invite_id: inviteId,
+      cleaner_id: cleaner.id,
+      sent_to: e164,
+      link: inviteUrl
+    });
   } catch (e) {
-    res.status(500).json({
+    return res.status(500).json({
       error: e.message || 'invite failed',
       tip: 'On a Twilio trial, messages can only go to verified numbers and must be short.'
     });
