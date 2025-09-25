@@ -7,6 +7,7 @@ function normalizePhone(s = '') {
   const digits = (s || '').replace(/[^\d+]/g, '');
   return digits.startsWith('+') ? digits : `+${digits}`;
 }
+const looksLikeE164 = (s) => /^\+\d{10,15}$/.test(normalizePhone(s));
 
 export default function CaptureLanding() {
   const [step, setStep] = useState('phone'); // 'phone' | 'otp' | 'choose' | 'starting'
@@ -96,16 +97,22 @@ export default function CaptureLanding() {
     finally { setBusy(false); }
   }
 
+  // styles for disabled vs enabled button (better contrast)
+  const phoneValid = looksLikeE164(phone);
+  const btnDisabledStyle = {
+    ...ui.buttonPrimary,
+    background: '#1f2937',
+    color: '#cbd5e1',
+    border: '1px solid #334155',
+    opacity: 1,
+    cursor: 'not-allowed'
+  };
+
   return (
+    // keep a single title – ChromeDark renders it, so we don't render our own <h1>
     <ChromeDark title="Start a Turn">
       <div style={{ maxWidth: 720, margin: '0 auto' }}>
-        <h1 style={{ ...ui.h1, textAlign: 'center' }}>Start a Turn</h1>
-
-        {msg && (
-          <div style={{ ...ui.noteError, marginTop: 8 }}>
-            {msg}
-          </div>
-        )}
+        {msg && <div style={{ ...ui.noteError, marginTop: 8 }}>{msg}</div>}
 
         {/* PHONE STEP */}
         {step === 'phone' && (
@@ -116,12 +123,16 @@ export default function CaptureLanding() {
               value={phone}
               onChange={e => setPhone(e.target.value)}
               placeholder="+15551234567"
+              inputMode="tel"
             />
+            <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 6 }}>
+              Tip: include the country code, e.g. <b>+1</b> for US/Canada.
+            </div>
             <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
               <button
                 onClick={sendOtp}
-                disabled={busy || !phone}
-                style={ui.buttonPrimary}
+                disabled={busy || !phoneValid}
+                style={busy || !phoneValid ? btnDisabledStyle : ui.buttonPrimary}
               >
                 {busy ? 'Sending…' : 'Text me a code'}
               </button>
@@ -141,12 +152,13 @@ export default function CaptureLanding() {
               onChange={e => setCode(e.target.value)}
               placeholder="123456"
               maxLength={6}
+              inputMode="numeric"
             />
             <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
               <button
                 onClick={verifyOtp}
                 disabled={busy || code.trim().length < 4}
-                style={ui.buttonSuccess}
+                style={busy || code.trim().length < 4 ? btnDisabledStyle : ui.buttonSuccess}
               >
                 {busy ? 'Verifying…' : 'Verify & continue'}
               </button>
@@ -188,7 +200,7 @@ export default function CaptureLanding() {
                   <button
                     onClick={startTurn}
                     disabled={busy || !propertyId}
-                    style={ui.buttonPrimary}
+                    style={busy || !propertyId ? btnDisabledStyle : ui.buttonPrimary}
                   >
                     {busy ? 'Starting…' : 'Start capture'}
                   </button>
