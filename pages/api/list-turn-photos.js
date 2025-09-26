@@ -6,93 +6,137 @@ const supa = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY // server-side secret
 );
 
-// Try to sign "bucket/path/in/bucket.jpg" -> temporary URL
-async function signPath(fullPath, expires = 600) {
+// ---------- Signing helpers ----------
+async function trySign(bucket, objectPath, expires = 600) {
+  if (!bucket || !objectPath) return null;
   try {
-    if (!fullPath || typeof fullPath !== 'string' || !fullPath.includes('/')) return null;
-    const [bucket, ...rest] = fullPath.split('/');
-    const objectPath = rest.join('/');
     const { data, error } = await supa.storage.from(bucket).createSignedUrl(objectPath, expires);
-    if (error) throw error;
+    if (error) return null;
     return data?.signedUrl || null;
   } catch {
     return null;
   }
 }
 
-// Helper that tries multiple SELECT shapes until one works, then maps to a common shape
+/**
+ * Sign a storage path that might be in different formats:
+ *  - Already a full URL -> return as-is
+ *  - "bucket/dir/file.jpg" -> use bucket=first segment
+ *  - "dir/file.jpg" (no bucket) -> try candidate buckets
+ */
+async function signUnknownPath(fullPath, { candidates = [] } = {}) {
+  if (!fullPath || typeof fullPath !== 'string') return null;
+
+  const trimmed = fullPath.trim();
+  if (/^https?:\/\//i.test(trimmed)) return trimmed; // already a URL
+
+  const clean = trimmed.replace(/^\/+/, '');
+  const parts = clean.split('/');
+  let url = null;
+
+  // A. If first segment looks like a bucket, try it
+  if (parts.length > 1) {
+    const bucket = parts[0];
+    const objectPath = parts.slice(1).join('/');
+    url = await trySign(bucket, objectPath);
+    if (url) return url;
+  }
+
+  // B. Try candidate buckets with the whole path as objectPath
+  const envBucket = process.env.NEXT_PUBLIC_SUPABASE_STORAGE_BUCKET;
+  const guesses = Array.from(
+    new Set(
+      [envBucket, ...candidates, 'turn_photos', 'photos', 'public', 'images', 'assets'].filter(Boolean)
+    )
+  );
+
+  for (const b of guesses) {
+    url = await trySign(b, clean);
+    if (url) return url;
+  }
+
+  // C. Nothing worked
+  return null;
+}
+
+// ---------- Tolerant SELECT ----------
 async function tolerantSelect({ table, turnId, orderCol = 'created_at' }) {
-  // Ordered list of candidate column sets and how to map them to { path }
-  const candidates = [
-    { cols: 'id, turn_id, area_key, shot_id, path, created_at', pick: r => r.path },
-    { cols: 'id, turn_id, area_key, shot_id, storage_path, created_at', pick: r => r.storage_path },
-    { cols: 'id, turn_id, area_key, shot_id, photo_path, created_at', pick: r => r.photo_path },
-    { cols: 'id, turn_id, area_key, shot_id, url, created_at', pick: r => r.url },
-    { cols: 'id, turn_id, area_key, shot_id, file, created_at', pick: r => r.file },
-    // Minimal fallback (no path-like column at all)
-    { cols: 'id, turn_id, area_key, shot_id, created_at', pick: () => '' },
+  const variants = [
+    { cols: 'id, turn_id, area_key, shot_id, storage_path, created_at', pathOf: r => r.storage_path },
+    { cols: 'id, turn_id, area_key, shot_id, path, created_at',          pathOf: r => r.path },
+    { cols: 'id, turn_id, area_key, shot_id, photo_path, created_at',    pathOf: r => r.photo_path },
+    { cols: 'id, turn_id, area_key, shot_id, url, created_at',           pathOf: r => r.url },
+    { cols: 'id, turn_id, area_key, shot_id, file, created_at',          pathOf: r => r.file },
+    { cols: 'id, turn_id, area_key, shot_id, created_at',                pathOf: () => '' }, // last resort
   ];
 
-  for (const c of candidates) {
+  for (const v of variants) {
     try {
       const { data, error } = await supa
         .from(table)
-        .select(c.cols)
+        .select(v.cols)
         .eq('turn_id', turnId)
         .order(orderCol, { ascending: true });
 
       if (error) {
-        // Retry with next candidate ONLY if it's a column error
-        if (/(column|does not exist|unknown column)/i.test(error.message || '')) continue;
-        throw error; // real error (permission, RLS, etc.)
+        // Only keep trying if it's a column-missing style error
+        const msg = (error.message || '').toLowerCase();
+        if (/(column|does not exist|unknown column)/i.test(msg)) continue;
+        throw error;
       }
 
-      const rows = (data || []).map(r => ({
+      return (data || []).map(r => ({
         id: r.id,
         turn_id: r.turn_id,
         area_key: r.area_key || '',
         shot_id: r.shot_id || null,
         created_at: r.created_at,
-        path: c.pick(r) || '',
+        path_like: v.pathOf(r) || '',
       }));
-      return rows;
     } catch (e) {
-      // If it looks like a column-missing error, try next candidate
-      if (/(column|does not exist|unknown column)/i.test(e.message || '')) continue;
-      throw e; // surface other errors
+      const msg = (e.message || '').toLowerCase();
+      if (/(column|does not exist|unknown column)/i.test(msg)) continue;
+      throw e;
     }
   }
-
-  // If nothing worked, return empty
   return [];
 }
 
 export default async function handler(req, res) {
   try {
     const turnId = (req.query.id || '').trim();
+    const debug = req.query.debug === '1';
     if (!turnId) return res.status(400).json({ error: 'id (turnId) is required' });
 
-    // 1) Prefer the new table
+    // 1) Prefer new table
     let rows = await tolerantSelect({ table: 'turn_photos', turnId });
 
-    // 2) Fall back to legacy 'photos' if empty
-    if (!rows.length) {
-      rows = await tolerantSelect({ table: 'photos', turnId });
-    }
+    // 2) Fallback to legacy if empty
+    if (!rows.length) rows = await tolerantSelect({ table: 'photos', turnId });
 
-    // 3) Produce signed URLs (if path looks like bucket/path)
-    const photos = await Promise.all(
-      rows.map(async r => ({
+    // 3) Sign URLs (robust to missing bucket names)
+    const signed = [];
+    for (const r of rows) {
+      const signedUrl = await signUnknownPath(r.path_like, { candidates: ['turns', 'uploads'] });
+      signed.push({
         id: r.id,
         turn_id: r.turn_id,
         area_key: r.area_key || '',
-        path: r.path || '',
+        path: r.path_like || '',
         created_at: r.created_at,
-        signedUrl: (await signPath(r.path)) || '',
-      }))
-    );
+        signedUrl: signedUrl || '',
+      });
+    }
 
-    return res.json({ photos });
+    if (debug) {
+      return res.json({
+        photos: signed,
+        note: 'debug=1 included raw path and signedUrl. If signedUrl is empty, the stored path is missing a bucket name and none of the guessed buckets worked.',
+        guessedBuckets: ['env.NEXT_PUBLIC_SUPABASE_STORAGE_BUCKET', 'turn_photos', 'photos', 'public', 'images', 'assets', 'turns', 'uploads'],
+      });
+    }
+
+    return res.json({ photos: signed });
   } catch (e) {
     console.error('list-turn-photos error', e);
     return res.status(500).json({ error: e.message || 'list-turn-photos failed' });
