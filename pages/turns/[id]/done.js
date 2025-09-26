@@ -4,102 +4,65 @@ import { useEffect, useState } from 'react';
 import ChromeDark from '../../../components/ChromeDark';
 import { ui } from '../../../lib/theme';
 
-function Button({ href = '#', children, kind = 'primary' }) {
-  const base = {
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: '12px 16px',
-    borderRadius: 12,
-    fontWeight: 700,
-    textDecoration: 'none',
-    border: '1px solid transparent',
-    marginRight: 10,
-  };
-  const variants = {
-    primary: { background: '#0ea5e9', color: '#fff' },
-    secondary: { background: '#111827', color: '#e5e7eb', border: '1px solid #334155' },
-  };
-  return (
-    <a href={href} style={{ ...base, ...(variants[kind] || variants.primary) }}>
-      {children}
-    </a>
-  );
-}
-
 export default function TurnDone() {
   const router = useRouter();
   const turnId = router.query.id;
+  const [propertyName, setPropertyName] = useState('');
+  const [phone, setPhone] = useState('');
 
-  const [propName, setPropName] = useState('');
-  const [checklistName, setChecklistName] = useState('');
-  const [loading, setLoading] = useState(true);
-
+  // Try to pull property/checklist names (we already use this in capture)
   useEffect(() => {
-    if (!turnId) return;
-
-    (async () => {
+    async function load() {
+      if (!turnId) return;
       try {
-        // Reuse the turn-template endpoint to get display context (property + checklist)
         const r = await fetch(`/api/turn-template?turnId=${turnId}`);
         const j = await r.json().catch(() => ({}));
-        const rules = j?.rules || {};
-        setPropName(rules.property || '');
-        setChecklistName(rules.template || '');
-      } catch (_) {
-        // ignore – we still show a themed success screen
-      } finally {
-        setLoading(false);
-      }
-    })();
+        if (j?.rules?.property) setPropertyName(j.rules.property);
+      } catch {}
+    }
+    load();
   }, [turnId]);
+
+  // Try to discover the cleaner's phone from localStorage (best effort)
+  useEffect(() => {
+    try {
+      const keys = ['turnqa_phone', 'cleaner_phone', 'lastCleanerPhone', 'otp_phone'];
+      for (const k of keys) {
+        const v = window.localStorage.getItem(k);
+        if (v && typeof v === 'string' && v.trim()) {
+          setPhone(v.trim());
+          // normalize/save into a single canonical key for future
+          window.localStorage.setItem('turnqa_phone', v.trim());
+          break;
+        }
+      }
+    } catch {}
+  }, []);
+
+  const mySubmissionsHref = phone ? `/cleaner/turns?phone=${encodeURIComponent(phone)}` : '/cleaner/turns';
 
   return (
     <ChromeDark title="Turn submitted">
       <section style={ui.sectionGrid}>
         <div style={ui.card}>
-          <h2 style={{ textAlign: 'center', margin: '0 0 6px' }}>Turn submitted</h2>
-
-          {propName ? (
-            <div style={{ textAlign: 'center', color: '#94a3b8', marginBottom: 6 }}>
-              {propName}
-              {checklistName ? <span> • <b>{checklistName}</b></span> : null}
+          <h2 style={{ textAlign:'center', margin:'0 0 6px' }}>Turn submitted</h2>
+          {propertyName ? (
+            <div style={{ textAlign:'center', color:'#94a3b8', marginBottom:8 }}>
+              {propertyName}
             </div>
           ) : null}
 
-          <div
-            style={{
-              marginTop: 12,
-              background: '#052e1a',
-              border: '1px solid #065f46',
-              color: '#d1fae5',
-              borderRadius: 12,
-              padding: 12,
-            }}
-          >
-            ✅ Your photos were submitted successfully.
-            {turnId ? (
-              <span style={{ color: '#a7f3d0' }}>
-                {' '}Keep this turn ID for reference: <code style={{ userSelect: 'all' }}>{turnId}</code>
-              </span>
-            ) : null}
+          <p style={{ ...ui.muted, marginTop:8 }}>
+            Your photos were sent to the manager. You’ll be notified when they approve or request fixes.
+          </p>
+
+          <div style={{ display:'flex', gap:12, flexWrap:'wrap', marginTop:16 }}>
+            <a href={mySubmissionsHref} style={ui.btnPrimary}>See my submissions</a>
+            <a href="/capture" style={ui.btnSecondary}>Start another turn</a>
           </div>
 
-          {!loading && (
-            <div style={{ marginTop: 16, display: 'flex', flexWrap: 'wrap', gap: 10 }}>
-              <Button href="/capture">Start another turn</Button>
-              <Button href="/" kind="secondary">Back home</Button>
-              {/* Manager deep-link (works only if the viewer is a manager): */}
-              {turnId ? (
-                <Button href={`/turns/${turnId}/review?manager=1`} kind="secondary">
-                  View review page
-                </Button>
-              ) : null}
-            </div>
-          )}
-
-          <div style={{ color: '#94a3b8', marginTop: 14, fontSize: 14 }}>
-            You’ll get a text when the manager reviews your turn.
+          <div style={{ ...ui.subtle, marginTop:16 }}>
+            Keep this page for your records: <code style={{ userSelect:'all' }}>{turnId}</code>
           </div>
         </div>
       </section>
