@@ -431,7 +431,18 @@ export default function Capture() {
     <ChromeDark title="Start Taking Photos">
       <section style={ui.sectionGrid}>
         <div style={ui.card}>
-          <h2 style={{ marginTop: 0 }}>Start Taking Photos</h2>
+          <h2 style={{ textAlign:'center', margin:'0 0 4px' }}>Start Taking Photos</h2>
+{templateRules?.property ? (
+  <div style={{ textAlign:'center', color:'#94a3b8', fontSize:16, marginTop:4 }}>
+    {templateRules.property}
+  </div>
+) : null}
+{templateRules?.template ? (
+  <div style={{ textAlign:'center', color:'#64748b', fontSize:14, marginTop:6 }}>
+    Checklist: <b>{templateRules.template}</b>
+  </div>
+) : null}
+
 
           <div style={{ marginTop: 12, color: '#14532d', fontSize: 14 }}>
             ✅ Tap + inside the box to take a picture
@@ -440,12 +451,7 @@ export default function Capture() {
             ✅ Run AI Pre-Check before submitting
           </div>
 
-          {/* small context line for cleaners (no UUID) */}
-          <div style={{ color:'#9ca3af', marginTop: 6, fontSize: 14 }}>
-            {templateRules?.property ? <span><b>Property:</b> {templateRules.property}</span> : null}
-            {templateRules?.template ? <span> • <b>Checklist:</b> {templateRules.template}</span> : null}
-          </div>
-
+      
           {/* Show Turn ID only if ?showId=1 is in the URL */}
           {typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('showId') === '1' && (
             <div style={{ color:'#94a3b8', fontSize: 12, marginTop: 6 }}>
