@@ -1,5 +1,5 @@
 // pages/cleaner/turns.js
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
 import ChromeDark from '../../components/ChromeDark';
 import { ui } from '../../lib/theme';
@@ -22,6 +22,20 @@ function StatusBadge({ s }) {
       {c.label}
     </span>
   );
+}
+
+function payoutText(row) {
+  const s = (row.status || '').toLowerCase();
+  if (s === 'approved') {
+    // If approved_at exists, show it; otherwise generic approved
+    return row.approved_at
+      ? `Approved ${niceDate(row.approved_at)} — payout will be/was sent by your manager`
+      : 'Approved — payout will be/was sent by your manager';
+  }
+  if (s === 'submitted') return 'Pending — waiting on manager review';
+  if (s === 'needs_fix') return 'On hold — manager requested fixes';
+  if (s === 'in_progress') return 'Not submitted yet';
+  return '—';
 }
 
 export default function CleanerTurns() {
@@ -51,7 +65,6 @@ export default function CleanerTurns() {
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || 'load failed');
       setRows(j.rows || []);
-      // persist the phone for convenience
       try { window.localStorage.setItem('turnqa_phone', phone); } catch {}
     } catch (e) {
       setErr(e.message || 'Failed to load');
@@ -60,9 +73,7 @@ export default function CleanerTurns() {
     }
   }
 
-  useEffect(() => { if (phone) load(); /* eslint-disable-next-line */ }, [phone]);
-
-  const hasPhone = !!phone;
+  useEffect(() => { if (phone) load(); /* eslint-disable-line */ }, [phone]);
 
   return (
     <ChromeDark title="My turns">
@@ -70,10 +81,9 @@ export default function CleanerTurns() {
         <div style={ui.card}>
           <h2 style={{ marginTop:0, textAlign:'center' }}>My submitted turns</h2>
           <p style={{ ...ui.muted, marginTop:6, textAlign:'center' }}>
-            View your recent submissions and status. Managers approve here when everything looks good.
+            Your pay triggers after <b>manager approval</b>. You’ll get an SMS when it’s approved.
           </p>
 
-          {/* Phone entry (only shown if missing or the user wants to change it) */}
           <div style={{ marginTop:12, display:'grid', gridTemplateColumns:'1fr auto', gap:8 }}>
             <input
               value={phone}
@@ -89,19 +99,20 @@ export default function CleanerTurns() {
         <div style={ui.card}>
           {loading ? (
             <div>Loading…</div>
-          ) : !hasPhone ? (
+          ) : !phone ? (
             <div style={ui.muted}>Enter your phone number to see your history.</div>
           ) : rows.length === 0 ? (
             <div style={ui.muted}>No turns yet.</div>
           ) : (
             <div style={{ overflowX:'auto' }}>
-              <table style={{ width:'100%', borderCollapse:'collapse', minWidth: 720 }}>
+              <table style={{ width:'100%', borderCollapse:'collapse', minWidth: 900 }}>
                 <thead>
                   <tr style={{ textAlign:'left', borderBottom:'1px solid #1f2937' }}>
                     <th style={{ padding:'10px 8px' }}>Created</th>
                     <th style={{ padding:'10px 8px' }}>Property</th>
                     <th style={{ padding:'10px 8px' }}>Status</th>
                     <th style={{ padding:'10px 8px' }}>Submitted</th>
+                    <th style={{ padding:'10px 8px' }}>Payout</th>
                     <th style={{ padding:'10px 8px' }}></th>
                   </tr>
                 </thead>
@@ -112,8 +123,9 @@ export default function CleanerTurns() {
                       <td style={{ padding:'10px 8px' }}>{t.property_name}</td>
                       <td style={{ padding:'10px 8px' }}><StatusBadge s={t.status} /></td>
                       <td style={{ padding:'10px 8px' }}>{t.submitted_at ? niceDate(t.submitted_at) : '—'}</td>
+                      <td style={{ padding:'10px 8px', color:'#cbd5e1' }}>{payoutText(t)}</td>
                       <td style={{ padding:'10px 8px' }}>
-                        {/* Read-only review page (manager controls hidden by your guard) */}
+                        {/* Read-only view for cleaners (manager tools hidden by your review page guard) */}
                         <a href={`/turns/${t.id}/review`} style={ui.btnSecondary}>Open</a>
                       </td>
                     </tr>
