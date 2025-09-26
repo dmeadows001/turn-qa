@@ -3,7 +3,6 @@ import { createClient } from '@supabase/supabase-js';
 
 const supa = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
-  // Use service role on server so we can read reliably but we still filter by phone/cleaner_id
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY
 );
 
@@ -11,9 +10,69 @@ function normPhone(raw = '') {
   const only = (raw || '').replace(/[^\d+]/g, '');
   if (!only) return '';
   if (only.startsWith('+')) return only;
-  // naive US normalization if they type 10 digits
-  if (/^\d{10}$/.test(only)) return `+1${only}`;
+  if (/^\d{10}$/.test(only)) return `+1${only}`; // naive US default
   return `+${only}`;
+}
+
+async function selectTurnsTolerant(cleanerId) {
+  const base = supa.from('turns');
+  const common = base
+    .eq('cleaner_id', cleanerId)
+    .order('created_at', { ascending: false })
+    .limit(200);
+
+  // 1) Try with needs_fix_at
+  try {
+    const { data, error } = await common.select(`
+      id,
+      status,
+      created_at,
+      submitted_at,
+      approved_at,
+      needs_fix_at,
+      property_id,
+      properties:properties ( name )
+    `);
+    if (error) throw error;
+    return (data || []).map(r => ({
+      id: r.id,
+      status: r.status || '',
+      created_at: r.created_at,
+      submitted_at: r.submitted_at,
+      approved_at: r.approved_at,
+      needs_fix_at: r.needs_fix_at ?? null,
+      property_id: r.property_id,
+      property_name: r.properties?.name || '(unnamed)',
+    }));
+  } catch (e) {
+    const msg = (e?.message || '').toLowerCase();
+    const missingNeedsFix =
+      msg.includes('column') && msg.includes('needs_fix_at') && msg.includes('does not exist');
+
+    if (!missingNeedsFix) throw e;
+
+    // 2) Fallback without needs_fix_at
+    const { data, error } = await common.select(`
+      id,
+      status,
+      created_at,
+      submitted_at,
+      approved_at,
+      property_id,
+      properties:properties ( name )
+    `);
+    if (error) throw error;
+    return (data || []).map(r => ({
+      id: r.id,
+      status: r.status || '',
+      created_at: r.created_at,
+      submitted_at: r.submitted_at,
+      approved_at: r.approved_at,
+      needs_fix_at: null, // not in schema
+      property_id: r.property_id,
+      property_name: r.properties?.name || '(unnamed)',
+    }));
+  }
 }
 
 export default async function handler(req, res) {
@@ -21,11 +80,12 @@ export default async function handler(req, res) {
 
   try {
     const qPhone = (req.query.phone || '').toString().trim();
-    const cleanerId = (req.query.cleaner_id || '').toString().trim();
+    const cleanerIdParam = (req.query.cleaner_id || '').toString().trim();
 
-    let targetCleanerId = cleanerId;
+    let cleanerId = cleanerIdParam;
 
-    if (!targetCleanerId) {
+    // Resolve cleaner by phone if cleaner_id not provided
+    if (!cleanerId) {
       const phone = normPhone(qPhone);
       if (!phone) return res.status(400).json({ error: 'phone or cleaner_id required' });
 
@@ -37,40 +97,10 @@ export default async function handler(req, res) {
 
       if (cErr) throw cErr;
       if (!cl?.id) return res.json({ rows: [] });
-
-      targetCleanerId = cl.id;
+      cleanerId = cl.id;
     }
 
-    // Fetch this cleaner's turns (join property name)
-    const { data, error } = await supa
-      .from('turns')
-      .select(`
-        id,
-        status,
-        created_at,
-        submitted_at,
-        approved_at,
-        needs_fix_at,
-        property_id,
-        properties:properties ( name )
-      `)
-      .eq('cleaner_id', targetCleanerId)
-      .order('created_at', { ascending: false })
-      .limit(200);
-
-    if (error) throw error;
-
-    const rows = (data || []).map(r => ({
-      id: r.id,
-      status: r.status || '',
-      created_at: r.created_at,
-      submitted_at: r.submitted_at,
-      approved_at: r.approved_at,
-      needs_fix_at: r.needs_fix_at,
-      property_id: r.property_id,
-      property_name: r.properties?.name || '(unnamed)',
-    }));
-
+    const rows = await selectTurnsTolerant(cleanerId);
     return res.json({ rows });
   } catch (e) {
     console.error('list-cleaner-turns error', e);
