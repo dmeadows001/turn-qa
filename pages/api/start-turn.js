@@ -1,59 +1,76 @@
 // pages/api/start-turn.js
-import { supabaseAdmin } from '../../lib/supabase';
+import { createClient } from '@supabase/supabase-js';
+
+function admin() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  return createClient(url, key, { auth: { persistSession: false } });
+}
+
+function normalizePhone(s = '') {
+  const digits = (s || '').replace(/[^\d+]/g, '');
+  return digits ? (digits.startsWith('+') ? digits : `+${digits}`) : '';
+}
 
 export default async function handler(req, res) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method Not Allowed' });
+  }
+
+  const supa = admin();
+
   try {
-    if (req.method !== 'POST') {
-      return res.status(405).json({ error: 'Method not allowed' });
-    }
+    const { phone, property_id, notes } = req.body || {};
+    if (!phone)       return res.status(400).json({ error: 'phone is required' });
+    if (!property_id) return res.status(400).json({ error: 'property_id is required' });
 
-    const { cleaner_name, service_date, property_id } = req.body || {};
-    if (!cleaner_name || !property_id || !service_date) {
-      return res.status(400).json({ error: 'Missing cleaner_name, property_id or service_date' });
-    }
+    const normPhone = normalizePhone(phone);
 
-    // Normalize date (expecting YYYY-MM-DD from the cleaners page)
-    const dateStr = String(service_date).slice(0, 10);
-
-    // 1) Try to reuse an existing in_progress turn for the same property/date/cleaner
+    // 1) Verify property exists (nice error if not)
     {
-      const { data: existing, error: findErr } = await supabaseAdmin
-        .from('turns')
-        .select('id, status')
-        .eq('property_id', property_id)
-        .eq('turn_date', dateStr)
-        .eq('cleaner_name', cleaner_name)
-        .eq('status', 'in_progress')
-        .limit(1)
+      const { data: prop, error: pErr } = await supa
+        .from('properties')
+        .select('id')
+        .eq('id', property_id)
         .maybeSingle();
-
-      if (findErr) {
-        console.error('start-turn find existing error:', findErr);
-      } else if (existing?.id) {
-        return res.status(200).json({ turn_id: existing.id, reused: true });
-      }
+      if (pErr) throw pErr;
+      if (!prop) return res.status(404).json({ error: 'property not found' });
     }
 
-    // 2) Create a new turn
-    const insertPayload = {
-      property_id,
-      cleaner_name,
-      turn_date: dateStr,
-      status: 'in_progress'
-      // manager_notes, submitted_at, approved_at will be null by default
-    };
-
-    const { data: inserted, error: insErr } = await supabaseAdmin
-      .from('turns')
-      .insert([insertPayload])
+    // 2) Find cleaner by phone
+    const { data: cleaner, error: cErr } = await supa
+      .from('cleaners')
       .select('id')
-      .single();
+      .eq('phone', normPhone)
+      .maybeSingle();
+    if (cErr) throw cErr;
+    if (!cleaner?.id) {
+      return res.status(404).json({ error: 'cleaner not found for this phone' });
+    }
+    const cleaner_id = cleaner.id;
 
-    if (insErr) throw insErr;
+    // 3) Ensure assignment exists (idempotent)
+    //    Requires unique index on (property_id, cleaner_id) in property_cleaners
+    const { error: assignErr } = await supa
+      .from('property_cleaners')
+      .upsert(
+        { property_id, cleaner_id },
+        { onConflict: 'property_id,cleaner_id' }
+      );
+    if (assignErr) throw assignErr;
 
-    return res.status(200).json({ turn_id: inserted.id, reused: false });
+    // 4) Create turn (status = in_progress)
+    //    Keep the insert minimal to avoid schema drift; we don’t assume a 'notes' column exists.
+    const { data: turnRow, error: tErr } = await supa
+      .from('turns')
+      .insert({ property_id, cleaner_id, status: 'in_progress' })
+      .select('id')
+      .maybeSingle();
+    if (tErr) throw tErr;
+    if (!turnRow?.id) throw new Error('could not create turn');
+
+    return res.status(200).json({ ok: true, turn_id: turnRow.id });
   } catch (e) {
-    console.error('start-turn error:', e);
-    return res.status(500).json({ error: e.message || 'failed' });
+    return res.status(500).json({ error: e.message || 'start failed' });
   }
 }
