@@ -6,13 +6,13 @@ const supa = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY // server-side secret
 );
 
-// Sign "bucket/path/in/bucket.jpg" to a temporary URL
+// Try to sign "bucket/path/in/bucket.jpg" -> temporary URL
 async function signPath(fullPath, expires = 600) {
   try {
     if (!fullPath || typeof fullPath !== 'string' || !fullPath.includes('/')) return null;
     const [bucket, ...rest] = fullPath.split('/');
-    const pathInBucket = rest.join('/');
-    const { data, error } = await supa.storage.from(bucket).createSignedUrl(pathInBucket, expires);
+    const objectPath = rest.join('/');
+    const { data, error } = await supa.storage.from(bucket).createSignedUrl(objectPath, expires);
     if (error) throw error;
     return data?.signedUrl || null;
   } catch {
@@ -20,53 +20,51 @@ async function signPath(fullPath, expires = 600) {
   }
 }
 
-async function selectTurnPhotos(turnId) {
-  // Try new table with full set of columns
-  let { data, error } = await supa
-    .from('turn_photos')
-    .select('id, turn_id, area_key, shot_id, path, created_at')
-    .eq('turn_id', turnId)
-    .order('created_at', { ascending: true });
+// Helper that tries multiple SELECT shapes until one works, then maps to a common shape
+async function tolerantSelect({ table, turnId, orderCol = 'created_at' }) {
+  // Ordered list of candidate column sets and how to map them to { path }
+  const candidates = [
+    { cols: 'id, turn_id, area_key, shot_id, path, created_at', pick: r => r.path },
+    { cols: 'id, turn_id, area_key, shot_id, storage_path, created_at', pick: r => r.storage_path },
+    { cols: 'id, turn_id, area_key, shot_id, photo_path, created_at', pick: r => r.photo_path },
+    { cols: 'id, turn_id, area_key, shot_id, url, created_at', pick: r => r.url },
+    { cols: 'id, turn_id, area_key, shot_id, file, created_at', pick: r => r.file },
+    // Minimal fallback (no path-like column at all)
+    { cols: 'id, turn_id, area_key, shot_id, created_at', pick: () => '' },
+  ];
 
-  // If the schema doesn't have area_key/shot_id yet, fall back gracefully
-  if (error && /area_key|shot_id/i.test(error.message || '')) {
-    const resp = await supa
-      .from('turn_photos')
-      .select('id, turn_id, path, created_at')
-      .eq('turn_id', turnId)
-      .order('created_at', { ascending: true });
+  for (const c of candidates) {
+    try {
+      const { data, error } = await supa
+        .from(table)
+        .select(c.cols)
+        .eq('turn_id', turnId)
+        .order(orderCol, { ascending: true });
 
-    if (resp.error) throw resp.error;
-    data = (resp.data || []).map(r => ({ ...r, area_key: '', shot_id: null }));
-  } else if (error) {
-    throw error;
+      if (error) {
+        // Retry with next candidate ONLY if it's a column error
+        if (/(column|does not exist|unknown column)/i.test(error.message || '')) continue;
+        throw error; // real error (permission, RLS, etc.)
+      }
+
+      const rows = (data || []).map(r => ({
+        id: r.id,
+        turn_id: r.turn_id,
+        area_key: r.area_key || '',
+        shot_id: r.shot_id || null,
+        created_at: r.created_at,
+        path: c.pick(r) || '',
+      }));
+      return rows;
+    } catch (e) {
+      // If it looks like a column-missing error, try next candidate
+      if (/(column|does not exist|unknown column)/i.test(e.message || '')) continue;
+      throw e; // surface other errors
+    }
   }
 
-  return data || [];
-}
-
-async function selectLegacyPhotos(turnId) {
-  // Legacy table (might also lack area_key)
-  let { data, error } = await supa
-    .from('photos')
-    .select('id, turn_id, area_key, path, created_at')
-    .eq('turn_id', turnId)
-    .order('created_at', { ascending: true });
-
-  if (error && /area_key/i.test(error.message || '')) {
-    const resp = await supa
-      .from('photos')
-      .select('id, turn_id, path, created_at')
-      .eq('turn_id', turnId)
-      .order('created_at', { ascending: true });
-
-    if (resp.error) throw resp.error;
-    data = (resp.data || []).map(r => ({ ...r, area_key: '' }));
-  } else if (error) {
-    throw error;
-  }
-
-  return data || [];
+  // If nothing worked, return empty
+  return [];
 }
 
 export default async function handler(req, res) {
@@ -74,18 +72,20 @@ export default async function handler(req, res) {
     const turnId = (req.query.id || '').trim();
     if (!turnId) return res.status(400).json({ error: 'id (turnId) is required' });
 
-    // 1) Prefer new table
-    let rows = await selectTurnPhotos(turnId);
+    // 1) Prefer the new table
+    let rows = await tolerantSelect({ table: 'turn_photos', turnId });
 
-    // 2) Fallback to legacy table if nothing found
-    if (!rows.length) rows = await selectLegacyPhotos(turnId);
+    // 2) Fall back to legacy 'photos' if empty
+    if (!rows.length) {
+      rows = await tolerantSelect({ table: 'photos', turnId });
+    }
 
-    // 3) Sign paths
+    // 3) Produce signed URLs (if path looks like bucket/path)
     const photos = await Promise.all(
-      (rows || []).map(async (r) => ({
+      rows.map(async r => ({
         id: r.id,
         turn_id: r.turn_id,
-        area_key: r.area_key || '',    // safe default
+        area_key: r.area_key || '',
         path: r.path || '',
         created_at: r.created_at,
         signedUrl: (await signPath(r.path)) || '',
