@@ -3,26 +3,36 @@ import { createClient } from '@supabase/supabase-js';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
-  // Prefer the service key on the server (RLS-proof); fall back to anon if not set.
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 );
 
 export default async function handler(req, res) {
   try {
-    // Accept both ?turnId= and ?id= for compatibility
     const turnId = String(req.query.turnId || req.query.id || '').trim();
     if (!turnId) return res.status(400).json({ error: 'turnId is required' });
 
-    // 1) Find the turn and its property
+    // 1) Turn → property_id
     const { data: turn, error: tErr } = await supabase
       .from('turns')
       .select('id, property_id')
       .eq('id', turnId)
       .maybeSingle();
     if (tErr) throw tErr;
-    if (!turn) return res.status(404).json({ error: 'turn not found' });
+    if (!turn) return res.status(404).json({ error: 'Turn not found' });
 
-    // 2) Pick the template for that property (prefer active + newest)
+    // 2) Property name
+    let propertyName = '';
+    {
+      const { data: prop, error: pErr } = await supabase
+        .from('properties')
+        .select('name')
+        .eq('id', turn.property_id)
+        .maybeSingle();
+      if (pErr) throw pErr;
+      propertyName = prop?.name || '';
+    }
+
+    // 3) Pick template (prefer active + newest)
     const { data: tpl, error: tplErr } = await supabase
       .from('property_templates')
       .select('id, name, property_id, rules_text, is_active, created_at')
@@ -33,7 +43,7 @@ export default async function handler(req, res) {
       .maybeSingle();
     if (tplErr) throw tplErr;
 
-    // 3) Load template shots (if a template exists)
+    // 4) Load shots
     let shots = [];
     if (tpl) {
       const { data: rawShots, error: sErr } = await supabase
@@ -44,17 +54,16 @@ export default async function handler(req, res) {
       if (sErr) throw sErr;
 
       shots = (rawShots || []).map(s => ({
-        shot_id: s.id, // stable ID for the client
+        shot_id: s.id,
         area_key: s.area_key || 'general',
         label: s.label || 'Photo',
-        // prefer min_count, otherwise treat "required" as 1
         min_count: Number.isFinite(s.min_count) ? s.min_count : (s.required ? 1 : 1),
         notes: s.notes || '',
         rules_text: s.rules_text || ''
       }));
     }
 
-    // 4) Fallback defaults when a property has no template/shots yet
+    // Fallback defaults
     if (shots.length === 0) {
       shots = [
         { shot_id: 'default-entry',   area_key: 'entry',    label: 'Entry - Overall',     min_count: 1 },
@@ -64,14 +73,15 @@ export default async function handler(req, res) {
     }
 
     const rules = {
-      property: '',             // (optional) property-level guidance if you ever add it
-      template: tpl?.name || '' // shown to the cleaner in the header
+      property: propertyName,           // <-- now set
+      template: tpl?.name || ''
     };
 
     return res.json({
       ok: true,
       turn_id: turn.id,
       property_id: turn.property_id,
+      property_name: propertyName,      // <-- helpful extra
       template_id: tpl?.id || null,
       rules,
       shots
