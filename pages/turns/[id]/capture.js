@@ -178,7 +178,7 @@ export default function Capture() {
             label: s.label,
             min_count: s.min_count || 1,
             notes: s.notes || '',
-            rules_text: s.rules_text || ''   // <-- keep shot-level rules so AI sees them
+            rules_text: s.rules_text || ''
           })));
         } else {
           setShots(DEFAULT_SHOTS);
@@ -210,7 +210,6 @@ export default function Capture() {
         continue;
       }
 
-      // Create a local preview URL so the card shows the image instantly
       const preview = URL.createObjectURL(f);
 
       const up = await fetch('/api/upload-url', {
@@ -246,8 +245,7 @@ export default function Capture() {
         if (f.preview) URL.revokeObjectURL(f.preview);
       });
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // -------- AI Pre-Check (local + OpenAI vision) — batched & progress --------
   async function runPrecheck() {
@@ -334,7 +332,6 @@ export default function Capture() {
             }
           } catch (e) {
             console.warn('vision batch failed', e);
-            // If a batch fails, we won't add the second half; that's okay since no results came back.
             continue;
           }
 
@@ -377,7 +374,6 @@ export default function Capture() {
       setAiFlags(prev => [ ...prev, ...localFlags, ...aiLines ]);
     } finally {
       setPrechecking(false);
-      // tiny delay so users can see 100%, then reset
       setTimeout(() => setScanProgress({ done: 0, total: 0 }), 600);
     }
   }
@@ -405,7 +401,6 @@ export default function Capture() {
         alert('Submit failed: ' + (err.error || resp.statusText));
         return;
       }
-      // after a successful submit:
       window.location.href = `/turns/${turnId}/done`;
     } finally {
       setTimeout(() => setSubmitting(false), 300);
@@ -431,27 +426,19 @@ export default function Capture() {
     <ChromeDark title="Start Taking Photos">
       <section style={ui.sectionGrid}>
         <div style={ui.card}>
-          <h2 style={{ textAlign:'center', margin:'0 0 4px' }}>Start Taking Photos</h2>
-{templateRules?.property ? (
-  <div style={{ textAlign:'center', color:'#94a3b8', fontSize:16, marginTop:4 }}>
-    {templateRules.property}
-  </div>
-) : null}
-{templateRules?.template ? (
-  <div style={{ textAlign:'center', color:'#64748b', fontSize:14, marginTop:6 }}>
-    Checklist: <b>{templateRules.template}</b>
-  </div>
-) : null}
+          {/* Sub-title: Property name (centered) */}
+          <h2 style={{ textAlign:'center', margin:'0 0 4px', color:'#fff', fontWeight:700 }}>
+            {templateRules?.property || ''}
+          </h2>
 
-
-          <div style={{ marginTop: 12, color: '#14532d', fontSize: 14 }}>
+          {/* Cleaner tips (white for readability) */}
+          <div style={{ marginTop: 12, color: '#fff', fontSize: 14 }}>
             ✅ Tap + inside the box to take a picture
           </div>
-          <div style={{ marginTop: 6, color: '#14532d', fontSize: 14 }}>
+          <div style={{ marginTop: 6, color: '#fff', fontSize: 14 }}>
             ✅ Run AI Pre-Check before submitting
           </div>
 
-      
           {/* Show Turn ID only if ?showId=1 is in the URL */}
           {typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('showId') === '1' && (
             <div style={{ color:'#94a3b8', fontSize: 12, marginTop: 6 }}>
