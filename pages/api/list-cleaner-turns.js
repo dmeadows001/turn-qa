@@ -15,15 +15,10 @@ function normPhone(raw = '') {
 }
 
 async function selectTurnsTolerant(cleanerId) {
-  const base = supa.from('turns');
-  const common = base
-    .eq('cleaner_id', cleanerId)
-    .order('created_at', { ascending: false })
-    .limit(200);
-
-  // 1) Try with needs_fix_at
-  try {
-    const { data, error } = await common.select(`
+  // --- Attempt WITH needs_fix_at ---
+  let resp = await supa
+    .from('turns')
+    .select(`
       id,
       status,
       created_at,
@@ -32,47 +27,59 @@ async function selectTurnsTolerant(cleanerId) {
       needs_fix_at,
       property_id,
       properties:properties ( name )
-    `);
-    if (error) throw error;
-    return (data || []).map(r => ({
-      id: r.id,
-      status: r.status || '',
-      created_at: r.created_at,
-      submitted_at: r.submitted_at,
-      approved_at: r.approved_at,
-      needs_fix_at: r.needs_fix_at ?? null,
-      property_id: r.property_id,
-      property_name: r.properties?.name || '(unnamed)',
-    }));
-  } catch (e) {
-    const msg = (e?.message || '').toLowerCase();
+    `)
+    .eq('cleaner_id', cleanerId)
+    .order('created_at', { ascending: false })
+    .limit(200);
+
+  if (resp.error) {
+    const msg = (resp.error.message || '').toLowerCase();
     const missingNeedsFix =
       msg.includes('column') && msg.includes('needs_fix_at') && msg.includes('does not exist');
 
-    if (!missingNeedsFix) throw e;
+    if (!missingNeedsFix) throw resp.error;
 
-    // 2) Fallback without needs_fix_at
-    const { data, error } = await common.select(`
-      id,
-      status,
-      created_at,
-      submitted_at,
-      approved_at,
-      property_id,
-      properties:properties ( name )
-    `);
-    if (error) throw error;
-    return (data || []).map(r => ({
+    // --- Fallback WITHOUT needs_fix_at ---
+    resp = await supa
+      .from('turns')
+      .select(`
+        id,
+        status,
+        created_at,
+        submitted_at,
+        approved_at,
+        property_id,
+        properties:properties ( name )
+      `)
+      .eq('cleaner_id', cleanerId)
+      .order('created_at', { ascending: false })
+      .limit(200);
+
+    if (resp.error) throw resp.error;
+
+    return (resp.data || []).map((r) => ({
       id: r.id,
       status: r.status || '',
       created_at: r.created_at,
       submitted_at: r.submitted_at,
       approved_at: r.approved_at,
-      needs_fix_at: null, // not in schema
+      needs_fix_at: null,
       property_id: r.property_id,
       property_name: r.properties?.name || '(unnamed)',
     }));
   }
+
+  // Success path (WITH needs_fix_at)
+  return (resp.data || []).map((r) => ({
+    id: r.id,
+    status: r.status || '',
+    created_at: r.created_at,
+    submitted_at: r.submitted_at,
+    approved_at: r.approved_at,
+    needs_fix_at: r.needs_fix_at ?? null,
+    property_id: r.property_id,
+    property_name: r.properties?.name || '(unnamed)',
+  }));
 }
 
 export default async function handler(req, res) {
