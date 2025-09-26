@@ -10,7 +10,7 @@ export default function TurnDone() {
   const [propertyName, setPropertyName] = useState('');
   const [phone, setPhone] = useState('');
 
-  // Try to pull property/checklist names (we already use this in capture)
+  // Pull property / checklist names so the cleaner sees context
   useEffect(() => {
     async function load() {
       if (!turnId) return;
@@ -31,7 +31,6 @@ export default function TurnDone() {
         const v = window.localStorage.getItem(k);
         if (v && typeof v === 'string' && v.trim()) {
           setPhone(v.trim());
-          // normalize/save into a single canonical key for future
           window.localStorage.setItem('turnqa_phone', v.trim());
           break;
         }
@@ -53,7 +52,10 @@ export default function TurnDone() {
           ) : null}
 
           <p style={{ ...ui.muted, marginTop:8 }}>
-            Your photos were sent to the manager. You’ll be notified when they approve or request fixes.
+            Your photos were sent to the manager. You’ll be notified if they approve or request fixes.
+          </p>
+          <p style={{ color:'#e5e7eb', marginTop:6 }}>
+            <b>Payment</b>: your pay will trigger <b>after manager approval</b>. You’ll receive an SMS when it’s approved.
           </p>
 
           <div style={{ display:'flex', gap:12, flexWrap:'wrap', marginTop:16 }}>
