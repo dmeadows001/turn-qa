@@ -1,68 +1,72 @@
 // pages/api/list-turn-photos.js
-import { supabaseAdmin } from '../../lib/supabase';
+import { createClient } from '@supabase/supabase-js';
 
-// Try to turn a full URL or a stored path into a bucket-relative path
-function toBucketPath(raw) {
-  if (!raw) return null;
+const supa = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY // server-side
+);
 
-  // If you stored just "turns/<id>/<file>.jpg" or "photos/turns/<id>/...":
-  if (!raw.startsWith('http')) {
-    return raw.startsWith('photos/') ? raw.slice('photos/'.length) : raw;
+// Helper: create a signed URL from a full storage path like "bucket/folder/file.jpg"
+async function signPath(fullPath, expires = 600) {
+  try {
+    if (!fullPath || typeof fullPath !== 'string' || !fullPath.includes('/')) return null;
+    const [bucket, ...rest] = fullPath.split('/');
+    const pathInBucket = rest.join('/');
+    const { data, error } = await supa.storage.from(bucket).createSignedUrl(pathInBucket, expires);
+    if (error) throw error;
+    return data?.signedUrl || null;
+  } catch {
+    return null;
   }
-
-  // If somehow a full URL was stored, try to strip to ".../object/<bucket>/<path>"
-  // Common patterns in Supabase signed URLs:
-  //   .../storage/v1/object/sign/photos/<path>?token=...
-  //   .../storage/v1/object/public/photos/<path>
-  const signMarker = '/object/sign/photos/';
-  const pubMarker  = '/object/public/photos/';
-  const i1 = raw.indexOf(signMarker);
-  const i2 = raw.indexOf(pubMarker);
-  if (i1 !== -1) return raw.substring(i1 + signMarker.length).split('?')[0];
-  if (i2 !== -1) return raw.substring(i2 + pubMarker.length).split('?')[0];
-
-  // Fallback: we can’t sign arbitrary external URLs
-  return null;
 }
 
 export default async function handler(req, res) {
   try {
-    const id = (req.query.id || '').trim();
-    if (!id) return res.status(400).json({ error: 'Missing id' });
+    const turnId = (req.query.id || '').trim();
+    if (!turnId) return res.status(400).json({ error: 'id (turnId) is required' });
 
-    // Select only columns we know exist in your table
-    const { data, error } = await supabaseAdmin
-      .from('photos')
-      .select('id, turn_id, area_key, url, created_at')
-      .eq('turn_id', id)
-      .order('created_at', { ascending: true });
+    // 1) Try the new table first
+    let rows = [];
+    {
+      const { data, error } = await supa
+        .from('turn_photos')
+        .select('id, turn_id, area_key, path, created_at')
+        .eq('turn_id', turnId)
+        .order('created_at', { ascending: true });
 
-    if (error) throw error;
-
-    const out = [];
-    for (const row of (data || [])) {
-      const bucketPath = toBucketPath(row.url);
-      if (!bucketPath) continue;
-
-      const { data: signed, error: signErr } = await supabaseAdmin
-        .storage
-        .from('photos') // bucket name
-        .createSignedUrl(bucketPath, 60 * 10); // 10 minutes
-
-      if (signErr) continue;
-
-      out.push({
-        id: row.id,
-        path: bucketPath,
-        area_key: row.area_key || null,
-        created_at: row.created_at,
-        signedUrl: signed?.signedUrl || null
-      });
+      if (error) throw error;
+      rows = data || [];
     }
 
-    res.status(200).json({ photos: out });
+    // 2) Fallback to legacy table if nothing found
+    if (!rows.length) {
+      const { data, error } = await supa
+        .from('photos') // legacy
+        .select('id, turn_id, area_key, path, created_at')
+        .eq('turn_id', turnId)
+        .order('created_at', { ascending: true });
+      if (error) throw error;
+      rows = data || [];
+    }
+
+    // 3) Sign each path
+    const photos = await Promise.all(
+      rows.map(async (r) => {
+        const signedUrl = await signPath(r.path);
+        return {
+          id: r.id,
+          turn_id: r.turn_id,
+          area_key: r.area_key || '',
+          path: r.path || '',
+          created_at: r.created_at,
+          signedUrl: signedUrl || '',
+        };
+      })
+    );
+
+    return res.json({ photos });
   } catch (e) {
-    console.error('list-turn-photos error:', e);
-    res.status(500).json({ error: e.message || 'failed' });
+    console.error('list-turn-photos error', e);
+    return res.status(500).json({ error: e.message || 'list-turn-photos failed' });
   }
 }
