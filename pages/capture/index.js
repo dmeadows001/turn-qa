@@ -1,307 +1,214 @@
 // pages/capture/index.js
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import ChromeDark from '../../components/ChromeDark';
 import { ui } from '../../lib/theme';
 
-// ---------- small helpers ----------
-function normalizePhone(s = '') {
-  const digits = (s || '').replace(/[^\d+]/g, '');
-  if (!digits) return '';
-  return digits.startsWith('+') ? digits : `+${digits}`;
-}
-function maskPhone(p) {
-  if (!p || p.length < 4) return p || '';
-  const last4 = p.slice(-4);
-  return `•• •• •• ${last4}`;
+function normPhone(s='') {
+  const only = (s || '').replace(/[^\d+]/g,'');
+  if (!only) return '';
+  if (only.startsWith('+')) return only;
+  if (/^\d{10}$/.test(only)) return `+1${only}`;
+  return `+${only}`;
 }
 
-// Try a few endpoints so we’re resilient to naming
-async function fetchCleanerProperties(phone) {
-  const qs = `?phone=${encodeURIComponent(phone)}`;
-  const candidates = [
-    `/api/cleaner/properties${qs}`,
-    `/api/properties-for-cleaner${qs}`,
-    `/api/capture/properties${qs}`,
-    `/api/cleaner/props${qs}`,
-  ];
-  for (const url of candidates) {
-    try {
-      const r = await fetch(url);
-      if (!r.ok) continue;
-      const j = await r.json().catch(() => ({}));
-      // Accept a few shapes:
-      if (Array.isArray(j.properties)) return j.properties;
-      if (Array.isArray(j.props)) return j.props;
-      if (Array.isArray(j.data)) return j.data;
-      if (Array.isArray(j)) return j;
-    } catch {}
-  }
-  return [];
-}
-
-// Create a turn; accept multiple shapes
-async function createTurn({ phone, property_id, notes }) {
-  const body = { phone, property_id, notes: notes || '' };
-  const endpoints = ['/api/start-turn', '/api/turns/start', '/api/turn/start'];
-  for (const url of endpoints) {
-    try {
-      const r = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) continue;
-      const id = j.turn_id || j.id || j.turn?.id;
-      if (id) return String(id);
-    } catch {}
-  }
-  throw new Error('Could not start a turn.');
-}
-
-export default function CaptureLanding() {
-  // Step 0: phone (pulled from localStorage if present)
-  const [phoneInput, setPhoneInput] = useState('');
-  const [knownPhone, setKnownPhone] = useState('');
-  const [otpSent, setOtpSent] = useState(false);
-  const [otpCode, setOtpCode] = useState('');
-  const [busySend, setBusySend] = useState(false);
-  const [busyVerify, setBusyVerify] = useState(false);
-
-  // Step 1: properties
-  const [loadingProps, setLoadingProps] = useState(false);
-  const [propsList, setPropsList] = useState([]);
-  const [propId, setPropId] = useState('');
-  const [notes, setNotes] = useState('');
-
-  // UX
-  const [err, setErr] = useState('');
+export default function CaptureHome() {
+  const [session, setSession] = useState(null); // { cleaner: { id, name, phone } } | null
+  const [loading, setLoading] = useState(true);
+  const [propsLoading, setPropsLoading] = useState(false);
+  const [propsErr, setPropsErr] = useState('');
+  const [list, setList] = useState([]); // properties { id, name }
+  const [selected, setSelected] = useState('');
+  const [note, setNote] = useState('');
   const [starting, setStarting] = useState(false);
 
-  // restore cached phone (from onboarding or previous visits)
-  useEffect(() => {
-    try {
-      const cached = localStorage.getItem('turnqa_cleaner_phone');
-      if (cached) {
-        setKnownPhone(cached);
-        setPhoneInput(cached);
-      }
-    } catch {}
-  }, []);
+  // OTP flow state (fallback)
+  const [phone, setPhone] = useState('');
+  const [code, setCode] = useState('');
+  const [otpStep, setOtpStep] = useState('phone'); // phone | code
+  const [otpBusy, setOtpBusy] = useState(false);
+  const [otpMsg, setOtpMsg] = useState('');
 
-  const effectivePhone = useMemo(() => {
-    return normalizePhone(knownPhone || phoneInput);
-  }, [knownPhone, phoneInput]);
-
-  // when we have a known phone, fetch properties
   useEffect(() => {
-    if (!effectivePhone) return;
     (async () => {
-      setErr('');
-      setLoadingProps(true);
       try {
-        const props = await fetchCleanerProperties(effectivePhone);
-        setPropsList(props || []);
-        // preselect if only one
-        if ((props || []).length === 1) {
-          const only = props[0];
-          setPropId(only?.id || only?.property_id || '');
+        const r = await fetch('/api/me/cleaner');
+        const j = await r.json();
+        if (r.ok && j?.cleaner) {
+          setSession(j);
         }
-      } catch (e) {
-        setErr(e.message || 'Could not load your properties.');
       } finally {
-        setLoadingProps(false);
+        setLoading(false);
       }
     })();
-  }, [effectivePhone]);
+  }, []);
 
-  // ------------- OTP flow (only if no known phone) -------------
-  async function sendCode(e) {
-    e?.preventDefault?.();
-    setErr('');
-    if (!phoneInput) return setErr('Enter your mobile number.');
+  useEffect(() => {
+    (async () => {
+      if (!session?.cleaner?.id) return;
+      setPropsLoading(true); setPropsErr('');
+      try {
+        const u = new URL('/api/list-my-properties', window.location.origin);
+        u.searchParams.set('cleaner_id', session.cleaner.id);
+        const r = await fetch(u.toString());
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || 'load failed');
+        setList(j.rows || []);
+        if ((j.rows || []).length) setSelected(j.rows[0].id);
+      } catch (e) {
+        setPropsErr(e.message || 'Failed to load properties');
+      } finally {
+        setPropsLoading(false);
+      }
+    })();
+  }, [session?.cleaner?.id]);
+
+  async function startTurn() {
+    if (!selected) return;
+    setStarting(true);
     try {
-      setBusySend(true);
-      const r = await fetch('/api/sms/otp-send', {
+      const r = await fetch('/api/start-turn', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone: normalizePhone(phoneInput), purpose: 'capture_login' }),
+        body: JSON.stringify({
+          phone: session?.cleaner?.phone || '',
+          property_id: selected,
+          notes: note || ''
+        })
       });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(j.error || 'Could not send code.');
-      setOtpSent(true);
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || 'start failed');
+      window.location.href = `/turns/${j.turn_id}/capture`;
     } catch (e) {
-      setErr(e.message || 'Could not send code.');
-    } finally {
-      setBusySend(false);
-    }
-  }
-
-  async function verifyCode(e) {
-    e?.preventDefault?.();
-    setErr('');
-    if (!otpCode || otpCode.length < 4) return setErr('Enter the 6-digit code.');
-    try {
-      setBusyVerify(true);
-      const r = await fetch('/api/sms/otp-verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone: normalizePhone(phoneInput), code: otpCode, purpose: 'capture_login' }),
-      });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(j.error || 'Could not verify code.');
-      // success: cache & promote to known phone
-      const normalized = normalizePhone(phoneInput);
-      try { localStorage.setItem('turnqa_cleaner_phone', normalized); } catch {}
-      setKnownPhone(normalized);
-      setOtpSent(false);
-      setOtpCode('');
-    } catch (e) {
-      setErr(e.message || 'Could not verify code.');
-    } finally {
-      setBusyVerify(false);
-    }
-  }
-
-  // ------------- Start capture -------------
-  async function startCapture(e) {
-    e?.preventDefault?.();
-    setErr('');
-    if (!effectivePhone) return setErr('Missing phone.');
-    if (!propId) return setErr('Select a property to continue.');
-    try {
-      setStarting(true);
-      const id = await createTurn({ phone: effectivePhone, property_id: propId, notes });
-      window.location.href = `/turns/${id}/capture`;
-    } catch (e) {
-      setErr(e.message || 'Could not start a turn.');
+      alert(e.message || 'Could not start a turn');
     } finally {
       setStarting(false);
     }
   }
 
-  // ------------------- UI -------------------
-  // We set title on the Chrome so we don’t double-render a second H1.
-  return (
-    <ChromeDark title="Start a Turn">
-      <div style={{ ...ui.card, maxWidth: 860 }}>
-        {/* PHONE / OTP */}
-        {!effectivePhone ? (
-          <>
-            <div style={{ fontSize: 18, fontWeight: 700, color: '#e2e8f0' }}>
-              Enter your phone to get a verification code.
-            </div>
+  // ---- OTP fallback (if no session) ----
+  async function otpSend() {
+    const p = normPhone(phone);
+    if (!p) { setOtpMsg('Enter a valid phone'); return; }
+    setOtpBusy(true); setOtpMsg('');
+    try {
+      const r = await fetch('/api/sms/otp-send', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: p })
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || 'Failed to send code');
+      try { localStorage.setItem('turnqa_phone', p); } catch {}
+      setOtpStep('code');
+    } catch (e) {
+      setOtpMsg(e.message);
+    } finally {
+      setOtpBusy(false);
+    }
+  }
 
-            <div style={{ marginTop: 10 }}>
-              <input
-                value={phoneInput}
-                onChange={e => setPhoneInput(e.target.value)}
-                placeholder="+15551234567"
-                inputMode="tel"
-                style={{ ...ui.input }}
-              />
-            </div>
+  async function otpVerify() {
+    const p = normPhone(phone);
+    if (!p || !code.trim()) { setOtpMsg('Enter the code'); return; }
+    setOtpBusy(true); setOtpMsg('');
+    try {
+      const r = await fetch('/api/sms/otp-verify', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: p, code: code.trim() })
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || 'Verify failed');
 
-            <div style={{ display: 'flex', gap: 10, marginTop: 12, flexWrap: 'wrap' }}>
-              <button onClick={sendCode} disabled={busySend || !phoneInput} style={ui.buttonPrimary}>
-                {busySend ? 'Sending…' : 'Text me a code'}
-              </button>
-              {otpSent && <div style={{ alignSelf: 'center', color:'#9ca3af', fontSize: 13 }}>Code sent. Check your SMS.</div>}
-            </div>
+      // set session cookie
+      await fetch('/api/session/login-by-phone', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ phone: p })
+      });
 
-            {otpSent && (
-              <div style={{ marginTop: 12 }}>
-                <div style={{ fontSize: 13, fontWeight: 700, color: '#94a3b8', marginBottom: 6 }}>Enter the 6-digit code</div>
-                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-                  <input
-                    value={otpCode}
-                    onChange={e => setOtpCode(e.target.value)}
-                    placeholder="123456"
-                    inputMode="numeric"
-                    maxLength={6}
-                    style={{ ...ui.input, width: 200 }}
-                  />
-                  <button onClick={verifyCode} disabled={busyVerify || !otpCode} style={ui.buttonSecondary}>
-                    {busyVerify ? 'Verifying…' : 'Verify'}
-                  </button>
-                </div>
-              </div>
-            )}
-          </>
-        ) : (
-          <>
-            {/* KNOWN PHONE HEADER */}
-            <div style={{ color:'#cbd5e1' }}>
-              Signed in as <b>{maskPhone(effectivePhone)}</b>
-              <button
-                onClick={() => { try { localStorage.removeItem('turnqa_cleaner_phone'); } catch {} ; setKnownPhone(''); }}
-                style={{ marginLeft: 10, ...ui.linkButton }}
-                aria-label="Use a different phone"
-              >
-                use different phone
-              </button>
-            </div>
+      // get session -> then load properties
+      const me = await fetch('/api/me/cleaner').then(r=>r.json()).catch(()=>null);
+      if (me?.cleaner) setSession(me);
+    } catch (e) {
+      setOtpMsg(e.message);
+    } finally {
+      setOtpBusy(false);
+    }
+  }
 
-            {/* PROPERTIES */}
-            <div style={{ marginTop: 16 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color:'#94a3b8', marginBottom: 6 }}>Select the property</div>
-              {loadingProps ? (
-                <div style={{ color:'#9ca3af' }}>Loading your properties…</div>
-              ) : propsList.length === 0 ? (
-                <div style={{ color:'#fca5a5' }}>
-                  We couldn’t find any properties for your phone. Ask your manager to assign you, or paste the property ID:
-                  <input
-                    value={propId}
-                    onChange={e=>setPropId(e.target.value)}
-                    placeholder="property-id"
-                    style={{ ...ui.input, marginTop: 8 }}
-                  />
-                </div>
-              ) : (
-                <select
-                  value={propId}
-                  onChange={e => setPropId(e.target.value)}
-                  style={{ ...ui.input }}
-                >
-                  <option value="">— Select —</option>
-                  {propsList.map(p => {
-                    const id = p.id || p.property_id;
-                    const name = p.name || p.property_name || id;
-                    return <option key={id} value={id}>{name}</option>;
-                  })}
+  if (loading) {
+    return (
+      <ChromeDark title="Start a turn">
+        <section style={ui.sectionGrid}><div style={ui.card}>Loading…</div></section>
+      </ChromeDark>
+    );
+  }
+
+  // --- Authenticated (session) path ---
+  if (session?.cleaner) {
+    return (
+      <ChromeDark title="Start a turn">
+        <section style={ui.sectionGrid}>
+          <div style={ui.card}>
+            <h2 style={{ marginTop:0, textAlign:'center' }}>Start a new turn</h2>
+            <p style={{ ...ui.muted, textAlign:'center' }}>
+              Welcome back <b>{session.cleaner.phone}</b>. Choose a property to begin.
+            </p>
+
+            {propsErr && <div style={{ color:'#fca5a5', marginBottom:8 }}>{propsErr}</div>}
+
+            <div style={{ display:'grid', gridTemplateColumns:'1fr', gap:10, marginTop:12 }}>
+              <div>
+                <div style={ui.label}>Property</div>
+                <select value={selected} onChange={e=>setSelected(e.target.value)} style={{ ...ui.input, background:'#0b1220' }}>
+                  {list.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
-              )}
-            </div>
-
-            {/* OPTIONAL NOTES */}
-            <div style={{ marginTop: 14 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color:'#94a3b8', marginBottom: 6 }}>
-                Notes (optional — e.g., “extra attention to patio”)
               </div>
-              <textarea
-                value={notes}
-                onChange={e=>setNotes(e.target.value)}
-                rows={3}
-                style={{ ...ui.textarea }}
-              />
+              <div>
+                <div style={ui.label}>Optional note</div>
+                <input value={note} onChange={e=>setNote(e.target.value)} placeholder="Anything your manager should know…" style={ui.input}/>
+              </div>
+              <div>
+                <button onClick={startTurn} disabled={!selected || starting || propsLoading} style={ui.btnPrimary}>
+                  {starting ? 'Starting…' : 'Start capture'}
+                </button>
+              </div>
             </div>
+          </div>
+        </section>
+      </ChromeDark>
+    );
+  }
 
-            {/* ACTIONS */}
-            <div style={{ display:'flex', gap:10, marginTop: 16, flexWrap:'wrap' }}>
-              <button
-                onClick={startCapture}
-                disabled={starting || !propId}
-                style={ui.buttonPrimary}
-              >
-                {starting ? 'Starting…' : 'Start capture'}
-              </button>
-              <a href="/" style={{ ...ui.buttonLink }}>Back home</a>
-            </div>
-          </>
-        )}
-
-        {err && <div style={{ marginTop: 12, color:'#fca5a5' }}>{err}</div>}
-      </div>
+  // --- Fallback: OTP login ---
+  return (
+    <ChromeDark title="Verify to start">
+      <section style={ui.sectionGrid}>
+        <div style={ui.card}>
+          {otpStep === 'phone' && (
+            <>
+              <h2 style={{ marginTop:0, textAlign:'center' }}>Verify your phone</h2>
+              <div style={{ marginTop:12, display:'grid', gridTemplateColumns:'1fr auto', gap:8 }}>
+                <input value={phone} onChange={e=>setPhone(e.target.value)} placeholder="+1 555 123 4567" style={ui.input}/>
+                <button onClick={otpSend} disabled={otpBusy} style={ui.btnPrimary}>
+                  {otpBusy ? 'Sending…' : 'Text me a code'}
+                </button>
+              </div>
+              {otpMsg && <div style={{ color:'#fca5a5', marginTop:10 }}>{otpMsg}</div>}
+            </>
+          )}
+          {otpStep === 'code' && (
+            <>
+              <h2 style={{ marginTop:0, textAlign:'center' }}>Enter the code</h2>
+              <div style={{ marginTop:12, display:'grid', gridTemplateColumns:'1fr auto', gap:8 }}>
+                <input value={code} onChange={e=>setCode(e.target.value)} placeholder="123456" style={ui.input}/>
+                <button onClick={otpVerify} disabled={otpBusy} style={ui.btnPrimary}>
+                  {otpBusy ? 'Verifying…' : 'Verify & continue'}
+                </button>
+              </div>
+              {otpMsg && <div style={{ color:'#fca5a5', marginTop:10 }}>{otpMsg}</div>}
+            </>
+          )}
+        </div>
+      </section>
     </ChromeDark>
   );
 }
