@@ -49,6 +49,7 @@ async function selectTurnsTolerant(cleanerId) {
         submitted_at,
         approved_at,
         property_id,
+        manager_notes,
         properties:properties ( name )
       `)
       .eq('cleaner_id', cleanerId)
