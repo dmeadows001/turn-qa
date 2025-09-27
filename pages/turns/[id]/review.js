@@ -147,6 +147,22 @@ export default function Review() {
             </div>
           )}
 
+          {/* Cleaner-facing manager note (shown only when Needs Fix + note exists) */}
+          {!isManagerMode && (status === 'needs_fix') && (managerNote?.trim()) && (
+            <div style={{
+              marginTop: 12,
+              padding: '10px 12px',
+              background: '#fff7ed',
+              border: '1px solid #fed7aa',
+              color: '#7c2d12',
+              borderRadius: 10,
+              fontSize: 14
+            }}>
+              <div style={{ fontWeight: 700, marginBottom: 6 }}>Manager note</div>
+              <div>{managerNote}</div>
+            </div>
+          )}
+
           {/* ---- Manager Action Bar (hidden unless ?manager=1) ---- */}
           {isManagerMode && (
             <div style={{
