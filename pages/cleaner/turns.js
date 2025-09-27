@@ -39,13 +39,19 @@ function niceDate(s) {
 
 function payoutText(row) {
   const s = (row.status || '').toLowerCase();
+  ifunction payoutText(row) {
+  const s = (row.status || '').toLowerCase();
   if (s === 'approved') {
     return row.approved_at
       ? `Approved ${niceDate(row.approved_at)} — payout will be/was sent by your manager`
       : 'Approved — payout will be/was sent by your manager';
   }
   if (s === 'submitted') return 'Pending — waiting on manager review';
-  if (s === 'needs_fix') return 'On hold — manager requested fixes';
+  if (s === 'needs_fix') {
+    return row.manager_notes
+      ? `On hold — manager requested fixes: “${row.manager_notes}”`
+      : 'On hold — manager requested fixes';
+  }
   if (s === 'in_progress') return 'Not submitted yet';
   return '—';
 }
