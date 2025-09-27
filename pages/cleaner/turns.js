@@ -4,6 +4,36 @@ import { useRouter } from 'next/router';
 import ChromeDark from '../../components/ChromeDark';
 import { ui } from '../../lib/theme';
 
+function statusPill(s) {
+  const map = {
+    approved:   { bg: '#dcfce7', fg: '#166534', text: 'Approved' },
+    submitted:  { bg: '#dbeafe', fg: '#1e40af', text: 'Submitted' },
+    needs_fix:  { bg: '#fef3c7', fg: '#92400e', text: 'Needs Fix' },
+    in_progress:{ bg: '#e2e8f0', fg: '#334155', text: 'In progress' },
+    cancelled:  { bg: '#fee2e2', fg: '#991b1b', text: 'Cancelled' },
+  };
+  const c = map[s] || { bg: '#f1f5f9', fg: '#334155', text: s || '—' };
+  return (
+    <span
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        padding: '4px 10px',
+        borderRadius: 999,
+        fontSize: 12,
+        fontWeight: 700,
+        lineHeight: 1,
+        whiteSpace: 'nowrap',    // <- keeps “In progress” on one line
+        background: c.bg,
+        color: c.fg,
+      }}
+    >
+      {c.text}
+    </span>
+  );
+}
+
+
 function niceDate(s) {
   try { return new Date(s).toLocaleString(); } catch { return s || '—'; }
 }
