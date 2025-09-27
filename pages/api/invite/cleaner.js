@@ -1,161 +1,142 @@
 // pages/api/invite/cleaner.js
 import { createClient } from '@supabase/supabase-js';
 
-// ---- Supabase (service role so RLS doesn't block server reads/writes) ----
-function supabaseAdmin() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  return createClient(url, key, { auth: { persistSession: false } });
+const supa = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY
+);
+
+// --- helpers ---
+function normPhone(raw = '') {
+  const only = (raw || '').replace(/[^\d+]/g, '');
+  if (!only) return '';
+  if (only.startsWith('+')) return only;
+  if (/^\d{10}$/.test(only)) return `+1${only}`;
+  return `+${only}`;
 }
 
-// Normalize phone to E.164-like format we accept
-function normalizePhone(s = '') {
-  const digits = (s || '').replace(/[^\d+]/g, '');
-  if (!digits) return '';
-  return digits.startsWith('+') ? digits : `+${digits}`;
+function getSiteUrl(req) {
+  // Prefer explicit env if you have it set in Vercel
+  if (process.env.NEXT_PUBLIC_SITE_URL) return process.env.NEXT_PUBLIC_SITE_URL;
+  // Fallback to request host (Vercel/Prod)
+  const host = req.headers['x-forwarded-host'] || req.headers.host || '';
+  const proto = (req.headers['x-forwarded-proto'] || 'https').toString();
+  return `${proto}://${host}`;
 }
 
-function absoluteOrigin(req) {
-  const proto = req.headers['x-forwarded-proto'] || 'https';
-  const host  = req.headers['x-forwarded-host'] || req.headers.host;
-  return process.env.SITE_URL || `${proto}://${host}`;
+function getTwilioClient() {
+  const sid = process.env.TWILIO_ACCOUNT_SID;
+  const token = process.env.TWILIO_AUTH_TOKEN;
+  if (!sid || !token) return null;
+  try {
+    // eslint-disable-next-line global-require
+    const twilio = require('twilio');
+    return twilio(sid, token);
+  } catch {
+    return null;
+  }
 }
 
+async function sendInviteSMS({ to, body }) {
+  const client = getTwilioClient();
+  if (!client) return { ok: false, reason: 'twilio_not_configured' };
+
+  const messagingServiceSid = process.env.TWILIO_MESSAGING_SERVICE_SID || '';
+  const from = process.env.TWILIO_FROM_NUMBER || '';
+
+  const msg = {
+    to,
+    body,
+    ...(messagingServiceSid ? { messagingServiceSid } : from ? { from } : {})
+  };
+
+  if (!msg.messagingServiceSid && !msg.from) {
+    return { ok: false, reason: 'sender_not_configured' };
+  }
+
+  try {
+    const resp = await client.messages.create(msg);
+    return { ok: true, sid: resp.sid };
+  } catch (e) {
+    return { ok: false, reason: e?.message || 'send_failed' };
+  }
+}
+
+// --- handler ---
 export default async function handler(req, res) {
-  const supabase = supabaseAdmin();
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
 
-  // ------- GET: return invite details for onboard/cleaner?id=... -------
-  if (req.method === 'GET') {
-    try {
-      const id = req.query?.id;
-      if (!id) return res.status(400).json({ error: 'id required' });
+  try {
+    const { property_id, phone: rawPhone, name: rawName } = req.body || {};
+    const phone = normPhone(String(rawPhone || ''));
+    const name = (rawName || '').toString().trim();
 
-      const { data: inv, error } = await supabase
-        .from('cleaner_invites')
-        .select('id, name, phone, property_id, cleaner_id, accepted_at, created_at')
-        .eq('id', id)
-        .maybeSingle();
+    if (!property_id) return res.status(400).json({ error: 'property_id required' });
+    if (!phone) return res.status(400).json({ error: 'valid phone required' });
 
-      if (error) throw error;
-      if (!inv) return res.status(404).json({ error: 'invite not found' });
+    // 1) Ensure the property exists (optional safety)
+    const { data: prop, error: pErr } = await supa
+      .from('properties')
+      .select('id, name')
+      .eq('id', property_id)
+      .maybeSingle();
+    if (pErr) throw pErr;
+    if (!prop) return res.status(404).json({ error: 'property not found' });
 
-      let property_name = '';
-      if (inv.property_id) {
-        const { data: prop } = await supabase
-          .from('properties')
-          .select('name')
-          .eq('id', inv.property_id)
-          .maybeSingle();
-        property_name = prop?.name || '';
-      }
+    // 2) Find or create the cleaner by phone
+    let { data: cleaner, error: cErr } = await supa
+      .from('cleaners')
+      .select('id, phone, name, sms_consent')
+      .eq('phone', phone)
+      .maybeSingle();
+    if (cErr) throw cErr;
 
-      return res.status(200).json({
-        invite: {
-          id: inv.id,
-          name: inv.name || '',
-          phone: normalizePhone(inv.phone || ''),
-          property_id: inv.property_id || null,
-          property_name,
-          cleaner_id: inv.cleaner_id || null,
-          accepted_at: inv.accepted_at || null,
-          created_at: inv.created_at || null,
-        },
-      });
-    } catch (e) {
-      return res.status(500).json({ error: e.message || 'get failed' });
+    if (!cleaner) {
+      const { data: created, error: iErr } = await supa
+        .from('cleaners')
+        .insert({ phone, name: name || null, sms_consent: null })
+        .select('id, phone, name, sms_consent')
+        .single();
+      if (iErr) throw iErr;
+      cleaner = created;
+    } else if (name && !cleaner.name) {
+      // tiny enhancement: backfill a name if we were just given one
+      await supa.from('cleaners').update({ name }).eq('id', cleaner.id).limit(1);
     }
-  }
 
-  // ------- POST: create/upsert invite and (optionally) send SMS -------
-  if (req.method === 'POST') {
+    // 3) Link cleaner to property so it appears in their /capture dropdown
+    // Requires a unique constraint on (property_id, cleaner_id) or will allow duplicates.
+    // If you don't have it:
+    //   create unique index if not exists ux_property_cleaners
+    //     on property_cleaners(property_id, cleaner_id);
+    let linked = false;
     try {
-      const { property_id, name, phone } = req.body || {};
-      if (!property_id || !phone) {
-        return res.status(400).json({ error: 'property_id and phone are required' });
-      }
-      const normPhone = normalizePhone(phone);
-
-      // 1) Find or create the cleaner row by phone (and optional name)
-      let cleanerId = null;
-
-      // Try by phone first
-      {
-        const { data: found } = await supabase
-          .from('cleaners')
-          .select('id')
-          .eq('phone', normPhone)
-          .maybeSingle();
-        if (found?.id) cleanerId = found.id;
-      }
-
-      // If not found, insert minimal cleaner record
-      if (!cleanerId) {
-        const toInsert = {
-          name: name || '',
-          phone: normPhone,
-        };
-        const { data: created, error: cErr } = await supabase
-          .from('cleaners')
-          .insert(toInsert)
-          .select('id')
-          .maybeSingle();
-        if (cErr) {
-          // If a concurrent create happened, try to reselect
-          const { data: retry } = await supabase
-            .from('cleaners')
-            .select('id')
-            .eq('phone', normPhone)
-            .maybeSingle();
-          if (!retry?.id) throw cErr;
-          cleanerId = retry.id;
-        } else {
-          cleanerId = created?.id;
-        }
-      }
-
-      if (!cleanerId) {
-        throw new Error('Could not resolve cleaner_id for phone');
-      }
-
-      // 2) Upsert the invite with cleaner_id (matches unique index on property_id,phone)
-      const { data: up, error: upErr } = await supabase
-        .from('cleaner_invites')
-        .upsert(
-          { property_id, name: name || '', phone: normPhone, cleaner_id: cleanerId },
-          { onConflict: 'property_id,phone' }
-        )
-        .select('id')
-        .maybeSingle();
-      if (upErr) throw upErr;
-
-      const inviteId = up?.id;
-      if (!inviteId) throw new Error('could not upsert invite');
-
-      // 3) Build absolute link
-      const origin = absoluteOrigin(req);
-      const link = `${origin}/onboard/cleaner?id=${inviteId}`;
-
-      // 4) Send SMS if Twilio is configured; otherwise just return the link
-      const sid   = process.env.TWILIO_ACCOUNT_SID;
-      const token = process.env.TWILIO_AUTH_TOKEN;
-      const from  = process.env.TWILIO_FROM_NUMBER;
-      const svc   = process.env.TWILIO_MESSAGING_SERVICE_SID;
-
-      if (sid && token && (from || svc)) {
-        const twilio = require('twilio')(sid, token);
-        const params = {
-          to: normPhone,
-          body: `TurnQA: Your onboarding link: ${link}`,
-        };
-        if (svc) params.messagingServiceSid = svc; else params.from = from;
-        await twilio.messages.create(params);
-      }
-
-      return res.status(200).json({ ok: true, inviteId, link, cleaner_id: cleanerId });
-    } catch (e) {
-      return res.status(500).json({ error: e.message || 'post failed' });
+      const { data: link, error: lErr } = await supa
+        .from('property_cleaners')
+        .insert({ property_id, cleaner_id: cleaner.id })
+        .select('property_id, cleaner_id')
+        .single();
+      if (lErr && !String(lErr.message || '').toLowerCase().includes('duplicate')) throw lErr;
+      linked = true;
+    } catch {
+      // if duplicate constraint exists, we ignore duplicates
+      linked = true;
     }
-  }
 
-  return res.status(405).json({ error: 'Method Not Allowed' });
+    // 4) SMS the cleaner a short invite (no invite-id needed; new flow uses /capture)
+    const site = getSiteUrl(req);
+    const shortBody = `TurnQA: You’ve been added to ${prop.name || 'a property'}. Start your turn at ${site}/capture (Reply STOP to opt out)`;
+
+    const sms = await sendInviteSMS({ to: phone, body: shortBody });
+
+    return res.json({
+      ok: true,
+      cleaner_id: cleaner.id,
+      property_id,
+      linked,
+      sms
+    });
+  } catch (e) {
+    return res.status(500).json({ error: e.message || 'invite failed' });
+  }
 }
