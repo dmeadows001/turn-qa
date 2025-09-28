@@ -49,10 +49,18 @@ export default function Review() {
   const router = useRouter();
   const turnId = router.query.id;
 
-  // Guard: show manager tools only when ?manager=1
-  const isManagerMode =
-    typeof window !== 'undefined' &&
-    new URLSearchParams(window.location.search).get('manager') === '1';
+  // Determine context from query
+  const isBrowser = typeof window !== 'undefined';
+  const qs = isBrowser ? new URLSearchParams(window.location.search) : null;
+  const isManagerMode = qs?.get('manager') === '1';
+  const from = qs?.get('from') || '';           // optional, e.g. 'cleaner'
+  const phone = qs?.get('phone') || '';         // optional, so we can prefill back link
+
+  // Compute back link target + label
+  const backHref = isManagerMode
+    ? '/managers/turns'
+    : (phone ? `/cleaner/turns?phone=${encodeURIComponent(phone)}` : '/cleaner/turns');
+  const backLabel = isManagerMode ? '← Back to turns' : '← Back to my turns';
 
   const [turn, setTurn] = useState(null);
   const [status, setStatus] = useState(null);
@@ -123,7 +131,7 @@ export default function Review() {
         {/* Header / Meta */}
         <div style={ui.card}>
           <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:12, flexWrap:'wrap' }}>
-            <a href="/managers/turns" style={{ ...ui.btnSecondary, textDecoration:'none' }}>← Back to turns</a>
+            <a href={backHref} style={{ ...ui.btnSecondary, textDecoration:'none' }}>{backLabel}</a>
             <div style={{ fontSize:12, color:'#94a3b8' }}>
               Turn ID: <code style={{ userSelect:'all' }}>{turnId}</code>
             </div>
@@ -143,23 +151,7 @@ export default function Review() {
               background:'#0b1220', border:'1px solid #334155', borderRadius:10,
               color:'#cbd5e1', fontSize:13
             }}>
-              Read-only view. Manager controls hidden. Append <code>?manager=1</code> to the URL to enable actions.
-            </div>
-          )}
-
-          {/* Cleaner-facing manager note (shown only when Needs Fix + note exists) */}
-          {!isManagerMode && (status === 'needs_fix') && (managerNote?.trim()) && (
-            <div style={{
-              marginTop: 12,
-              padding: '10px 12px',
-              background: '#fff7ed',
-              border: '1px solid #fed7aa',
-              color: '#7c2d12',
-              borderRadius: 10,
-              fontSize: 14
-            }}>
-              <div style={{ fontWeight: 700, marginBottom: 6 }}>Manager note</div>
-              <div>{managerNote}</div>
+              Read-only view. Manager controls hidden.
             </div>
           )}
 
