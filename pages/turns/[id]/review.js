@@ -1,6 +1,6 @@
 // pages/turns/[id]/review.js
 import { useRouter } from 'next/router';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import ChromeDark from '../../../components/ChromeDark';
 import { ui } from '../../../lib/theme';
 
@@ -38,7 +38,6 @@ function badgeStyle(status) {
   };
 }
 
-// simple uploader like capture.js uses
 async function getDims(file) {
   return await new Promise((resolve, reject) => {
     const img = new Image();
@@ -81,7 +80,7 @@ export default function Review() {
         setTurn(t);
         setStatus(t?.status || 'in_progress');
         setManagerNote(t?.manager_notes || '');
-        setReply(''); // fresh each load
+        setReply('');
         const ph = await fetchPhotos(turnId);
         setPhotos(ph);
       } catch (e) {
@@ -92,15 +91,18 @@ export default function Review() {
     })();
   }, [turnId]);
 
-  const uniqueAreas = useMemo(() => {
+  // derive unique areas without hooks (prevents hook-order issues)
+  const uniqueAreas = (() => {
     const set = new Set((photos || []).map(p => p.area_key).filter(Boolean));
     const arr = Array.from(set);
     return arr.length ? arr : ['general'];
-  }, [photos]);
+  })();
 
-  useEffect(() => {
-    if (!newArea && uniqueAreas.length) setNewArea(uniqueAreas[0]);
-  }, [uniqueAreas, newArea]);
+  if (!newArea && uniqueAreas.length) {
+    // set default area on first render after photos load
+    // (guarded so we don’t set state during render loops)
+    setTimeout(() => { if (!newArea) setNewArea(uniqueAreas[0]); }, 0);
+  }
 
   async function mark(newStatus) {
     if (!turnId) return;
@@ -171,7 +173,6 @@ export default function Review() {
       alert('Re-submitted for approval. Your manager will be notified.');
       setStaged([]);
       setReply('');
-      // refresh turn + photos + status
       const t = await fetchTurn(turnId);
       setTurn(t);
       setStatus(t?.status || 'submitted');
@@ -182,6 +183,8 @@ export default function Review() {
     }
   }
 
+  const showCleanerFixPanel = !isManagerMode && (status === 'needs_fix' || status === 'in_progress');
+
   if (!turnId) {
     return (
       <ChromeDark title="Turn Review">
@@ -190,11 +193,16 @@ export default function Review() {
     );
   }
 
-  const showCleanerFixPanel = !isManagerMode && (status === 'needs_fix' || status === 'in_progress');
-
   return (
     <ChromeDark title="Turn Review">
       <section style={ui.sectionGrid}>
+        {/* Error banner instead of silent white screen */}
+        {loadErr && (
+          <div style={{ ...ui.card, border:'1px solid #7f1d1d', background:'#450a0a', color:'#fecaca' }}>
+            <b>Failed to load:</b> {loadErr}
+          </div>
+        )}
+
         {/* Header / Meta */}
         <div style={ui.card}>
           <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:12, flexWrap:'wrap' }}>
@@ -216,7 +224,7 @@ export default function Review() {
             </span>
           </h2>
 
-          {/* Manager note visibility for cleaners */}
+          {/* Manager note visible to cleaners */}
           {!isManagerMode && turn?.manager_notes && (
             <div style={{
               marginTop: 8, padding: '10px 12px',
@@ -234,7 +242,6 @@ export default function Review() {
               <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
                 <div style={{ fontWeight:700 }}>Status:</div>
                 <span style={badgeStyle(status)}>{status || '—'}</span>
-                {loadErr && <span style={{ color:'#fca5a5' }}>({loadErr})</span>}
               </div>
 
               <div style={{ marginTop:10 }}>
@@ -357,13 +364,14 @@ export default function Review() {
           )}
         </div>
 
-        {useMemo(() => {
+        {/* Areas footer (no hooks) */}
+        {(() => {
           const set = new Set((photos || []).map(p => p.area_key).filter(Boolean));
           const arr = Array.from(set);
           return (arr.length > 1) ? (
             <div style={{ ...ui.subtle }}>Areas in this turn: {arr.join(' • ')}</div>
           ) : null;
-        }, [photos])}
+        })()}
       </section>
     </ChromeDark>
   );
