@@ -32,23 +32,13 @@ function badgeStyle(status) {
     in_progress:{ bg:'#1f2937', fg:'#cbd5e1', bd:'#334155' }
   };
   const c = map[status] || { bg:'#1f2937', fg:'#cbd5e1', bd:'#334155' };
-  return {
-    background: c.bg,
-    color: c.fg,
-    border: `1px solid ${c.bd}`,
-    padding:'2px 8px',
-    borderRadius: 999,
-    fontSize:12,
-    fontWeight:700,
-    display:'inline-block'
-  };
+  return { background:c.bg, color:c.fg, border:`1px solid ${c.bd}`, padding:'2px 8px', borderRadius:999, fontSize:12, fontWeight:700, display:'inline-block' };
 }
 
 export default function Review() {
   const router = useRouter();
   const turnId = router.query.id;
 
-  // Context from query
   const isBrowser = typeof window !== 'undefined';
   const qs = isBrowser ? new URLSearchParams(window.location.search) : null;
   const isManagerMode = qs?.get('manager') === '1';
@@ -66,6 +56,10 @@ export default function Review() {
   const [loadErr, setLoadErr] = useState('');
   const [managerNote, setManagerNote] = useState('');
   const [acting, setActing] = useState(false);
+
+  // cleaner reply + resubmit state
+  const [reply, setReply] = useState('');
+  const [resubmitting, setResubmitting] = useState(false);
 
   useEffect(() => {
     if (!turnId) return;
@@ -104,12 +98,31 @@ export default function Review() {
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error || 'update failed');
       setStatus(newStatus);
-      // Note stays in state; on refresh it will be loaded from DB
       alert(newStatus === 'approved' ? 'Turn approved ✅' : 'Marked Needs Fix. Cleaners will see this.');
     } catch (e) {
       alert(e.message || 'Could not update status.');
     } finally {
       setActing(false);
+    }
+  }
+
+  async function resubmit() {
+    if (!turnId) return;
+    setResubmitting(true);
+    try {
+      const r = await fetch('/api/resubmit-turn', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ turn_id: turnId, cleaner_message: reply || '' })
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || 'resubmit failed');
+      setStatus('submitted');
+      alert('Resubmitted for approval. Your manager has been notified.');
+    } catch (e) {
+      alert(e.message || 'Could not resubmit.');
+    } finally {
+      setResubmitting(false);
     }
   }
 
@@ -142,41 +155,57 @@ export default function Review() {
             </span>
           </h2>
 
-          {/* Cleaner notice */}
+          {/* Cleaner (read-only) notice */}
           {!isManagerMode && (
-            <div style={{
-              marginTop: 8, padding: '8px 10px',
-              background:'#0b1220', border:'1px solid #334155', borderRadius:10,
-              color:'#cbd5e1', fontSize:13
-            }}>
+            <div style={{ marginTop:8, padding:'8px 10px', background:'#0b1220', border:'1px solid #334155', borderRadius:10, color:'#cbd5e1', fontSize:13 }}>
               Read-only view. Manager controls hidden.
             </div>
           )}
 
           {/* Manager note visible to cleaners */}
           {!isManagerMode && (turn?.manager_notes?.trim()) && (
-            <div style={{
-              marginTop:10,
-              padding:'10px 12px',
-              border:'1px solid #334155',
-              background:'#0f172a',
-              borderRadius:10,
-              color:'#e5e7eb'
-            }}>
+            <div style={{ marginTop:10, padding:'10px 12px', border:'1px solid #334155', background:'#0f172a', borderRadius:10, color:'#e5e7eb' }}>
               <div style={{ fontWeight:700, marginBottom:4 }}>Manager notes</div>
               <div style={{ whiteSpace:'pre-wrap' }}>{turn.manager_notes}</div>
             </div>
           )}
 
+          {/* Cleaner "fixes done" panel when in needs_fix */}
+          {!isManagerMode && status === 'needs_fix' && (
+            <div style={{ marginTop:12, padding:12, border:'1px solid #334155', borderRadius:12, background:'#0f172a' }}>
+              <div style={{ fontWeight:700, marginBottom:6, color:'#e5e7eb' }}>Make fixes, then resubmit for approval</div>
+              <div style={{ display:'flex', gap:8, flexWrap:'wrap', alignItems:'center' }}>
+                <a
+                  href={`/turns/${turnId}/capture`}
+                  style={{ ...ui.btnSecondary, textDecoration:'none' }}
+                  title="Add more photos to this turn"
+                >
+                  ➕ Add photos
+                </a>
+              </div>
+              <div style={{ marginTop:10 }}>
+                <div style={{ fontSize:12, fontWeight:700, color:'#9ca3af', marginBottom:6 }}>
+                  Optional note back to your manager
+                </div>
+                <textarea
+                  value={reply}
+                  onChange={e=>setReply(e.target.value)}
+                  rows={3}
+                  placeholder="e.g., Re-took the kitchen counter photos as requested"
+                  style={{ ...ui.input, width:'100%', padding:'10px 12px', resize:'vertical', background:'#0b1220' }}
+                />
+              </div>
+              <div style={{ display:'flex', gap:10, marginTop:12, flexWrap:'wrap' }}>
+                <button onClick={resubmit} disabled={resubmitting} style={ui.btnPrimary}>
+                  {resubmitting ? 'Resubmitting…' : 'Resubmit for approval'}
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* ---- Manager Action Bar (hidden unless ?manager=1) ---- */}
           {isManagerMode && (
-            <div style={{
-              margin:'12px 0 6px',
-              padding:12,
-              border:'1px solid #334155',
-              borderRadius:12,
-              background:'#0f172a'
-            }}>
+            <div style={{ margin:'12px 0 6px', padding:12, border:'1px solid #334155', borderRadius:12, background:'#0f172a' }}>
               <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
                 <div style={{ fontWeight:700 }}>Status:</div>
                 <span style={badgeStyle(status)}>{status || '—'}</span>
@@ -192,13 +221,7 @@ export default function Review() {
                   onChange={e=>setManagerNote(e.target.value)}
                   rows={3}
                   placeholder="Short note the cleaner can see…"
-                  style={{
-                    ...ui.input,
-                    width:'100%',
-                    padding:'10px 12px',
-                    resize:'vertical',
-                    background:'#0b1220'
-                  }}
+                  style={{ ...ui.input, width:'100%', padding:'10px 12px', resize:'vertical', background:'#0b1220' }}
                 />
               </div>
 
@@ -206,12 +229,7 @@ export default function Review() {
                 <button
                   onClick={() => mark('needs_fix')}
                   disabled={acting || !turnId}
-                  style={{
-                    ...ui.btnSecondary,
-                    border:'1px solid #d97706',
-                    background:'#4a2f04',
-                    color:'#fcd34d'
-                  }}
+                  style={{ ...ui.btnSecondary, border:'1px solid #d97706', background:'#4a2f04', color:'#fcd34d' }}
                 >
                   {acting ? '…' : '🛠️ Needs Fix'}
                 </button>
