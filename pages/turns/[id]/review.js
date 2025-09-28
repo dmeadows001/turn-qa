@@ -1,6 +1,6 @@
 // pages/turns/[id]/review.js
 import { useRouter } from 'next/router';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import ChromeDark from '../../../components/ChromeDark';
 import { ui } from '../../../lib/theme';
 
@@ -25,32 +25,31 @@ async function fetchPhotos(turnId) {
 }
 
 function badgeStyle(status) {
+  // Dark-theme friendly badges
   const map = {
-    approved:   { bg:'#064e3b', fg:'#86efac', bd:'#065f46' },
-    submitted:  { bg:'#0b3b72', fg:'#93c5fd', bd:'#1d4ed8' },
-    needs_fix:  { bg:'#4a2f04', fg:'#fcd34d', bd:'#d97706' },
-    in_progress:{ bg:'#1f2937', fg:'#cbd5e1', bd:'#334155' }
+    approved:   { bg:'#064e3b', fg:'#86efac', bd:'#065f46' },  // green
+    submitted:  { bg:'#0b3b72', fg:'#93c5fd', bd:'#1d4ed8' },  // blue
+    needs_fix:  { bg:'#4a2f04', fg:'#fcd34d', bd:'#d97706' },  // amber
+    in_progress:{ bg:'#1f2937', fg:'#cbd5e1', bd:'#334155' }   // slate
   };
   const c = map[status] || { bg:'#1f2937', fg:'#cbd5e1', bd:'#334155' };
   return {
-    background: c.bg, color: c.fg, border: `1px solid ${c.bd}`,
-    padding:'2px 8px', borderRadius: 999, fontSize:12, fontWeight:700, display:'inline-block'
+    background: c.bg,
+    color: c.fg,
+    border: `1px solid ${c.bd}`,
+    padding:'2px 8px',
+    borderRadius: 999,
+    fontSize:12,
+    fontWeight:700,
+    display:'inline-block'
   };
-}
-
-async function getDims(file) {
-  return await new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => { resolve({ width: img.naturalWidth, height: img.naturalHeight }); URL.revokeObjectURL(img.src); };
-    img.onerror = reject;
-    img.src = URL.createObjectURL(file);
-  });
 }
 
 export default function Review() {
   const router = useRouter();
   const turnId = router.query.id;
 
+  // Manager controls are only shown with ?manager=1
   const isManagerMode =
     typeof window !== 'undefined' &&
     new URLSearchParams(window.location.search).get('manager') === '1';
@@ -63,11 +62,11 @@ export default function Review() {
   const [managerNote, setManagerNote] = useState('');
   const [acting, setActing] = useState(false);
 
-  // cleaner-fix UI state
-  const [reply, setReply] = useState('');
-  const [newArea, setNewArea] = useState('');
-  const [staged, setStaged] = useState([]); // [{name, path, width, height}]
-  const [uploading, setUploading] = useState(false);
+  // Cleaner “fix & resubmit” state
+  const [cleanerReply, setCleanerReply] = useState('');
+  const [staged, setStaged] = useState([]); // [{name, preview, path, area_key?}]
+  const [uploadingFix, setUploadingFix] = useState(false);
+  const [submittingFixes, setSubmittingFixes] = useState(false);
   const fileInputRef = useRef(null);
 
   useEffect(() => {
@@ -80,7 +79,6 @@ export default function Review() {
         setTurn(t);
         setStatus(t?.status || 'in_progress');
         setManagerNote(t?.manager_notes || '');
-        setReply('');
         const ph = await fetchPhotos(turnId);
         setPhotos(ph);
       } catch (e) {
@@ -91,18 +89,15 @@ export default function Review() {
     })();
   }, [turnId]);
 
-  // derive unique areas without hooks (prevents hook-order issues)
-  const uniqueAreas = (() => {
-    const set = new Set((photos || []).map(p => p.area_key).filter(Boolean));
-    const arr = Array.from(set);
-    return arr.length ? arr : ['general'];
-  })();
+  // Cleanup local object URLs
+  useEffect(() => {
+    return () => { staged.forEach(s => s.preview && URL.revokeObjectURL(s.preview)); };
+  }, [staged]);
 
-  if (!newArea && uniqueAreas.length) {
-    // set default area on first render after photos load
-    // (guarded so we don’t set state during render loops)
-    setTimeout(() => { if (!newArea) setNewArea(uniqueAreas[0]); }, 0);
-  }
+  const uniqueAreas = useMemo(() => {
+    const set = new Set((photos || []).map(p => p.area_key).filter(Boolean));
+    return Array.from(set);
+  }, [photos]);
 
   async function mark(newStatus) {
     if (!turnId) return;
@@ -124,44 +119,69 @@ export default function Review() {
     }
   }
 
-  async function addFiles(fileList) {
+  function openFilePicker() {
+    fileInputRef.current?.click();
+  }
+
+  async function addFixFiles(fileList) {
     const files = Array.from(fileList || []);
-    if (!files.length) return;
-    setUploading(true);
+    if (files.length === 0) return;
+
+    setUploadingFix(true);
     try {
       const uploaded = [];
       for (const f of files) {
-        const dims = await getDims(f);
-        const longest = Math.max(dims.width, dims.height);
-        if (longest < 1024) { alert(`"${f.name}" rejected: edge < 1024px`); continue; }
-        if (f.size > 6 * 1024 * 1024) { alert(`"${f.name}" rejected: >6MB`); continue; }
+        // Local preview
+        const preview = URL.createObjectURL(f);
 
-        const up = await fetch('/api/upload-url', {
+        // Reuse your upload-url endpoint
+        const meta = await fetch('/api/upload-url', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ turnId, shotId: `${newArea || 'general'}-fix`, filename: f.name, mime: f.type })
+          body: JSON.stringify({
+            turnId,
+            shotId: 'fixes',              // logical bucket for fixes
+            filename: f.name,
+            mime: f.type || 'image/jpeg'
+          })
         }).then(r => r.json());
 
-        if (!up.uploadUrl || !up.path) { alert('Could not get upload URL; try again.'); continue; }
+        if (!meta?.uploadUrl || !meta?.path) {
+          URL.revokeObjectURL(preview);
+          alert(`Could not get upload URL for ${f.name}; skipping.`);
+          continue;
+        }
 
-        await fetch(up.uploadUrl, { method:'PUT', headers:{ 'Content-Type': up.mime || 'application/octet-stream' }, body: f });
+        // Upload file to storage
+        await fetch(meta.uploadUrl, {
+          method: 'PUT',
+          headers: { 'Content-Type': meta.mime || f.type || 'application/octet-stream' },
+          body: f
+        });
 
-        uploaded.push({ name: f.name, path: up.path, width: dims.width, height: dims.height });
+        uploaded.push({ name: f.name, preview, path: meta.path });
       }
-      if (uploaded.length) setStaged(prev => [...prev, ...uploaded]);
+
+      if (uploaded.length) {
+        setStaged(prev => [...prev, ...uploaded]);
+      }
     } finally {
-      setUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
+      setUploadingFix(false);
     }
   }
 
-  async function resubmit() {
+  async function submitFixes() {
     if (!turnId) return;
+    if (staged.length === 0 && !cleanerReply.trim()) {
+      alert('Add at least one photo or a note before submitting.');
+      return;
+    }
+    setSubmittingFixes(true);
     try {
       const payload = {
         turn_id: turnId,
-        reply: reply || '',
-        photos: staged.map(s => ({ path: s.path, area_key: newArea || null }))
+        reply: cleanerReply || '',
+        photos: staged.map(s => ({ path: s.path }))
       };
       const r = await fetch('/api/resubmit-turn', {
         method: 'POST',
@@ -169,49 +189,42 @@ export default function Review() {
         body: JSON.stringify(payload)
       });
       const j = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(j.error || 'resubmit failed');
-      alert('Re-submitted for approval. Your manager will be notified.');
+      if (!r.ok) throw new Error(j.error || 'Resubmit failed');
+
+      // Clear staged + reload photos + show success
+      staged.forEach(s => s.preview && URL.revokeObjectURL(s.preview));
       setStaged([]);
-      setReply('');
-      const t = await fetchTurn(turnId);
-      setTurn(t);
-      setStatus(t?.status || 'submitted');
+      setCleanerReply('');
       const ph = await fetchPhotos(turnId);
       setPhotos(ph);
+      setStatus('submitted'); // server sets it; mirror in UI immediately
+      alert('Submitted fixes for review ✅');
     } catch (e) {
-      alert(e.message || 'Could not re-submit.');
+      alert(e.message || 'Could not resubmit fixes.');
+    } finally {
+      setSubmittingFixes(false);
     }
   }
-
-  const showCleanerFixPanel = !isManagerMode && (status === 'needs_fix' || status === 'in_progress');
 
   if (!turnId) {
     return (
       <ChromeDark title="Turn Review">
-        <section style={ui.sectionGrid}><div style={ui.card}>Loading…</div></section>
+        <section style={ui.sectionGrid}>
+          <div style={ui.card}>Loading…</div>
+        </section>
       </ChromeDark>
     );
   }
 
+  const backHref = isManagerMode ? '/managers/turns' : '/cleaner/turns';
+
   return (
     <ChromeDark title="Turn Review">
       <section style={ui.sectionGrid}>
-        {/* Error banner instead of silent white screen */}
-        {loadErr && (
-          <div style={{ ...ui.card, border:'1px solid #7f1d1d', background:'#450a0a', color:'#fecaca' }}>
-            <b>Failed to load:</b> {loadErr}
-          </div>
-        )}
-
         {/* Header / Meta */}
         <div style={ui.card}>
           <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:12, flexWrap:'wrap' }}>
-            <a
-              href={isManagerMode ? '/managers/turns' : '/cleaner/turns'}
-              style={{ ...ui.btnSecondary, textDecoration:'none' }}
-            >
-              ← Back to {isManagerMode ? 'turns' : 'my turns'}
-            </a>
+            <a href={backHref} style={{ ...ui.btnSecondary, textDecoration:'none' }}>← Back to turns</a>
             <div style={{ fontSize:12, color:'#94a3b8' }}>
               Turn ID: <code style={{ userSelect:'all' }}>{turnId}</code>
             </div>
@@ -224,24 +237,30 @@ export default function Review() {
             </span>
           </h2>
 
-          {/* Manager note visible to cleaners */}
-          {!isManagerMode && turn?.manager_notes && (
+          {/* Notice if not in manager mode */}
+          {!isManagerMode && (
             <div style={{
-              marginTop: 8, padding: '10px 12px',
+              marginTop: 8, padding: '8px 10px',
               background:'#0b1220', border:'1px solid #334155', borderRadius:10,
-              color:'#cbd5e1', fontSize:14
+              color:'#cbd5e1', fontSize:13
             }}>
-              <div style={{ fontWeight:700, marginBottom:4 }}>Manager note</div>
-              <div>{turn.manager_notes}</div>
+              Read-only manager controls hidden. If your manager asked for fixes, use the “Fix & resubmit” box below.
             </div>
           )}
 
-          {/* Manager-only action bar */}
+          {/* ---- Manager Action Bar (hidden unless ?manager=1) ---- */}
           {isManagerMode && (
-            <div style={{ margin:'12px 0 6px', padding:12, border:'1px solid #334155', borderRadius:12, background:'#0f172a' }}>
+            <div style={{
+              margin:'12px 0 6px',
+              padding:12,
+              border:'1px solid #334155',
+              borderRadius:12,
+              background:'#0f172a'
+            }}>
               <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
                 <div style={{ fontWeight:700 }}>Status:</div>
                 <span style={badgeStyle(status)}>{status || '—'}</span>
+                {loadErr && <span style={{ color:'#fca5a5' }}>({loadErr})</span>}
               </div>
 
               <div style={{ marginTop:10 }}>
@@ -253,7 +272,13 @@ export default function Review() {
                   onChange={e=>setManagerNote(e.target.value)}
                   rows={3}
                   placeholder="Short note the cleaner can see…"
-                  style={{ ...ui.input, width:'100%', padding:'10px 12px', resize:'vertical', background:'#0b1220' }}
+                  style={{
+                    ...ui.input,
+                    width:'100%',
+                    padding:'10px 12px',
+                    resize:'vertical',
+                    background:'#0b1220'
+                  }}
                 />
               </div>
 
@@ -261,7 +286,12 @@ export default function Review() {
                 <button
                   onClick={() => mark('needs_fix')}
                   disabled={acting || !turnId}
-                  style={{ ...ui.btnSecondary, border:'1px solid #d97706', background:'#4a2f04', color:'#fcd34d' }}
+                  style={{
+                    ...ui.btnSecondary,
+                    border:'1px solid #d97706',
+                    background:'#4a2f04',
+                    color:'#fcd34d'
+                  }}
                 >
                   {acting ? '…' : '🛠️ Needs Fix'}
                 </button>
@@ -273,60 +303,6 @@ export default function Review() {
                 >
                   {acting ? '…' : '✅ Approve'}
                 </button>
-              </div>
-            </div>
-          )}
-
-          {/* Cleaner Fix & Resubmit panel */}
-          {showCleanerFixPanel && (
-            <div style={{ marginTop:12, padding:12, border:'1px dashed #334155', borderRadius:12, background:'#0f172a' }}>
-              <div style={{ fontWeight:700, marginBottom:8 }}>Fix items and re-submit</div>
-              <div style={{ display:'grid', gridTemplateColumns:'1fr 160px', gap:10 }}>
-                <input
-                  value={reply}
-                  onChange={e=>setReply(e.target.value)}
-                  placeholder="Short note back to your manager (optional)…"
-                  style={ui.input}
-                />
-                <select value={newArea} onChange={e=>setNewArea(e.target.value)} style={{ ...ui.input, cursor:'pointer' }}>
-                  {uniqueAreas.map(a => <option key={a} value={a}>{a}</option>)}
-                </select>
-              </div>
-
-              <div style={{ marginTop:10, display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/*"
-                  multiple
-                  onChange={(e)=>addFiles(e.target.files)}
-                  style={{ display:'none' }}
-                />
-                <button
-                  onClick={()=>fileInputRef.current?.click()}
-                  disabled={uploading}
-                  style={ui.btnSecondary}
-                >
-                  {uploading ? 'Uploading…' : '➕ Add photo(s)'}
-                </button>
-
-                <button
-                  onClick={resubmit}
-                  disabled={uploading || (!reply && staged.length === 0)}
-                  style={ui.btnPrimary}
-                >
-                  Submit fixes for review
-                </button>
-              </div>
-
-              {staged.length > 0 && (
-                <div style={{ marginTop:10, color:'#cbd5e1', fontSize:13 }}>
-                  Staged: {staged.map(s => s.name).join(', ')}
-                </div>
-              )}
-
-              <div style={{ ...ui.subtle, marginTop:8 }}>
-                Tip: choose the checklist area first, then add photos for that area.
               </div>
             </div>
           )}
@@ -364,14 +340,75 @@ export default function Review() {
           )}
         </div>
 
-        {/* Areas footer (no hooks) */}
-        {(() => {
-          const set = new Set((photos || []).map(p => p.area_key).filter(Boolean));
-          const arr = Array.from(set);
-          return (arr.length > 1) ? (
-            <div style={{ ...ui.subtle }}>Areas in this turn: {arr.join(' • ')}</div>
-          ) : null;
-        })()}
+        {/* Cleaner Fix & Resubmit (shown for cleaners when needs_fix OR anytime you want to let them add) */}
+        {!isManagerMode && (
+          <div style={ui.card}>
+            <h3 style={{ marginTop:0 }}>Fix & resubmit</h3>
+            <p style={ui.muted}>If your manager requested changes, add the new photo(s) and a quick note, then submit for review.</p>
+
+            <div style={{ marginTop: 10 }}>
+              <div style={{ fontSize:12, fontWeight:700, color:'#9ca3af', marginBottom:6 }}>Optional note to manager</div>
+              <textarea
+                value={cleanerReply}
+                onChange={e=>setCleanerReply(e.target.value)}
+                rows={3}
+                placeholder="What did you fix?"
+                style={{ ...ui.input, width:'100%', padding:'10px 12px', resize:'vertical', background:'#0b1220' }}
+              />
+            </div>
+
+            {/* Hidden file input */}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              style={{ display:'none' }}
+              onChange={(e)=>addFixFiles(e.target.files)}
+            />
+
+            <div style={{ display:'flex', gap:10, marginTop:12, flexWrap:'wrap' }}>
+              <button onClick={openFilePicker} disabled={uploadingFix} style={ui.btnSecondary}>
+                {uploadingFix ? 'Uploading…' : '➕ Add photos'}
+              </button>
+              <button onClick={submitFixes} disabled={submittingFixes || (staged.length === 0 && !cleanerReply.trim())} style={ui.btnPrimary}>
+                {submittingFixes ? 'Submitting…' : '✅ Submit fixes for review'}
+              </button>
+            </div>
+
+            {/* Staged thumbnails */}
+            {staged.length > 0 && (
+              <div style={{ marginTop:12 }}>
+                <div style={{ fontWeight:700, marginBottom:6 }}>Staged photos (not yet submitted)</div>
+                <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(180px,1fr))', gap:12 }}>
+                  {staged.map((s, i) => (
+                    <div key={i} style={{ border:'1px solid #334155', borderRadius:10, overflow:'hidden', background:'#0b1220' }}>
+                      {s.preview ? (
+                        <img
+                          src={s.preview}
+                          alt={s.name}
+                          style={{ width:'100%', display:'block', aspectRatio:'4/3', objectFit:'cover' }}
+                        />
+                      ) : (
+                        <div style={{ padding:10, color:'#cbd5e1' }}>{s.name}</div>
+                      )}
+                      <div style={{ padding:8, fontSize:12, color:'#9ca3af' }}>
+                        {s.name}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* (Optional) Area quick filter in future */}
+        {uniqueAreas.length > 1 && (
+          <div style={{ ...ui.subtle }}>
+            Areas in this turn: {uniqueAreas.join(' • ')}
+          </div>
+        )}
       </section>
     </ChromeDark>
   );
