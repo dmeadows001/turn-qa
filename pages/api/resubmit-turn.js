@@ -1,105 +1,122 @@
 // pages/api/resubmit-turn.js
 import { supabaseAdmin } from '../../lib/supabase';
-import twilioPkg from 'twilio';
+import Twilio from 'twilio';
 
-function absUrl(req, path) {
-  const proto = (req.headers['x-forwarded-proto'] || 'https');
-  const host  = (req.headers['x-forwarded-host'] || req.headers.host || 'localhost:3000');
-  return `${proto}://${host}${path.startsWith('/') ? '' : '/'}${path}`;
+function getTwilioSender() {
+  const sid = process.env.TWILIO_ACCOUNT_SID;
+  const token = process.env.TWILIO_AUTH_TOKEN;
+  const fromNum = process.env.TWILIO_FROM_NUMBER || '';
+  const msgSid = process.env.TWILIO_MESSAGING_SERVICE_SID || '';
+  if (!sid || !token) return null;
+  const client = Twilio(sid, token);
+  return { client, fromNum, msgSid };
 }
 
-function pickSender() {
-  const svcSid = process.env.TWILIO_MESSAGING_SERVICE_SID || '';
-  const from   = process.env.TWILIO_FROM_NUMBER || '';
-  if (!svcSid && !from) {
-    throw new Error('Twilio sender not configured (set TWILIO_MESSAGING_SERVICE_SID or TWILIO_FROM_NUMBER).');
-  }
-  return svcSid ? { messagingServiceSid: svcSid } : { from };
+function absUrl(req, path) {
+  const base = process.env.SITE_URL || `https://${req.headers.host}`;
+  return `${base}${path.startsWith('/') ? path : `/${path}`}`;
 }
 
 export default async function handler(req, res) {
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   try {
-    const { turn_id, cleaner_message } = req.body || {};
+    const { turn_id, reply = '', photos = [] } = req.body || {};
     if (!turn_id) return res.status(400).json({ error: 'turn_id is required' });
 
-    // Load turn + property
+    // 1) Load turn + property + (a) manager phone (via join) or (b) properties.manager_phone fallback
     const { data: turn, error: tErr } = await supabaseAdmin
       .from('turns')
-      .select('id, property_id')
+      .select(`
+        id, status, property_id, cleaner_name,
+        properties:properties ( id, name, manager_phone ),
+        manager_link:property_managers!property_managers_property_id_fkey (
+          managers:managers ( phone )
+        )
+      `)
       .eq('id', turn_id)
       .single();
     if (tErr) throw tErr;
     if (!turn) return res.status(404).json({ error: 'Turn not found' });
 
-    const { data: prop, error: pErr } = await supabaseAdmin
-      .from('properties')
-      .select('id, name')
-      .eq('id', turn.property_id)
-      .single();
-    if (pErr) throw pErr;
+    // 2) If new photos are provided, avoid duplicates (by storage_path) and insert only new ones
+    const newPaths = (photos || [])
+      .map(p => (p && typeof p.path === 'string' ? p.path.trim() : ''))
+      .filter(Boolean);
 
-    // Update status + save reply
-    const nowIso = new Date().toISOString();
-    const reply  = (cleaner_message && String(cleaner_message).trim())
-      ? String(cleaner_message).trim().slice(0, 1000)
-      : null;
+    let toInsert = [];
+    if (newPaths.length > 0) {
+      const { data: existing, error: exErr } = await supabaseAdmin
+        .from('turn_photos')
+        .select('storage_path')
+        .eq('turn_id', turn_id)
+        .in('storage_path', newPaths);
 
-    const { error: uErr } = await supabaseAdmin
+      if (exErr) throw exErr;
+
+      const existingSet = new Set((existing || []).map(e => e.storage_path));
+      toInsert = (photos || []).filter(p => p?.path && !existingSet.has(p.path));
+
+      if (toInsert.length > 0) {
+        const rows = toInsert.map(p => ({
+          turn_id,
+          area_key: p.area_key || null,
+          storage_path: p.path
+        }));
+        const { error: insErr } = await supabaseAdmin.from('turn_photos').insert(rows);
+        if (insErr) throw insErr;
+      }
+    }
+
+    // 3) Update turn: put note, bump status back to submitted, stamp resubmitted_at
+    const payload = {
+      status: 'submitted',
+      cleaner_reply: reply || null,
+      resubmitted_at: new Date().toISOString(),
+      // note: do NOT clear submitted_at; keep original or set if missing
+    };
+    const { error: upErr } = await supabaseAdmin
       .from('turns')
-      .update({
-        status: 'submitted',
-        submitted_at: nowIso,
-        cleaner_reply: reply,
-        resubmitted_at: nowIso
-      })
+      .update(payload)
       .eq('id', turn_id);
-    if (uErr) throw uErr;
+    if (upErr) throw upErr;
 
-    // Find manager phones for this property
-    let mgrPhones = [];
+    // 4) Notify manager via SMS (best-effort)
+    try {
+      const sender = getTwilioSender();
+      const managerPhone =
+        turn?.manager_link?.[0]?.managers?.phone ||
+        turn?.properties?.manager_phone ||
+        null;
 
-    // A) via manager_properties
-    const { data: viaLink } = await supabaseAdmin
-      .from('manager_properties')
-      .select('managers!inner(phone, sms_consent)')
-      .eq('property_id', turn.property_id);
-    if (Array.isArray(viaLink)) {
-      mgrPhones = viaLink.map(r => r.managers?.phone).filter(Boolean);
+      if (sender && managerPhone) {
+        const reviewUrl = absUrl(req, `/turns/${turn_id}/review?manager=1`);
+        const propertyName = turn?.properties?.name || 'a property';
+        const notePart = reply ? `Cleaner note: "${reply}"\n` : '';
+        const extraPart = toInsert.length > 0 ? `+ ${toInsert.length} new photo(s)\n` : '';
+
+        const body =
+          `Turn re-submitted for ${propertyName}.\n` +
+          extraPart +
+          notePart +
+          `Review: ${reviewUrl}\n` +
+          `Reply STOP to opt out • HELP for help`;
+
+        await sender.client.messages.create({
+          body,
+          to: managerPhone,
+          ...(sender.msgSid
+            ? { messagingServiceSid: sender.msgSid }
+            : { from: sender.fromNum })
+        });
+      }
+    } catch (smsErr) {
+      console.warn('resubmit-turn: SMS skipped/failed:', smsErr?.message || smsErr);
     }
 
-    // B) fallback via properties.manager_id
-    if (mgrPhones.length === 0) {
-      const { data: viaProp } = await supabaseAdmin
-        .from('properties')
-        .select('manager_id, managers!inner(phone, sms_consent)')
-        .eq('id', turn.property_id)
-        .maybeSingle();
-      if (viaProp?.managers?.phone) mgrPhones = [viaProp.managers.phone];
-    }
-
-    mgrPhones = Array.from(new Set((mgrPhones || []).filter(Boolean)));
-
-    // SMS managers
-    if (mgrPhones.length > 0) {
-      const client = twilioPkg(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
-      const sender = pickSender();
-
-      const shortId   = String(turn_id).slice(0, 8);
-      const reviewUrl = absUrl(req, `/turns/${turn_id}/review?manager=1`);
-      const notePart  = reply ? ` Cleaner note: ${reply}` : '';
-
-      const body = `TurnQA: Fixes submitted for "${prop?.name || 'Property'}" (turn ${shortId}). Review: ${reviewUrl}.${notePart} Reply STOP to opt out.`;
-
-      await Promise.all(
-        mgrPhones.map(to => client.messages.create({ ...sender, to, body }))
-      );
-    }
-
-    res.json({ ok: true });
+    return res.json({ ok: true, inserted: toInsert.length });
   } catch (e) {
     console.error('resubmit-turn error:', e);
-    res.status(500).json({ error: e.message || 'failed' });
+    return res.status(500).json({ error: e.message || 'failed' });
   }
 }
