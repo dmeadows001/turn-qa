@@ -1,120 +1,131 @@
 // pages/api/resubmit-turn.js
 import { supabaseAdmin } from '../../lib/supabase';
-import Twilio from 'twilio';
 
-function getTwilioSender() {
+// Optional: Twilio SMS notify (managers) if configured
+function getTwilio() {
   const sid = process.env.TWILIO_ACCOUNT_SID;
-  const token = process.env.TWILIO_AUTH_TOKEN;
-  const fromNum = process.env.TWILIO_FROM_NUMBER || '';
-  const msgSid = process.env.TWILIO_MESSAGING_SERVICE_SID || '';
-  if (!sid || !token) return null;
-  const client = Twilio(sid, token);
-  return { client, fromNum, msgSid };
+  const tok = process.env.TWILIO_AUTH_TOKEN;
+  if (!sid || !tok) return null;
+  try {
+    // eslint-disable-next-line global-require
+    const twilio = require('twilio');
+    return twilio(sid, tok);
+  } catch {
+    return null;
+  }
 }
 
-function absUrl(req, path) {
-  const base = process.env.SITE_URL || `https://${req.headers.host}`;
-  return `${base}${path.startsWith('/') ? path : `/${path}`}`;
+function getSender() {
+  // Prefer Messaging Service; fall back to a From number
+  const svc = process.env.TWILIO_MESSAGING_SERVICE_SID;
+  const from = process.env.TWILIO_FROM_NUMBER || process.env.TWILIO_FROM;
+  if (svc) return { messagingServiceSid: svc };
+  if (from) return { from };
+  return null;
+}
+
+function siteUrl(req) {
+  // Try env first, then Vercel headers, then origin fallback
+  const env = process.env.NEXT_PUBLIC_SITE_URL || process.env.SITE_URL;
+  if (env) return env.replace(/\/+$/, '');
+  const host = (req.headers['x-forwarded-host'] || req.headers.host || '').toString();
+  const proto = (req.headers['x-forwarded-proto'] || 'https').toString();
+  if (host) return `${proto}://${host}`;
+  return 'https://www.turnqa.com';
 }
 
 export default async function handler(req, res) {
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
 
   try {
-    const { turn_id, reply = '', photos = [] } = req.body || {};
+    const { turn_id, reply, photos } = req.body || {};
     if (!turn_id) return res.status(400).json({ error: 'turn_id is required' });
 
-    // 1) Load turn + property + (a) manager phone (via join) or (b) properties.manager_phone fallback
+    // 1) Load the turn (get property_id)
     const { data: turn, error: tErr } = await supabaseAdmin
       .from('turns')
-      .select(`
-        id, status, property_id, cleaner_name,
-        properties:properties ( id, name, manager_phone ),
-        manager_link:property_managers!property_managers_property_id_fkey (
-          managers:managers ( phone )
-        )
-      `)
+      .select('id, property_id')
       .eq('id', turn_id)
       .single();
     if (tErr) throw tErr;
     if (!turn) return res.status(404).json({ error: 'Turn not found' });
 
-    // 2) If new photos are provided, avoid duplicates (by storage_path) and insert only new ones
-    const newPaths = (photos || [])
-      .map(p => (p && typeof p.path === 'string' ? p.path.trim() : ''))
-      .filter(Boolean);
-
-    let toInsert = [];
-    if (newPaths.length > 0) {
-      const { data: existing, error: exErr } = await supabaseAdmin
-        .from('turn_photos')
-        .select('storage_path')
-        .eq('turn_id', turn_id)
-        .in('storage_path', newPaths);
-
-      if (exErr) throw exErr;
-
-      const existingSet = new Set((existing || []).map(e => e.storage_path));
-      toInsert = (photos || []).filter(p => p?.path && !existingSet.has(p.path));
-
-      if (toInsert.length > 0) {
-        const rows = toInsert.map(p => ({
-          turn_id,
-          area_key: p.area_key || null,
-          storage_path: p.path
+    // 2) Insert any new photos into turn_photos
+    let inserted = 0;
+    if (Array.isArray(photos) && photos.length) {
+      const rows = photos
+        .filter(p => p && p.path)
+        .map(p => ({
+          turn_id: turn_id,
+          storage_path: p.path,             // your /api/upload-url returns this as "path"
+          area_key: p.area_key || null,     // optional label to group fixes by area
         }));
-        const { error: insErr } = await supabaseAdmin.from('turn_photos').insert(rows);
-        if (insErr) throw insErr;
+
+      if (rows.length) {
+        const { error: ipErr, count } = await supabaseAdmin
+          .from('turn_photos')
+          .insert(rows, { count: 'exact' });
+        if (ipErr) throw ipErr;
+        inserted = count || rows.length;
       }
     }
 
-    // 3) Update turn: put note, bump status back to submitted, stamp resubmitted_at
-    const payload = {
-      status: 'submitted',
-      cleaner_reply: reply || null,
-      resubmitted_at: new Date().toISOString(),
-      // note: do NOT clear submitted_at; keep original or set if missing
-    };
-    const { error: upErr } = await supabaseAdmin
+    // 3) Update the turn status + cleaner reply
+    const { error: uErr } = await supabaseAdmin
       .from('turns')
-      .update(payload)
+      .update({
+        status: 'submitted',
+        cleaner_reply: (reply && String(reply).trim()) || null,
+        resubmitted_at: new Date().toISOString(),
+      })
       .eq('id', turn_id);
-    if (upErr) throw upErr;
+    if (uErr) throw uErr;
 
-    // 4) Notify manager via SMS (best-effort)
-    try {
-      const sender = getTwilioSender();
-      const managerPhone =
-        turn?.manager_link?.[0]?.managers?.phone ||
-        turn?.properties?.manager_phone ||
-        null;
+    // 4) Notify managers by SMS (no nested FKs; do it in 2 calls)
+    const client = getTwilio();
+    const sender = getSender();
+    let notified = 0;
 
-      if (sender && managerPhone) {
-        const reviewUrl = absUrl(req, `/turns/${turn_id}/review?manager=1`);
-        const propertyName = turn?.properties?.name || 'a property';
-        const notePart = reply ? `Cleaner note: "${reply}"\n` : '';
-        const extraPart = toInsert.length > 0 ? `+ ${toInsert.length} new photo(s)\n` : '';
+    if (client && sender) {
+      // 4a) Look up manager IDs linked to the property
+      const { data: links, error: lErr } = await supabaseAdmin
+        .from('property_managers')
+        .select('manager_id')
+        .eq('property_id', turn.property_id);
+      if (lErr) throw lErr;
 
-        const body =
-          `Turn re-submitted for ${propertyName}.\n` +
-          extraPart +
-          notePart +
-          `Review: ${reviewUrl}\n` +
-          `Reply STOP to opt out • HELP for help`;
+      const managerIds = (links || []).map(r => r.manager_id).filter(Boolean);
+      if (managerIds.length) {
+        // 4b) Load those managers’ phones (who consented)
+        const { data: mgrs, error: mErr } = await supabaseAdmin
+          .from('managers')
+          .select('id, phone, sms_consent')
+          .in('id', managerIds);
+        if (mErr) throw mErr;
 
-        await sender.client.messages.create({
-          body,
-          to: managerPhone,
-          ...(sender.msgSid
-            ? { messagingServiceSid: sender.msgSid }
-            : { from: sender.fromNum })
-        });
+        const base = siteUrl(req);
+        const url = `${base}/turns/${turn_id}/review?manager=1`;
+        const shortId = String(turn_id).slice(0, 8);
+
+        for (const m of mgrs || []) {
+          if (!m?.phone || m.sms_consent === false) continue;
+          try {
+            await client.messages.create({
+              to: m.phone,
+              body:
+                `Cleaner submitted fixes for Turn ${shortId}. Review: ${url}` +
+                `\nReply STOP to unsubscribe or HELP for help.`,
+              ...sender,
+            });
+            notified++;
+          } catch {
+            // Ignore individual per-number failures; continue to others
+          }
+        }
       }
-    } catch (smsErr) {
-      console.warn('resubmit-turn: SMS skipped/failed:', smsErr?.message || smsErr);
     }
 
-    return res.json({ ok: true, inserted: toInsert.length });
+    return res.status(200).json({ ok: true, inserted, notified });
   } catch (e) {
     console.error('resubmit-turn error:', e);
     return res.status(500).json({ error: e.message || 'failed' });
