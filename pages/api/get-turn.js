@@ -2,16 +2,10 @@
 import { supabaseAdmin } from '../../lib/supabase';
 
 export default async function handler(req, res) {
-  if (req.method !== 'GET') {
-    return res.status(405).json({ error: 'Method Not Allowed' });
-  }
-
   try {
     const id = (req.query.id || '').trim();
     if (!id) return res.status(400).json({ error: 'Missing id' });
 
-    // Fetch the turn (include property name via FK relationship)
-    // Assumes turns.property_id -> properties.id FK exists.
     const { data, error } = await supabaseAdmin
       .from('turns')
       .select(`
@@ -21,11 +15,11 @@ export default async function handler(req, res) {
         turn_date,
         property_id,
         manager_notes,
+        cleaner_reply,
         submitted_at,
+        resubmitted_at,
         approved_at,
-        needs_fix_at,
-        created_at,
-        properties ( name )
+        created_at
       `)
       .eq('id', id)
       .single();
@@ -33,16 +27,9 @@ export default async function handler(req, res) {
     if (error) throw error;
     if (!data) return res.status(404).json({ error: 'Turn not found' });
 
-    // Flatten property name for convenience
-    const turn = {
-      ...data,
-      property_name: data?.properties?.[0]?.name ?? data?.properties?.name ?? null
-    };
-    delete turn.properties;
-
-    return res.status(200).json({ turn });
+    res.status(200).json({ turn: data });
   } catch (e) {
     console.error('get-turn error:', e);
-    return res.status(500).json({ error: e.message || 'failed' });
+    res.status(500).json({ error: e.message || 'failed' });
   }
 }
