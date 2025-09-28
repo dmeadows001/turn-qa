@@ -25,12 +25,11 @@ async function fetchPhotos(turnId) {
 }
 
 function badgeStyle(status) {
-  // Dark-theme friendly badges
   const map = {
-    approved:   { bg:'#064e3b', fg:'#86efac', bd:'#065f46' },  // green
-    submitted:  { bg:'#0b3b72', fg:'#93c5fd', bd:'#1d4ed8' },  // blue
-    needs_fix:  { bg:'#4a2f04', fg:'#fcd34d', bd:'#d97706' },  // amber
-    in_progress:{ bg:'#1f2937', fg:'#cbd5e1', bd:'#334155' }   // slate
+    approved:   { bg:'#064e3b', fg:'#86efac', bd:'#065f46' },
+    submitted:  { bg:'#0b3b72', fg:'#93c5fd', bd:'#1d4ed8' },
+    needs_fix:  { bg:'#4a2f04', fg:'#fcd34d', bd:'#d97706' },
+    in_progress:{ bg:'#1f2937', fg:'#cbd5e1', bd:'#334155' }
   };
   const c = map[status] || { bg:'#1f2937', fg:'#cbd5e1', bd:'#334155' };
   return {
@@ -49,14 +48,12 @@ export default function Review() {
   const router = useRouter();
   const turnId = router.query.id;
 
-  // Determine context from query
+  // Context from query
   const isBrowser = typeof window !== 'undefined';
   const qs = isBrowser ? new URLSearchParams(window.location.search) : null;
   const isManagerMode = qs?.get('manager') === '1';
-  const from = qs?.get('from') || '';           // optional, e.g. 'cleaner'
-  const phone = qs?.get('phone') || '';         // optional, so we can prefill back link
+  const phone = qs?.get('phone') || '';
 
-  // Compute back link target + label
   const backHref = isManagerMode
     ? '/managers/turns'
     : (phone ? `/cleaner/turns?phone=${encodeURIComponent(phone)}` : '/cleaner/turns');
@@ -107,6 +104,7 @@ export default function Review() {
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error || 'update failed');
       setStatus(newStatus);
+      // Note stays in state; on refresh it will be loaded from DB
       alert(newStatus === 'approved' ? 'Turn approved ✅' : 'Marked Needs Fix. Cleaners will see this.');
     } catch (e) {
       alert(e.message || 'Could not update status.');
@@ -144,7 +142,7 @@ export default function Review() {
             </span>
           </h2>
 
-          {/* Notice if not in manager mode */}
+          {/* Cleaner notice */}
           {!isManagerMode && (
             <div style={{
               marginTop: 8, padding: '8px 10px',
@@ -152,6 +150,21 @@ export default function Review() {
               color:'#cbd5e1', fontSize:13
             }}>
               Read-only view. Manager controls hidden.
+            </div>
+          )}
+
+          {/* Manager note visible to cleaners */}
+          {!isManagerMode && (turn?.manager_notes?.trim()) && (
+            <div style={{
+              marginTop:10,
+              padding:'10px 12px',
+              border:'1px solid #334155',
+              background:'#0f172a',
+              borderRadius:10,
+              color:'#e5e7eb'
+            }}>
+              <div style={{ fontWeight:700, marginBottom:4 }}>Manager notes</div>
+              <div style={{ whiteSpace:'pre-wrap' }}>{turn.manager_notes}</div>
             </div>
           )}
 
@@ -247,7 +260,6 @@ export default function Review() {
           )}
         </div>
 
-        {/* (Optional) Area quick filter in future */}
         {uniqueAreas.length > 1 && (
           <div style={{ ...ui.subtle }}>
             Areas in this turn: {uniqueAreas.join(' • ')}
