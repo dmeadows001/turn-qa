@@ -1,131 +1,128 @@
 // pages/api/resubmit-turn.js
 import { supabaseAdmin } from '../../lib/supabase';
+import twilio from 'twilio';
 
-// Optional: Twilio SMS notify (managers) if configured
-function getTwilio() {
-  const sid = process.env.TWILIO_ACCOUNT_SID;
-  const tok = process.env.TWILIO_AUTH_TOKEN;
-  if (!sid || !tok) return null;
-  try {
-    // eslint-disable-next-line global-require
-    const twilio = require('twilio');
-    return twilio(sid, tok);
-  } catch {
-    return null;
-  }
+/** Build an absolute url for links in SMS */
+function absUrl(req, path = '/') {
+  const proto = (req.headers['x-forwarded-proto'] || 'https');
+  const host  = (req.headers['x-forwarded-host'] || req.headers.host || process.env.NEXT_PUBLIC_SITE_URL || 'localhost:3000');
+  const base  = `${proto}://${host}`.replace(/\/+$/,'');
+  return `${base}${path.startsWith('/') ? '' : '/'}${path}`;
 }
 
-function getSender() {
-  // Prefer Messaging Service; fall back to a From number
-  const svc = process.env.TWILIO_MESSAGING_SERVICE_SID;
-  const from = process.env.TWILIO_FROM_NUMBER || process.env.TWILIO_FROM;
-  if (svc) return { messagingServiceSid: svc };
-  if (from) return { from };
-  return null;
+/** Twilio sender config (Messaging Service preferred; fall back to From number) */
+function getTwilioSender() {
+  const sid  = process.env.TWILIO_ACCOUNT_SID;
+  const tok  = process.env.TWILIO_AUTH_TOKEN;
+  const svc  = process.env.TWILIO_MESSAGING_SERVICE_SID || '';
+  const from = process.env.TWILIO_FROM_NUMBER || process.env.TWILIO_FROM || '';
+
+  if (!sid || !tok) return { ok:false, error:'Twilio credentials missing', client:null, opts:null };
+  if (!svc && !from) return { ok:false, error:'Twilio sender not configured (set TWILIO_MESSAGING_SERVICE_SID or TWILIO_FROM)', client:null, opts:null };
+
+  const client = twilio(sid, tok);
+  const opts   = svc ? { messagingServiceSid: svc } : { from };
+  return { ok:true, client, opts };
 }
 
-function siteUrl(req) {
-  // Try env first, then Vercel headers, then origin fallback
-  const env = process.env.NEXT_PUBLIC_SITE_URL || process.env.SITE_URL;
-  if (env) return env.replace(/\/+$/, '');
-  const host = (req.headers['x-forwarded-host'] || req.headers.host || '').toString();
-  const proto = (req.headers['x-forwarded-proto'] || 'https').toString();
-  if (host) return `${proto}://${host}`;
-  return 'https://www.turnqa.com';
+/** Normalize phone input to E.164-ish (keeps +) */
+function normalizePhone(s = '') {
+  const digits = (s || '').replace(/[^\d+]/g, '');
+  return digits.startsWith('+') ? digits : ('+' + digits);
 }
 
 export default async function handler(req, res) {
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
+  if (req.method !== 'POST') return res.status(405).json({ error:'Method Not Allowed' });
 
   try {
-    const { turn_id, reply, photos } = req.body || {};
-    if (!turn_id) return res.status(400).json({ error: 'turn_id is required' });
+    const { turn_id, reply = '', photos = [] } = (req.body || {});
+    const tid = (turn_id || '').trim();
+    if (!tid) return res.status(400).json({ error:'turn_id is required' });
 
-    // 1) Load the turn (get property_id)
+    // 1) Load the turn (to get property_id, etc.)
     const { data: turn, error: tErr } = await supabaseAdmin
       .from('turns')
-      .select('id, property_id')
-      .eq('id', turn_id)
+      .select('id, property_id, status')
+      .eq('id', tid)
       .single();
     if (tErr) throw tErr;
-    if (!turn) return res.status(404).json({ error: 'Turn not found' });
+    if (!turn) return res.status(404).json({ error:'Turn not found' });
 
-    // 2) Insert any new photos into turn_photos
-    let inserted = 0;
-    if (Array.isArray(photos) && photos.length) {
-      const rows = photos
-        .filter(p => p && p.path)
-        .map(p => ({
-          turn_id: turn_id,
-          storage_path: p.path,             // your /api/upload-url returns this as "path"
-          area_key: p.area_key || null,     // optional label to group fixes by area
-        }));
-
-      if (rows.length) {
-        const { error: ipErr, count } = await supabaseAdmin
-          .from('turn_photos')
-          .insert(rows, { count: 'exact' });
-        if (ipErr) throw ipErr;
-        inserted = count || rows.length;
-      }
+    // 2) Insert fix photos (if any)
+    const cleanPhotos = Array.isArray(photos) ? photos.filter(p => p && p.path) : [];
+    if (cleanPhotos.length > 0) {
+      const rows = cleanPhotos.map(p => ({
+        turn_id: tid,
+        storage_path: p.path,   // we store only storage_path; your list endpoint already coalesces it
+        area_key: 'fix'         // optional tag; useful context in gallery
+      }));
+      const { error: insErr } = await supabaseAdmin
+        .from('turn_photos')
+        .insert(rows);
+      if (insErr) throw insErr;
     }
 
-    // 3) Update the turn status + cleaner reply
-    const { error: uErr } = await supabaseAdmin
+    // 3) Update turn status + cleaner reply + resubmitted_at
+    const { error: upErr } = await supabaseAdmin
       .from('turns')
       .update({
         status: 'submitted',
-        cleaner_reply: (reply && String(reply).trim()) || null,
-        resubmitted_at: new Date().toISOString(),
+        cleaner_reply: reply || null,
+        resubmitted_at: new Date().toISOString()
       })
-      .eq('id', turn_id);
-    if (uErr) throw uErr;
+      .eq('id', tid);
+    if (upErr) throw upErr;
 
-    // 4) Notify managers by SMS (no nested FKs; do it in 2 calls)
-    const client = getTwilio();
-    const sender = getSender();
-    let notified = 0;
+    // 4) Find the property + manager (via properties.manager_id)
+    const { data: prop, error: pErr } = await supabaseAdmin
+      .from('properties')
+      .select('id, name, manager_id')
+      .eq('id', turn.property_id)
+      .single();
+    if (pErr) throw pErr;
 
-    if (client && sender) {
-      // 4a) Look up manager IDs linked to the property
-      const { data: links, error: lErr } = await supabaseAdmin
-        .from('property_managers')
-        .select('manager_id')
-        .eq('property_id', turn.property_id);
-      if (lErr) throw lErr;
-
-      const managerIds = (links || []).map(r => r.manager_id).filter(Boolean);
-      if (managerIds.length) {
-        // 4b) Load those managers’ phones (who consented)
-        const { data: mgrs, error: mErr } = await supabaseAdmin
-          .from('managers')
-          .select('id, phone, sms_consent')
-          .in('id', managerIds);
-        if (mErr) throw mErr;
-
-        const base = siteUrl(req);
-        const url = `${base}/turns/${turn_id}/review?manager=1`;
-        const shortId = String(turn_id).slice(0, 8);
-
-        for (const m of mgrs || []) {
-          if (!m?.phone || m.sms_consent === false) continue;
-          try {
-            await client.messages.create({
-              to: m.phone,
-              body:
-                `Cleaner submitted fixes for Turn ${shortId}. Review: ${url}` +
-                `\nReply STOP to unsubscribe or HELP for help.`,
-              ...sender,
-            });
-            notified++;
-          } catch {
-            // Ignore individual per-number failures; continue to others
-          }
+    let managerPhone = null;
+    let managerName  = null;
+    if (prop?.manager_id) {
+      const { data: mgr, error: mErr } = await supabaseAdmin
+        .from('managers')
+        .select('id, name, phone, sms_consent')
+        .eq('id', prop.manager_id)
+        .single();
+      if (!mErr && mgr) {
+        managerPhone = mgr.phone ? normalizePhone(mgr.phone) : null;
+        managerName  = mgr.name || null;
+        // Optional: honor consent if you track it
+        if (mgr.sms_consent === false) {
+          managerPhone = null;
         }
       }
     }
 
-    return res.status(200).json({ ok: true, inserted, notified });
+    // 5) SMS notify manager (if we have a phone + Twilio config)
+    if (managerPhone) {
+      const cfg = getTwilioSender();
+      if (cfg.ok) {
+        const reviewUrl = absUrl(req, `/turns/${tid}/review?manager=1`);
+        // Keep the body short (trial-friendly). Include STOP/HELP footer.
+        const propName = prop?.name ? ` ${prop.name}` : '';
+        const replySnippet = reply ? ` Note: ${reply}` : '';
+        const body = `TurnQA: fixes submitted for${propName}.${replySnippet} Review: ${reviewUrl} STOP to end, HELP for help.`;
+
+        try {
+          await cfg.client.messages.create({
+            to: managerPhone,
+            ...cfg.opts,
+            body
+          });
+        } catch (e) {
+          // Don’t fail the whole request if SMS fails; just log it.
+          console.error('resubmit-turn SMS failed:', e?.message || e);
+        }
+      }
+    }
+
+    return res.json({ ok:true });
   } catch (e) {
     console.error('resubmit-turn error:', e);
     return res.status(500).json({ error: e.message || 'failed' });
