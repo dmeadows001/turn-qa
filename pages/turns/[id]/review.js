@@ -155,10 +155,23 @@ export default function Review() {
             </span>
           </h2>
 
-          {/* Cleaner (read-only) notice */}
+          {/* Cleaner view notice */}
           {!isManagerMode && (
             <div style={{ marginTop:8, padding:'8px 10px', background:'#0b1220', border:'1px solid #334155', borderRadius:10, color:'#cbd5e1', fontSize:13 }}>
               Read-only view. Manager controls hidden.
+            </div>
+          )}
+
+          {/* Manager sees cleaner reply (if present) */}
+          {isManagerMode && (turn?.cleaner_reply || '').trim() && (
+            <div style={{ marginTop:10, padding:'10px 12px', border:'1px solid #334155', background:'#0f172a', borderRadius:10, color:'#e5e7eb' }}>
+              <div style={{ fontWeight:700, marginBottom:4 }}>Cleaner reply</div>
+              <div style={{ whiteSpace:'pre-wrap' }}>{turn.cleaner_reply}</div>
+              {turn.resubmitted_at && (
+                <div style={{ marginTop:6, fontSize:12, color:'#9ca3af' }}>
+                  Resubmitted {new Date(turn.resubmitted_at).toLocaleString()}
+                </div>
+              )}
             </div>
           )}
 
@@ -170,23 +183,17 @@ export default function Review() {
             </div>
           )}
 
-          {/* Cleaner "fixes done" panel when in needs_fix */}
+          {/* Cleaner fixes / resubmit */}
           {!isManagerMode && status === 'needs_fix' && (
             <div style={{ marginTop:12, padding:12, border:'1px solid #334155', borderRadius:12, background:'#0f172a' }}>
               <div style={{ fontWeight:700, marginBottom:6, color:'#e5e7eb' }}>Make fixes, then resubmit for approval</div>
               <div style={{ display:'flex', gap:8, flexWrap:'wrap', alignItems:'center' }}>
-                <a
-                  href={`/turns/${turnId}/capture`}
-                  style={{ ...ui.btnSecondary, textDecoration:'none' }}
-                  title="Add more photos to this turn"
-                >
+                <a href={`/turns/${turnId}/capture`} style={{ ...ui.btnSecondary, textDecoration:'none' }} title="Add more photos to this turn">
                   ➕ Add photos
                 </a>
               </div>
               <div style={{ marginTop:10 }}>
-                <div style={{ fontSize:12, fontWeight:700, color:'#9ca3af', marginBottom:6 }}>
-                  Optional note back to your manager
-                </div>
+                <div style={{ fontSize:12, fontWeight:700, color:'#9ca3af', marginBottom:6 }}>Optional note back to your manager</div>
                 <textarea
                   value={reply}
                   onChange={e=>setReply(e.target.value)}
@@ -203,7 +210,7 @@ export default function Review() {
             </div>
           )}
 
-          {/* ---- Manager Action Bar (hidden unless ?manager=1) ---- */}
+          {/* Manager action bar */}
           {isManagerMode && (
             <div style={{ margin:'12px 0 6px', padding:12, border:'1px solid #334155', borderRadius:12, background:'#0f172a' }}>
               <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
