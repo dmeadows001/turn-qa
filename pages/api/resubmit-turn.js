@@ -4,14 +4,16 @@ import twilioPkg from 'twilio';
 
 function absUrl(req, path) {
   const proto = (req.headers['x-forwarded-proto'] || 'https');
-  const host = req.headers['x-forwarded-host'] || req.headers.host || 'localhost:3000';
+  const host  = (req.headers['x-forwarded-host'] || req.headers.host || 'localhost:3000');
   return `${proto}://${host}${path.startsWith('/') ? '' : '/'}${path}`;
 }
 
-function pickSender(twilio) {
+function pickSender() {
   const svcSid = process.env.TWILIO_MESSAGING_SERVICE_SID || '';
-  const from = process.env.TWILIO_FROM_NUMBER || '';
-  if (!svcSid && !from) throw new Error('Twilio sender not configured (set TWILIO_MESSAGING_SERVICE_SID or TWILIO_FROM_NUMBER).');
+  const from   = process.env.TWILIO_FROM_NUMBER || '';
+  if (!svcSid && !from) {
+    throw new Error('Twilio sender not configured (set TWILIO_MESSAGING_SERVICE_SID or TWILIO_FROM_NUMBER).');
+  }
   return svcSid ? { messagingServiceSid: svcSid } : { from };
 }
 
@@ -22,7 +24,7 @@ export default async function handler(req, res) {
     const { turn_id, cleaner_message } = req.body || {};
     if (!turn_id) return res.status(400).json({ error: 'turn_id is required' });
 
-    // 1) Load turn (+ property)
+    // Load turn + property
     const { data: turn, error: tErr } = await supabaseAdmin
       .from('turns')
       .select('id, property_id')
@@ -31,69 +33,68 @@ export default async function handler(req, res) {
     if (tErr) throw tErr;
     if (!turn) return res.status(404).json({ error: 'Turn not found' });
 
-    const propertyId = turn.property_id;
-
     const { data: prop, error: pErr } = await supabaseAdmin
       .from('properties')
       .select('id, name')
-      .eq('id', propertyId)
+      .eq('id', turn.property_id)
       .single();
     if (pErr) throw pErr;
 
-    // 2) Update status back to submitted
+    // Update status + save reply
+    const nowIso = new Date().toISOString();
+    const reply  = (cleaner_message && String(cleaner_message).trim())
+      ? String(cleaner_message).trim().slice(0, 1000)
+      : null;
+
     const { error: uErr } = await supabaseAdmin
       .from('turns')
-      .update({ status: 'submitted', submitted_at: new Date().toISOString() })
+      .update({
+        status: 'submitted',
+        submitted_at: nowIso,
+        cleaner_reply: reply,
+        resubmitted_at: nowIso
+      })
       .eq('id', turn_id);
     if (uErr) throw uErr;
 
-    // 3) Find manager phone(s) for this property (two strategies)
+    // Find manager phones for this property
     let mgrPhones = [];
-    // Strategy A: manager_properties join
-    const { data: viaLink, error: linkErr } = await supabaseAdmin
+
+    // A) via manager_properties
+    const { data: viaLink } = await supabaseAdmin
       .from('manager_properties')
       .select('managers!inner(phone, sms_consent)')
-      .eq('property_id', propertyId);
-    if (!linkErr && Array.isArray(viaLink)) {
-      mgrPhones = viaLink
-        .map(r => r.managers?.phone)
-        .filter(Boolean);
+      .eq('property_id', turn.property_id);
+    if (Array.isArray(viaLink)) {
+      mgrPhones = viaLink.map(r => r.managers?.phone).filter(Boolean);
     }
 
-    // Strategy B: properties.manager_id -> managers
+    // B) fallback via properties.manager_id
     if (mgrPhones.length === 0) {
       const { data: viaProp } = await supabaseAdmin
         .from('properties')
         .select('manager_id, managers!inner(phone, sms_consent)')
-        .eq('id', propertyId)
+        .eq('id', turn.property_id)
         .maybeSingle();
       if (viaProp?.managers?.phone) mgrPhones = [viaProp.managers.phone];
     }
 
-    // De-dupe + sanitize
-    mgrPhones = Array.from(new Set(mgrPhones.filter(Boolean)));
+    mgrPhones = Array.from(new Set((mgrPhones || []).filter(Boolean)));
 
-    // 4) SMS the manager(s)
+    // SMS managers
     if (mgrPhones.length > 0) {
       const client = twilioPkg(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
-      const sender = pickSender(client);
+      const sender = pickSender();
 
+      const shortId   = String(turn_id).slice(0, 8);
       const reviewUrl = absUrl(req, `/turns/${turn_id}/review?manager=1`);
-      const shortId = `${turn_id}`.slice(0, 8);
-      const cleanerLine = (cleaner_message && String(cleaner_message).trim())
-        ? ` Cleaner note: ${String(cleaner_message).trim().slice(0, 140)}`
-        : '';
+      const notePart  = reply ? ` Cleaner note: ${reply}` : '';
 
-      const body =
-        `TurnQA: Fixes submitted for "${prop?.name || 'Property'}" (turn ${shortId}). Review: ${reviewUrl}.${cleanerLine} Reply STOP to opt out.`;
+      const body = `TurnQA: Fixes submitted for "${prop?.name || 'Property'}" (turn ${shortId}). Review: ${reviewUrl}.${notePart} Reply STOP to opt out.`;
 
-      await Promise.all(mgrPhones.map(phone =>
-        client.messages.create({
-          ...sender,
-          to: phone,
-          body
-        })
-      ));
+      await Promise.all(
+        mgrPhones.map(to => client.messages.create({ ...sender, to, body }))
+      );
     }
 
     res.json({ ok: true });
