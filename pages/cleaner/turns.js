@@ -4,55 +4,52 @@ import { useRouter } from 'next/router';
 import ChromeDark from '../../components/ChromeDark';
 import { ui } from '../../lib/theme';
 
-function statusPill(s) {
+function niceDate(s) {
+  try { return new Date(s).toLocaleString(); } catch { return s || '—'; }
+}
+
+function StatusBadge({ s }) {
+  // Dark-theme friendly badges
   const map = {
-    approved:    { bg: '#dcfce7', fg: '#166534', text: 'Approved' },
-    submitted:   { bg: '#dbeafe', fg: '#1e40af', text: 'Submitted' },
-    needs_fix:   { bg: '#fef3c7', fg: '#92400e', text: 'Needs Fix' },
-    in_progress: { bg: '#e2e8f0', fg: '#334155', text: 'In progress' },
-    cancelled:   { bg: '#fee2e2', fg: '#991b1b', text: 'Cancelled' },
+    approved:   { bg:'#064e3b', fg:'#86efac', bd:'#065f46', label:'Approved' },    // green
+    submitted:  { bg:'#0b3b72', fg:'#93c5fd', bd:'#1d4ed8', label:'Submitted' },   // blue
+    needs_fix:  { bg:'#4a2f04', fg:'#fcd34d', bd:'#d97706', label:'Needs Fix' },   // amber
+    in_progress:{ bg:'#1f2937', fg:'#cbd5e1', bd:'#334155', label:'In Progress' }, // slate
+    cancelled:  { bg:'#4c0519', fg:'#fecdd3', bd:'#be123c', label:'Cancelled' },   // rose-ish
   };
-  const c = map[s] || { bg: '#f1f5f9', fg: '#334155', text: s || '—' };
+  const c = map[s] || { bg:'#1f2937', fg:'#cbd5e1', bd:'#334155', label:s || '—' };
   return (
     <span
       style={{
-        display: 'inline-flex',
-        alignItems: 'center',
+        background: c.bg,
+        color: c.fg,
+        border: `1px solid ${c.bd}`,
         padding: '4px 10px',
         borderRadius: 999,
         fontSize: 12,
         fontWeight: 700,
         lineHeight: 1,
         whiteSpace: 'nowrap',
-        background: c.bg,
-        color: c.fg,
+        display: 'inline-flex',
+        alignItems: 'center',
       }}
     >
-      {c.text}
+      {c.label}
     </span>
   );
 }
 
-function niceDate(s) {
-  try { return new Date(s).toLocaleString(); } catch { return s || '—'; }
-}
-
 function payoutText(row) {
-  const s = (row.status || '').toLowerCase();
-  ifunction payoutText(row) {
   const s = (row.status || '').toLowerCase();
   if (s === 'approved') {
     return row.approved_at
       ? `Approved ${niceDate(row.approved_at)} — payout will be/was sent by your manager`
       : 'Approved — payout will be/was sent by your manager';
   }
-  if (s === 'submitted') return 'Pending — waiting on manager review';
-  if (s === 'needs_fix') {
-    return row.manager_notes
-      ? `On hold — manager requested fixes: “${row.manager_notes}”`
-      : 'On hold — manager requested fixes';
-  }
-  if (s === 'in_progress') return 'Not submitted yet';
+  if (s === 'submitted')  return 'Pending — waiting on manager review';
+  if (s === 'needs_fix')  return 'On hold — manager requested fixes';
+  if (s === 'in_progress')return 'Not submitted yet';
+  if (s === 'cancelled')  return 'Cancelled';
   return '—';
 }
 
@@ -60,11 +57,11 @@ export default function CleanerTurns() {
   const router = useRouter();
   const qPhone = typeof router.query.phone === 'string' ? router.query.phone.trim() : '';
   const [phone, setPhone] = useState(qPhone || '');
-  const [rows, setRows]   = useState([]);
+  const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState('');
 
-  // If no phone in query, try localStorage
+  // If no phone is in query, try localStorage
   useEffect(() => {
     if (qPhone) return;
     try {
@@ -139,7 +136,7 @@ export default function CleanerTurns() {
                     <tr key={t.id} style={{ borderBottom:'1px solid #111827' }}>
                       <td style={{ padding:'10px 8px', color:'#cbd5e1' }}>{niceDate(t.created_at)}</td>
                       <td style={{ padding:'10px 8px' }}>{t.property_name}</td>
-                      <td style={{ padding:'10px 8px' }}>{statusPill(t.status)}</td>
+                      <td style={{ padding:'10px 8px' }}><StatusBadge s={t.status} /></td>
                       <td style={{ padding:'10px 8px' }}>{t.submitted_at ? niceDate(t.submitted_at) : '—'}</td>
                       <td style={{ padding:'10px 8px', color:'#cbd5e1' }}>{payoutText(t)}</td>
                       <td style={{ padding:'10px 8px' }}>
