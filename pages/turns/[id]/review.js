@@ -1,6 +1,6 @@
 // pages/turns/[id]/review.js
 import { useRouter } from 'next/router';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import ChromeDark from '../../../components/ChromeDark';
 import { ui } from '../../../lib/theme';
 
@@ -32,22 +32,29 @@ function badgeStyle(status) {
     in_progress:{ bg:'#1f2937', fg:'#cbd5e1', bd:'#334155' }
   };
   const c = map[status] || { bg:'#1f2937', fg:'#cbd5e1', bd:'#334155' };
-  return { background:c.bg, color:c.fg, border:`1px solid ${c.bd}`, padding:'2px 8px', borderRadius:999, fontSize:12, fontWeight:700, display:'inline-block' };
+  return {
+    background: c.bg, color: c.fg, border: `1px solid ${c.bd}`,
+    padding:'2px 8px', borderRadius: 999, fontSize:12, fontWeight:700, display:'inline-block'
+  };
+}
+
+// simple uploader like capture.js uses
+async function getDims(file) {
+  return await new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => { resolve({ width: img.naturalWidth, height: img.naturalHeight }); URL.revokeObjectURL(img.src); };
+    img.onerror = reject;
+    img.src = URL.createObjectURL(file);
+  });
 }
 
 export default function Review() {
   const router = useRouter();
   const turnId = router.query.id;
 
-  const isBrowser = typeof window !== 'undefined';
-  const qs = isBrowser ? new URLSearchParams(window.location.search) : null;
-  const isManagerMode = qs?.get('manager') === '1';
-  const phone = qs?.get('phone') || '';
-
-  const backHref = isManagerMode
-    ? '/managers/turns'
-    : (phone ? `/cleaner/turns?phone=${encodeURIComponent(phone)}` : '/cleaner/turns');
-  const backLabel = isManagerMode ? '← Back to turns' : '← Back to my turns';
+  const isManagerMode =
+    typeof window !== 'undefined' &&
+    new URLSearchParams(window.location.search).get('manager') === '1';
 
   const [turn, setTurn] = useState(null);
   const [status, setStatus] = useState(null);
@@ -57,9 +64,12 @@ export default function Review() {
   const [managerNote, setManagerNote] = useState('');
   const [acting, setActing] = useState(false);
 
-  // cleaner reply + resubmit state
+  // cleaner-fix UI state
   const [reply, setReply] = useState('');
-  const [resubmitting, setResubmitting] = useState(false);
+  const [newArea, setNewArea] = useState('');
+  const [staged, setStaged] = useState([]); // [{name, path, width, height}]
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef(null);
 
   useEffect(() => {
     if (!turnId) return;
@@ -71,6 +81,7 @@ export default function Review() {
         setTurn(t);
         setStatus(t?.status || 'in_progress');
         setManagerNote(t?.manager_notes || '');
+        setReply(''); // fresh each load
         const ph = await fetchPhotos(turnId);
         setPhotos(ph);
       } catch (e) {
@@ -83,8 +94,13 @@ export default function Review() {
 
   const uniqueAreas = useMemo(() => {
     const set = new Set((photos || []).map(p => p.area_key).filter(Boolean));
-    return Array.from(set);
+    const arr = Array.from(set);
+    return arr.length ? arr : ['general'];
   }, [photos]);
+
+  useEffect(() => {
+    if (!newArea && uniqueAreas.length) setNewArea(uniqueAreas[0]);
+  }, [uniqueAreas, newArea]);
 
   async function mark(newStatus) {
     if (!turnId) return;
@@ -106,35 +122,75 @@ export default function Review() {
     }
   }
 
+  async function addFiles(fileList) {
+    const files = Array.from(fileList || []);
+    if (!files.length) return;
+    setUploading(true);
+    try {
+      const uploaded = [];
+      for (const f of files) {
+        const dims = await getDims(f);
+        const longest = Math.max(dims.width, dims.height);
+        if (longest < 1024) { alert(`"${f.name}" rejected: edge < 1024px`); continue; }
+        if (f.size > 6 * 1024 * 1024) { alert(`"${f.name}" rejected: >6MB`); continue; }
+
+        const up = await fetch('/api/upload-url', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ turnId, shotId: `${newArea || 'general'}-fix`, filename: f.name, mime: f.type })
+        }).then(r => r.json());
+
+        if (!up.uploadUrl || !up.path) { alert('Could not get upload URL; try again.'); continue; }
+
+        await fetch(up.uploadUrl, { method:'PUT', headers:{ 'Content-Type': up.mime || 'application/octet-stream' }, body: f });
+
+        uploaded.push({ name: f.name, path: up.path, width: dims.width, height: dims.height });
+      }
+      if (uploaded.length) setStaged(prev => [...prev, ...uploaded]);
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  }
+
   async function resubmit() {
     if (!turnId) return;
-    setResubmitting(true);
     try {
+      const payload = {
+        turn_id: turnId,
+        reply: reply || '',
+        photos: staged.map(s => ({ path: s.path, area_key: newArea || null }))
+      };
       const r = await fetch('/api/resubmit-turn', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ turn_id: turnId, cleaner_message: reply || '' })
+        body: JSON.stringify(payload)
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error || 'resubmit failed');
-      setStatus('submitted');
-      alert('Resubmitted for approval. Your manager has been notified.');
+      alert('Re-submitted for approval. Your manager will be notified.');
+      setStaged([]);
+      setReply('');
+      // refresh turn + photos + status
+      const t = await fetchTurn(turnId);
+      setTurn(t);
+      setStatus(t?.status || 'submitted');
+      const ph = await fetchPhotos(turnId);
+      setPhotos(ph);
     } catch (e) {
-      alert(e.message || 'Could not resubmit.');
-    } finally {
-      setResubmitting(false);
+      alert(e.message || 'Could not re-submit.');
     }
   }
 
   if (!turnId) {
     return (
       <ChromeDark title="Turn Review">
-        <section style={ui.sectionGrid}>
-          <div style={ui.card}>Loading…</div>
-        </section>
+        <section style={ui.sectionGrid}><div style={ui.card}>Loading…</div></section>
       </ChromeDark>
     );
   }
+
+  const showCleanerFixPanel = !isManagerMode && (status === 'needs_fix' || status === 'in_progress');
 
   return (
     <ChromeDark title="Turn Review">
@@ -142,7 +198,12 @@ export default function Review() {
         {/* Header / Meta */}
         <div style={ui.card}>
           <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:12, flexWrap:'wrap' }}>
-            <a href={backHref} style={{ ...ui.btnSecondary, textDecoration:'none' }}>{backLabel}</a>
+            <a
+              href={isManagerMode ? '/managers/turns' : '/cleaner/turns'}
+              style={{ ...ui.btnSecondary, textDecoration:'none' }}
+            >
+              ← Back to {isManagerMode ? 'turns' : 'my turns'}
+            </a>
             <div style={{ fontSize:12, color:'#94a3b8' }}>
               Turn ID: <code style={{ userSelect:'all' }}>{turnId}</code>
             </div>
@@ -155,62 +216,19 @@ export default function Review() {
             </span>
           </h2>
 
-          {/* Cleaner view notice */}
-          {!isManagerMode && (
-            <div style={{ marginTop:8, padding:'8px 10px', background:'#0b1220', border:'1px solid #334155', borderRadius:10, color:'#cbd5e1', fontSize:13 }}>
-              Read-only view. Manager controls hidden.
+          {/* Manager note visibility for cleaners */}
+          {!isManagerMode && turn?.manager_notes && (
+            <div style={{
+              marginTop: 8, padding: '10px 12px',
+              background:'#0b1220', border:'1px solid #334155', borderRadius:10,
+              color:'#cbd5e1', fontSize:14
+            }}>
+              <div style={{ fontWeight:700, marginBottom:4 }}>Manager note</div>
+              <div>{turn.manager_notes}</div>
             </div>
           )}
 
-          {/* Manager sees cleaner reply (if present) */}
-          {isManagerMode && (turn?.cleaner_reply || '').trim() && (
-            <div style={{ marginTop:10, padding:'10px 12px', border:'1px solid #334155', background:'#0f172a', borderRadius:10, color:'#e5e7eb' }}>
-              <div style={{ fontWeight:700, marginBottom:4 }}>Cleaner reply</div>
-              <div style={{ whiteSpace:'pre-wrap' }}>{turn.cleaner_reply}</div>
-              {turn.resubmitted_at && (
-                <div style={{ marginTop:6, fontSize:12, color:'#9ca3af' }}>
-                  Resubmitted {new Date(turn.resubmitted_at).toLocaleString()}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Manager note visible to cleaners */}
-          {!isManagerMode && (turn?.manager_notes?.trim()) && (
-            <div style={{ marginTop:10, padding:'10px 12px', border:'1px solid #334155', background:'#0f172a', borderRadius:10, color:'#e5e7eb' }}>
-              <div style={{ fontWeight:700, marginBottom:4 }}>Manager notes</div>
-              <div style={{ whiteSpace:'pre-wrap' }}>{turn.manager_notes}</div>
-            </div>
-          )}
-
-          {/* Cleaner fixes / resubmit */}
-          {!isManagerMode && status === 'needs_fix' && (
-            <div style={{ marginTop:12, padding:12, border:'1px solid #334155', borderRadius:12, background:'#0f172a' }}>
-              <div style={{ fontWeight:700, marginBottom:6, color:'#e5e7eb' }}>Make fixes, then resubmit for approval</div>
-              <div style={{ display:'flex', gap:8, flexWrap:'wrap', alignItems:'center' }}>
-                <a href={`/turns/${turnId}/capture`} style={{ ...ui.btnSecondary, textDecoration:'none' }} title="Add more photos to this turn">
-                  ➕ Add photos
-                </a>
-              </div>
-              <div style={{ marginTop:10 }}>
-                <div style={{ fontSize:12, fontWeight:700, color:'#9ca3af', marginBottom:6 }}>Optional note back to your manager</div>
-                <textarea
-                  value={reply}
-                  onChange={e=>setReply(e.target.value)}
-                  rows={3}
-                  placeholder="e.g., Re-took the kitchen counter photos as requested"
-                  style={{ ...ui.input, width:'100%', padding:'10px 12px', resize:'vertical', background:'#0b1220' }}
-                />
-              </div>
-              <div style={{ display:'flex', gap:10, marginTop:12, flexWrap:'wrap' }}>
-                <button onClick={resubmit} disabled={resubmitting} style={ui.btnPrimary}>
-                  {resubmitting ? 'Resubmitting…' : 'Resubmit for approval'}
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Manager action bar */}
+          {/* Manager-only action bar */}
           {isManagerMode && (
             <div style={{ margin:'12px 0 6px', padding:12, border:'1px solid #334155', borderRadius:12, background:'#0f172a' }}>
               <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
@@ -252,6 +270,60 @@ export default function Review() {
             </div>
           )}
 
+          {/* Cleaner Fix & Resubmit panel */}
+          {showCleanerFixPanel && (
+            <div style={{ marginTop:12, padding:12, border:'1px dashed #334155', borderRadius:12, background:'#0f172a' }}>
+              <div style={{ fontWeight:700, marginBottom:8 }}>Fix items and re-submit</div>
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 160px', gap:10 }}>
+                <input
+                  value={reply}
+                  onChange={e=>setReply(e.target.value)}
+                  placeholder="Short note back to your manager (optional)…"
+                  style={ui.input}
+                />
+                <select value={newArea} onChange={e=>setNewArea(e.target.value)} style={{ ...ui.input, cursor:'pointer' }}>
+                  {uniqueAreas.map(a => <option key={a} value={a}>{a}</option>)}
+                </select>
+              </div>
+
+              <div style={{ marginTop:10, display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  onChange={(e)=>addFiles(e.target.files)}
+                  style={{ display:'none' }}
+                />
+                <button
+                  onClick={()=>fileInputRef.current?.click()}
+                  disabled={uploading}
+                  style={ui.btnSecondary}
+                >
+                  {uploading ? 'Uploading…' : '➕ Add photo(s)'}
+                </button>
+
+                <button
+                  onClick={resubmit}
+                  disabled={uploading || (!reply && staged.length === 0)}
+                  style={ui.btnPrimary}
+                >
+                  Submit fixes for review
+                </button>
+              </div>
+
+              {staged.length > 0 && (
+                <div style={{ marginTop:10, color:'#cbd5e1', fontSize:13 }}>
+                  Staged: {staged.map(s => s.name).join(', ')}
+                </div>
+              )}
+
+              <div style={{ ...ui.subtle, marginTop:8 }}>
+                Tip: choose the checklist area first, then add photos for that area.
+              </div>
+            </div>
+          )}
+
           <div style={{ ...ui.subtle, marginTop: 10 }}>
             Click any photo to open full-size in a new tab.
           </div>
@@ -285,11 +357,13 @@ export default function Review() {
           )}
         </div>
 
-        {uniqueAreas.length > 1 && (
-          <div style={{ ...ui.subtle }}>
-            Areas in this turn: {uniqueAreas.join(' • ')}
-          </div>
-        )}
+        {useMemo(() => {
+          const set = new Set((photos || []).map(p => p.area_key).filter(Boolean));
+          const arr = Array.from(set);
+          return (arr.length > 1) ? (
+            <div style={{ ...ui.subtle }}>Areas in this turn: {arr.join(' • ')}</div>
+          ) : null;
+        }, [photos])}
       </section>
     </ChromeDark>
   );
