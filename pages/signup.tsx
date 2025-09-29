@@ -1,6 +1,9 @@
 import { useState } from 'react';
 import { supabaseBrowser } from '@/lib/supabaseBrowser';
 import Link from 'next/link';
+import Card from '@/components/ui/Card';
+import Input from '@/components/ui/Input';
+import { PrimaryButton } from '@/components/ui/Button';
 
 export default function Signup() {
   const [email, setEmail] = useState(''); 
@@ -20,23 +23,19 @@ export default function Signup() {
   }
 
   return (
-    <main className="min-h-screen bg-black text-white grid place-items-center p-6">
-      <div className="w-full max-w-md bg-white/5 border border-white/10 rounded-2xl p-6">
-        <h1 className="text-2xl font-semibold mb-4">Start Free 30-Day Trial</h1>
-        <form onSubmit={onSubmit} className="space-y-3">
-          <input className="w-full rounded-xl bg-black/40 border border-white/10 p-3"
-                 placeholder="Email" type="email" value={email} onChange={e=>setEmail(e.target.value)} required />
-          <input className="w-full rounded-xl bg-black/40 border border-white/10 p-3"
-                 placeholder="Create password" type="password" value={password} onChange={e=>setPassword(e.target.value)} required />
-          <button className="w-full rounded-2xl bg-white/10 hover:bg-white/20 py-3" disabled={loading}>
-            {loading ? 'Creating…' : 'Create Account'}
-          </button>
-          {msg && <p className="text-red-400 text-sm">{msg}</p>}
+    <main className="centered">
+      <Card className="w-full max-w-md">
+        <h1 className="h1">Start Free 30-Day Trial</h1>
+        <form onSubmit={onSubmit} style={{ display: 'grid', gap: 12 }}>
+          <Input placeholder="Email" type="email" value={email} onChange={e=>setEmail(e.target.value)} required />
+          <Input placeholder="Create password" type="password" value={password} onChange={e=>setPassword(e.target.value)} required />
+          <PrimaryButton disabled={loading}>{loading ? 'Creating…' : 'Create Account'}</PrimaryButton>
+          {msg && <p style={{ color: '#fda4af', fontSize: 14 }}>{msg}</p>}
         </form>
-        <p className="mt-4 text-sm opacity-80">
-          Already have an account? <Link href="/login" className="underline">Sign in</Link>
+        <p className="hint" style={{ marginTop: 10 }}>
+          Already have an account? <Link href="/login" style={{ textDecoration: 'underline', color: 'var(--text)' }}>Sign in</Link>
         </p>
-      </div>
+      </Card>
     </main>
   );
 }
