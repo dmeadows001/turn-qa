@@ -5,6 +5,7 @@ import Card from '@/components/ui/Card';
 import Input from '@/components/ui/Input';
 import { PrimaryButton } from '@/components/ui/Button';
 import Header from '@/components/layout/Header';
+import Image from 'next/image'; // ✅ add this
 
 export default function Login() {
   const [email, setEmail] = useState('');
@@ -36,9 +37,11 @@ export default function Login() {
       >
         <Card className="auth-card">
           <div className="auth-brand" style={{ gap: 12 }}>
-  <Image src="/logo-camera.svg" alt="TurnQA" width={28} height={28} priority />
-  <div className="muted" style={{ fontWeight: 700, letterSpacing: 0.2 }}>TurnQA • Manager</div>
-</div>
+            <Image src="/logo-camera.svg" alt="TurnQA" width={28} height={28} priority />
+            <div className="muted" style={{ fontWeight: 700, letterSpacing: 0.2 }}>
+              TurnQA • Manager
+            </div>
+          </div>
 
           <h1 className="h1 accent" style={{ marginBottom: 18 }}>Sign in</h1>
 
