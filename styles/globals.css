@@ -81,3 +81,25 @@ button{cursor:pointer}
   background: linear-gradient(135deg, var(--accent), var(--accent-2));
   box-shadow: 0 4px 18px rgba(124,92,255,.35);
 }
+
+/* Reduce dead space above the auth card on small screens */
+@media (max-width: 480px) {
+  .auth-wrap {
+    align-items: start;      /* push up vertically */
+    padding-top: 16px;       /* small top padding */
+    padding-bottom: 24px;    /* keep some bottom breathing room */
+  }
+  .card.auth-card {
+    margin-top: 8px;         /* ensures it isn't glued to the top edge */
+  }
+}
+
+/* Slight nudge up on tablets too (optional) */
+@media (min-width: 481px) and (max-width: 900px) {
+  .auth-wrap {
+    align-items: start;
+    padding-top: 32px;
+    padding-bottom: 32px;
+  }
+}
+
