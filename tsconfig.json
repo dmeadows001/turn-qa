@@ -1,0 +1,9 @@
+{
+  "extends": "next/tsconfig",
+  "compilerOptions": {
+    "strict": true,
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": { "@/*": ["*"] }
+  }
+}
