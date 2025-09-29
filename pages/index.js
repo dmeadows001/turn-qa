@@ -23,9 +23,9 @@ export default function Home() {
   return (
     <ChromeDark
       title={
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
-          <Image src="/logo-camera.svg" alt="" width={24} height={24} priority />
-          <span>TurnQA</span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 12 }}>
+          <Image src="/logo-camera.svg" alt="" width={36} height={36} priority />
+          <span style={{ fontSize: 22, fontWeight: 700 }}>TurnQA</span>
         </span>
       }
     >
