@@ -1,6 +1,9 @@
 import { useState } from 'react';
 import { supabaseBrowser } from '@/lib/supabaseBrowser';
 import Link from 'next/link';
+import Card from '@/components/ui/Card';
+import Input from '@/components/ui/Input';
+import { PrimaryButton } from '@/components/ui/Button';
 
 export default function Login() {
   const [email, setEmail] = useState(''); 
@@ -20,23 +23,19 @@ export default function Login() {
   }
 
   return (
-    <main className="min-h-screen bg-black text-white grid place-items-center p-6">
-      <div className="w-full max-w-md bg-white/5 border border-white/10 rounded-2xl p-6">
-        <h1 className="text-2xl font-semibold mb-4">Manager Sign In</h1>
-        <form onSubmit={onSubmit} className="space-y-3">
-          <input className="w-full rounded-xl bg-black/40 border border-white/10 p-3"
-                 placeholder="Email" type="email" value={email} onChange={e=>setEmail(e.target.value)} required />
-          <input className="w-full rounded-xl bg-black/40 border border-white/10 p-3"
-                 placeholder="Password" type="password" value={password} onChange={e=>setPassword(e.target.value)} required />
-          <button className="w-full rounded-2xl bg-white/10 hover:bg-white/20 py-3" disabled={loading}>
-            {loading ? 'Signing in…' : 'Sign In'}
-          </button>
-          {msg && <p className="text-red-400 text-sm">{msg}</p>}
+    <main className="centered">
+      <Card className="w-full max-w-md">
+        <h1 className="h1">Manager Sign In</h1>
+        <form onSubmit={onSubmit} style={{ display: 'grid', gap: 12 }}>
+          <Input placeholder="Email" type="email" value={email} onChange={e=>setEmail(e.target.value)} required />
+          <Input placeholder="Password" type="password" value={password} onChange={e=>setPassword(e.target.value)} required />
+          <PrimaryButton disabled={loading}>{loading ? 'Signing in…' : 'Sign In'}</PrimaryButton>
+          {msg && <p style={{ color: '#fda4af', fontSize: 14 }}>{msg}</p>}
         </form>
-        <p className="mt-4 text-sm opacity-80">
-          New here? <Link href="/signup" className="underline">Start your free trial</Link>
+        <p className="hint" style={{ marginTop: 10 }}>
+          New here? <Link href="/signup" style={{ textDecoration: 'underline', color: 'var(--text)' }}>Start your free trial</Link>
         </p>
-      </div>
+      </Card>
     </main>
   );
 }
