@@ -23,15 +23,13 @@ export default function Header() {
           paddingBottom: 14,
         }}
       >
-        {/* Logo (from /public/logo-camera.svg) */}
-        <Link href="/" aria-label="TurnQA home" style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
-          <Image
-            src="/logo-camera.svg"
-            alt="TurnQA"
-            width={28}
-            height={28}
-            priority
-          />
+        <Link
+          href="/"
+          aria-label="TurnQA home"
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 12 }}
+        >
+          <Image src="/logo-camera.svg" alt="TurnQA" width={36} height={36} priority />
+          {/* keep brand text at your previous/default size */}
           <span style={{ fontWeight: 700, letterSpacing: 0.2 }}>TurnQA</span>
         </Link>
 
