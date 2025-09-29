@@ -1,3 +1,5 @@
+import Card from '@/components/ui/Card';
+import { PrimaryButton } from '@/components/ui/Button';
 import { useState } from 'react';
 
 export default function Billing() {
@@ -9,12 +11,16 @@ export default function Billing() {
     window.location.href = url;
   }
   return (
-    <div className="p-8 text-gray-100">
-      <h1 className="text-2xl mb-3">Your plan</h1>
-      <p className="mb-6 opacity-80">Your trial may have ended. Start a subscription to keep using TurnQA. Cancel anytime.</p>
-      <button onClick={startCheckout} disabled={loading} className="bg-white/10 hover:bg-white/20 px-4 py-2 rounded-2xl">
-        {loading ? 'Redirecting…' : 'Start subscription'}
-      </button>
-    </div>
+    <main className="centered">
+      <Card className="w-full max-w-lg">
+        <h1 className="h1">Your plan</h1>
+        <p className="muted" style={{ marginBottom: 16 }}>
+          Your trial may have ended. Start a subscription to keep using TurnQA. Cancel anytime.
+        </p>
+        <PrimaryButton onClick={startCheckout} disabled={loading}>
+          {loading ? 'Redirecting…' : 'Start subscription'}
+        </PrimaryButton>
+      </Card>
+    </main>
   );
 }
