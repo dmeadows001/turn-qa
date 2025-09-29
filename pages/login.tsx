@@ -35,10 +35,10 @@ export default function Login() {
         }}
       >
         <Card className="auth-card">
-          <div className="auth-brand">
-            <div className="auth-brand-badge" />
-            <div className="muted" style={{ fontWeight: 600 }}>TurnQA • Manager</div>
-          </div>
+          <div className="auth-brand" style={{ gap: 12 }}>
+  <Image src="/logo-camera.svg" alt="TurnQA" width={28} height={28} priority />
+  <div className="muted" style={{ fontWeight: 700, letterSpacing: 0.2 }}>TurnQA • Manager</div>
+</div>
 
           <h1 className="h1 accent" style={{ marginBottom: 18 }}>Sign in</h1>
 
