@@ -49,7 +49,15 @@ export default function Login() {
             {msg && <p style={{ color: '#fda4af', fontSize: 14 }}>{msg}</p>}
           </form>
 
-          {/* Larger, bolder CTA text */}
+          {/* Compact legal line */}
+          <p className="hint" style={{ marginTop: 10, fontSize: 12 }}>
+            By continuing, you agree to our{' '}
+            <Link href="/legal/terms" style={{ textDecoration: 'underline' }}>Terms</Link>
+            {' '}and{' '}
+            <Link href="/legal/privacy" style={{ textDecoration: 'underline' }}>Privacy Policy</Link>.
+          </p>
+
+          {/* Larger CTA */}
           <p className="hint" style={{ marginTop: 16, fontSize: 15, fontWeight: 600 }}>
             New here?{' '}
             <Link href="/signup" style={{ textDecoration: 'underline', color: 'var(--text)' }}>
