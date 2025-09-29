@@ -23,3 +23,57 @@ button{cursor:pointer}
 .h1{font-size:28px;font-weight:700;margin:0 0 12px}
 .hint{font-size:12px;color:var(--muted)}
 .centered{min-height:100vh;display:grid;place-items:center;padding:32px}
+/* Midnight full-bleed backdrop for auth */
+.auth-wrap {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+  background:
+    radial-gradient(1000px 600px at 80% -10%, rgba(124,92,255,.16), transparent 60%),
+    radial-gradient(800px 500px at 0% 100%, rgba(0,229,255,.08), transparent 60%),
+    linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0) 40%);
+}
+
+/* subtle grid pattern */
+.auth-wrap::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(var(--border) 1px, transparent 1px),
+    linear-gradient(90deg, var(--border) 1px, transparent 1px);
+  background-size: 36px 36px, 36px 36px;
+  mask-image: radial-gradient(ellipse at center, rgba(0,0,0,.4), transparent 60%);
+  opacity: .25;
+}
+
+/* prettier card */
+.card.auth-card {
+  padding: 28px;
+  width: 100%;
+  max-width: 420px;
+  border-radius: 20px;
+  border: 1px solid rgba(255,255,255,.12);
+  backdrop-filter: blur(6px);
+  background: linear-gradient(180deg, rgba(18,18,22,.9), rgba(18,18,22,.75));
+  box-shadow: 0 30px 60px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.04);
+}
+
+/* title accent */
+.h1.accent {
+  letter-spacing: .2px;
+  background: linear-gradient(135deg, var(--text), #b6b8ff 40%, #8deaff);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* smaller helper tweaks */
+.auth-brand { display:flex; align-items:center; gap:10px; margin-bottom:6px; opacity:.9; }
+.auth-brand-badge {
+  width: 28px; height: 28px; border-radius: 8px;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  box-shadow: 0 4px 18px rgba(124,92,255,.35);
+}
