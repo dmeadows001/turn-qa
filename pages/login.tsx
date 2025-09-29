@@ -6,7 +6,7 @@ import Input from '@/components/ui/Input';
 import { PrimaryButton } from '@/components/ui/Button';
 
 export default function Login() {
-  const [email, setEmail] = useState(''); 
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [msg, setMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -23,17 +23,41 @@ export default function Login() {
   }
 
   return (
-    <main className="centered">
-      <Card className="w-full max-w-md">
-        <h1 className="h1">Manager Sign In</h1>
+    <main className="auth-wrap">
+      <Card className="auth-card">
+        <div className="auth-brand">
+          <div className="auth-brand-badge" />
+          <div className="muted" style={{ fontWeight: 600 }}>TurnQA • Manager</div>
+        </div>
+
+        <h1 className="h1 accent" style={{ marginBottom: 18 }}>Sign in</h1>
+
         <form onSubmit={onSubmit} style={{ display: 'grid', gap: 12 }}>
-          <Input placeholder="Email" type="email" value={email} onChange={e=>setEmail(e.target.value)} required />
-          <Input placeholder="Password" type="password" value={password} onChange={e=>setPassword(e.target.value)} required />
-          <PrimaryButton disabled={loading}>{loading ? 'Signing in…' : 'Sign In'}</PrimaryButton>
+          <Input
+            placeholder="Email"
+            type="email"
+            value={email}
+            onChange={e => setEmail(e.target.value)}
+            required
+          />
+          <Input
+            placeholder="Password"
+            type="password"
+            value={password}
+            onChange={e => setPassword(e.target.value)}
+            required
+          />
+          <PrimaryButton disabled={loading}>
+            {loading ? 'Signing in…' : 'Sign In'}
+          </PrimaryButton>
           {msg && <p style={{ color: '#fda4af', fontSize: 14 }}>{msg}</p>}
         </form>
-        <p className="hint" style={{ marginTop: 10 }}>
-          New here? <Link href="/signup" style={{ textDecoration: 'underline', color: 'var(--text)' }}>Start your free trial</Link>
+
+        <p className="hint" style={{ marginTop: 14 }}>
+          New here?{' '}
+          <Link href="/signup" style={{ textDecoration: 'underline', color: 'var(--text)' }}>
+            Start your free trial
+          </Link>
         </p>
       </Card>
     </main>
