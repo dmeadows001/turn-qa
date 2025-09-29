@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import ChromeDark from '../components/ChromeDark';
 import { ui } from '../lib/theme';
+import Image from 'next/image';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -20,7 +21,14 @@ export default function Home() {
   }, []);
 
   return (
-    <ChromeDark title="TurnQA">
+    <ChromeDark
+      title={
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
+          <Image src="/logo-camera.svg" alt="" width={24} height={24} priority />
+          <span>TurnQA</span>
+        </span>
+      }
+    >
       <section style={ui.sectionGrid}>
         <div style={ui.card}>
           <h2 style={{ marginTop: 0, marginBottom: 6 }}>Managers</h2>
