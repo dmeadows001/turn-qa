@@ -23,7 +23,14 @@ export default function Login() {
   }
 
   return (
-    <main className="auth-wrap">
+    <main
+      className="auth-wrap"
+      style={{
+        minHeight: '100vh',
+        background:
+          'var(--bg), radial-gradient(1000px 600px at 80% -10%, rgba(124,92,255,.16), transparent 60%), radial-gradient(800px 500px at 0% 100%, rgba(0,229,255,.08), transparent 60%), linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0) 40%)'
+      }}
+    >
       <Card className="auth-card">
         <div className="auth-brand">
           <div className="auth-brand-badge" />
