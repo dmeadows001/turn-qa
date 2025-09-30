@@ -1,4 +1,3 @@
-// pages/auth/callback.tsx
 import { useEffect, useMemo, useState } from 'react';
 import { supabaseBrowser } from '@/lib/supabaseBrowser';
 
@@ -13,34 +12,34 @@ function parseHash(hash: string) {
   return out;
 }
 
+function withTimeout<T>(p: Promise<T>, ms: number) {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`setSession timeout after ${ms}ms`)), ms);
+    p.then(v => { clearTimeout(t); resolve(v); }).catch(e => { clearTimeout(t); reject(e); });
+  });
+}
+
 export default function AuthCallback() {
   const [msg, setMsg] = useState('Completing sign-in…');
   const [fatal, setFatal] = useState<string | null>(null);
 
-  const url = typeof window !== 'undefined' ? window.location.href : '';
   const qs = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
-  const nextPath = useMemo(() => (qs?.get('next') || '/dashboard'), [qs]);
-  const email = useMemo(() => (qs?.get('email') || ''), [qs]);
+  const nextPath = useMemo(() => qs?.get('next') || '/dashboard', [qs]);
+  const email = useMemo(() => qs?.get('email') || '', [qs]);
 
-  async function tryResend() {
+  async function resend() {
     try {
-      if (!email) throw new Error('Missing email to resend link.');
-      setMsg('Sending a new magic link…');
       const supabase = supabaseBrowser();
       const base = window.location.origin.replace(/\/+$/, '');
       const { error } = await supabase.auth.signInWithOtp({
         email,
-        options: {
-          emailRedirectTo: `${base}/auth/callback?next=${encodeURIComponent(
-            nextPath
-          )}&email=${encodeURIComponent(email)}`
-        }
+        options: { emailRedirectTo: `${base}/auth/callback?next=${encodeURIComponent(nextPath)}&email=${encodeURIComponent(email)}` }
       });
       if (error) throw error;
+      setMsg('Sent a fresh link. Check your inbox.');
       setFatal(null);
-      setMsg('Check your email for a fresh link.');
     } catch (e: any) {
-      console.error('[callback] resend failed:', e);
+      console.error('[callback] resend error:', e);
       setFatal(e?.message || 'Could not resend link.');
     }
   }
@@ -48,65 +47,78 @@ export default function AuthCallback() {
   useEffect(() => {
     (async () => {
       try {
+        const url = typeof window !== 'undefined' ? window.location.href : '';
         console.log('[callback] URL:', url);
+
         const supabase = supabaseBrowser();
 
-        // A) explicit error params
+        // explicit error from provider
         const errCode = qs?.get('error_code');
         const errDesc = qs?.get('error_description');
         if (errCode || errDesc) {
           console.error('[callback] explicit error:', errCode, errDesc);
-          setFatal(errDesc || errCode || 'Link could not be used.');
+          setFatal(errDesc || errCode || 'Link error.');
           return;
         }
 
-        // B) PKCE (?code=...)
+        // PKCE ?code=
         const code = qs?.get('code');
         if (code) {
-          console.log('[callback] found PKCE code');
-          const { data, error } = await supabase.auth.exchangeCodeForSession(window.location.href);
+          console.log('[callback] found PKCE code → exchange');
+          const { data, error } = await supabase.auth.exchangeCodeForSession(url);
+          console.log('[callback] exchange result:', { hasSession: !!data?.session, error });
           if (error) throw error;
-          console.log('[callback] PKCE exchange success:', !!data?.session);
           try { await fetch('/api/ensure-profile', { method: 'POST' }); } catch {}
           window.location.replace(nextPath);
           return;
         }
 
-        // C) Email verify/magic/recovery (?token_hash & type)
+        // token_hash & type
         const tokenHash = qs?.get('token_hash') || qs?.get('token');
         const type = (qs?.get('type') || '').toLowerCase();
         if (tokenHash && type) {
           console.log('[callback] found token_hash + type:', type);
           const { data, error } = await supabase.auth.verifyOtp({ type: type as any, token_hash: tokenHash });
+          console.log('[callback] verifyOtp result:', { hasSession: !!data?.session, error });
           if (error) throw error;
-          console.log('[callback] verifyOtp success:', !!data?.session);
           try { await fetch('/api/ensure-profile', { method: 'POST' }); } catch {}
           window.location.replace(nextPath);
           return;
         }
 
-        // D) Hash tokens (#access_token & refresh_token)
+        // hash tokens (#access_token / #refresh_token) — your case
         const tokens = parseHash(typeof window !== 'undefined' ? window.location.hash : '');
         console.log('[callback] hash tokens:', Object.keys(tokens));
         if (tokens.access_token && tokens.refresh_token) {
           console.log('[callback] calling setSession()');
-          const { error } = await supabase.auth.setSession({
-            access_token: tokens.access_token,
-            refresh_token: tokens.refresh_token
-          });
-          if (error) throw error;
-          console.log('[callback] setSession success, ensuring profile…');
-          try { await fetch('/api/ensure-profile', { method: 'POST' }); } catch {}
+          try {
+            const result = await withTimeout(
+              supabase.auth.setSession({
+                access_token: tokens.access_token,
+                refresh_token: tokens.refresh_token
+              }),
+              4000 // 4s guard to avoid hanging
+            );
+            console.log('[callback] setSession result:', result);
+          } catch (e: any) {
+            console.error('[callback] setSession error/timeout:', e);
+            // Not fatal to UX → proceed to dashboard; client should still have hash
+          }
+
+          // Best-effort profile init; don't block redirect
+          try { await fetch('/api/ensure-profile', { method: 'POST' }); } catch (e) {
+            console.warn('[callback] ensure-profile failed (non-fatal):', e);
+          }
+
           console.log('[callback] redirect →', nextPath);
           window.location.replace(nextPath);
           return;
         }
 
-        // Nothing usable
-        console.warn('[callback] no tokens/codes found');
+        console.warn('[callback] no usable tokens found.');
         setFatal('We could not complete sign-in from this link.');
       } catch (e: any) {
-        console.error('[callback] fatal error:', e);
+        console.error('[callback] fatal:', e);
         setFatal(e?.message || 'Something went wrong completing sign-in.');
       }
     })();
@@ -122,7 +134,7 @@ export default function AuthCallback() {
           <div>
             <div style={{ marginBottom: 10 }}>{fatal}</div>
             {email ? (
-              <button onClick={tryResend} className="btn" style={{ marginRight: 8 }}>
+              <button onClick={resend} className="btn" style={{ marginRight: 8 }}>
                 Resend magic link to {email}
               </button>
             ) : null}
