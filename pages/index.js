@@ -1,9 +1,9 @@
 // pages/index.js
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
+import Image from 'next/image';
 import ChromeDark from '../components/ChromeDark';
 import { ui } from '../lib/theme';
-import Image from 'next/image';
 import { supabaseBrowser } from '@/lib/supabaseBrowser';
 
 export default function Home() {
@@ -36,8 +36,8 @@ export default function Home() {
               </Link>
             ) : (
               <>
-                <Link href="/signup" ...>Start free trial</Link>
-                <Link href="/login" ...>Manager sign in</Link>
+                <Link href="/signup" style={ui.btnPrimary}>Start free trial</Link>
+                <Link href="/login" style={ui.btnSecondary}>Manager sign in</Link>
               </>
             )}
           </div>
