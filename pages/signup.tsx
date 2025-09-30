@@ -5,6 +5,7 @@ import Card from '@/components/ui/Card';
 import Input from '@/components/ui/Input';
 import { PrimaryButton } from '@/components/ui/Button';
 import Header from '@/components/layout/Header';
+import Image from 'next/image'; // ✅ use the camera logo
 
 export default function Signup() {
   const [email, setEmail] = useState('');
@@ -35,9 +36,12 @@ export default function Signup() {
         }}
       >
         <Card className="auth-card">
-          <div className="auth-brand">
-            <div className="auth-brand-badge" />
-            <div className="muted" style={{ fontWeight: 600 }}>TurnQA • Manager</div>
+          {/* Brand row with camera logo */}
+          <div className="auth-brand" style={{ gap: 12 }}>
+            <Image src="/logo-camera.svg" alt="TurnQA" width={28} height={28} priority />
+            <div className="muted" style={{ fontWeight: 700, letterSpacing: 0.2 }}>
+              TurnQA • Manager
+            </div>
           </div>
 
           <h1 className="h1 accent" style={{ marginBottom: 18 }}>Start Free 30-Day Trial</h1>
@@ -66,8 +70,8 @@ export default function Signup() {
           {/* Compact legal line */}
           <p className="hint" style={{ marginTop: 10, fontSize: 12 }}>
             By continuing, you agree to our{' '}
-            <Link href="/legal/terms" style={{ textDecoration: 'underline' }}>Terms</Link>
-            {' '}and{' '}
+            <Link href="/legal/terms" style={{ textDecoration: 'underline' }}>Terms</Link>{' '}
+            and{' '}
             <Link href="/legal/privacy" style={{ textDecoration: 'underline' }}>Privacy Policy</Link>.
           </p>
 
