@@ -5,7 +5,7 @@ import Card from '@/components/ui/Card';
 import Input from '@/components/ui/Input';
 import { PrimaryButton } from '@/components/ui/Button';
 import Header from '@/components/layout/Header';
-import Image from 'next/image'; // ✅ add this
+import Image from 'next/image';
 
 export default function Login() {
   const [email, setEmail] = useState('');
@@ -17,11 +17,37 @@ export default function Login() {
     e.preventDefault();
     setLoading(true);
     setMsg(null);
+
     const supabase = supabaseBrowser();
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    setLoading(false);
-    if (error) setMsg(error.message);
-    else window.location.href = '/managers/turns';
+
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error || !data?.user) {
+      setLoading(false);
+      setMsg(error?.message || 'Sign-in failed.');
+      return;
+    }
+
+    // fetch profile.role to choose landing page
+    let role: string | null = null;
+    try {
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', data.user.id)
+        .single();
+      role = (profile?.role as string) || null;
+    } catch {
+      // ignore; fallback to manager dashboard
+    }
+
+    // If middleware set ?next=/something, honor it
+    const nextParam = new URLSearchParams(window.location.search).get('next');
+
+    const dest =
+      nextParam ||
+      (role === 'cleaner' ? '/cleaner/jobs' : '/dashboard'); // default manager → /dashboard
+
+    window.location.href = dest;
   }
 
   return (
@@ -46,9 +72,23 @@ export default function Login() {
           <h1 className="h1 accent" style={{ marginBottom: 18 }}>Sign in</h1>
 
           <form onSubmit={onSubmit} style={{ display: 'grid', gap: 12 }}>
-            <Input placeholder="Email" type="email" value={email} onChange={e => setEmail(e.target.value)} required />
-            <Input placeholder="Password" type="password" value={password} onChange={e => setPassword(e.target.value)} required />
-            <PrimaryButton disabled={loading}>{loading ? 'Signing in…' : 'Sign In'}</PrimaryButton>
+            <Input
+              placeholder="Email"
+              type="email"
+              value={email}
+              onChange={e => setEmail(e.target.value)}
+              required
+            />
+            <Input
+              placeholder="Password"
+              type="password"
+              value={password}
+              onChange={e => setPassword(e.target.value)}
+              required
+            />
+            <PrimaryButton disabled={loading}>
+              {loading ? 'Signing in…' : 'Sign In'}
+            </PrimaryButton>
             {msg && <p style={{ color: '#fda4af', fontSize: 14 }}>{msg}</p>}
           </form>
 
