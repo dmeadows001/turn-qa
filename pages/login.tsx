@@ -20,34 +20,37 @@ export default function Login() {
 
     const supabase = supabaseBrowser();
 
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error || !data?.user) {
-      setLoading(false);
-      setMsg(error?.message || 'Sign-in failed.');
-      return;
-    }
-
-    // fetch profile.role to choose landing page
-    let role: string | null = null;
     try {
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('role')
-        .eq('id', data.user.id)
-        .single();
-      role = (profile?.role as string) || null;
-    } catch {
-      // ignore; fallback to manager dashboard
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      console.log('LOGIN RESPONSE:', { data, error });
+      if (error || !data?.user) {
+        setMsg(error?.message || 'Sign-in failed.');
+        setLoading(false);
+        return;
+      }
+
+      // Try to read role from profiles
+      let role: string | null = null;
+      try {
+        const { data: profile, error: pErr } = await supabase
+          .from('profiles')
+          .select('role')
+          .eq('id', data.user.id)
+          .single();
+        if (!pErr) role = (profile?.role as string) || null;
+      } catch {
+        // ignore; default below
+      }
+
+      const nextParam = new URLSearchParams(window.location.search).get('next');
+      const dest = nextParam || (role === 'cleaner' ? '/cleaner/jobs' : '/dashboard');
+
+      window.location.href = dest;
+    } catch (err: any) {
+      console.error('LOGIN HANDLER ERROR:', err);
+      setMsg(err?.message || 'Unexpected error during sign-in.');
+      setLoading(false);
     }
-
-    // If middleware set ?next=/something, honor it
-    const nextParam = new URLSearchParams(window.location.search).get('next');
-
-    const dest =
-      nextParam ||
-      (role === 'cleaner' ? '/cleaner/jobs' : '/dashboard'); // default manager → /dashboard
-
-    window.location.href = dest;
   }
 
   return (
