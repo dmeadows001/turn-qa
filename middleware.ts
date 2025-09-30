@@ -14,7 +14,8 @@ const PUBLIC_PATHS = [
   '/legal',
   '/support',
   '/api/stripe/webhook',
-  '/api/billing'
+  '/api/billing',
+  '/dashboard'
 ];
 
 export async function middleware(req: NextRequest) {
