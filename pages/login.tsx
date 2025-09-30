@@ -13,45 +13,44 @@ export default function Login() {
   const [msg, setMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  async function onSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setLoading(true);
-    setMsg(null);
+ async function onSubmit(e: React.FormEvent) {
+  e.preventDefault();
+  setLoading(true);
+  setMsg(null);
 
-    const supabase = supabaseBrowser();
+  const supabase = supabaseBrowser();
 
-    try {
-      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-      console.log('LOGIN RESPONSE:', { data, error });
-      if (error || !data?.user) {
-        setMsg(error?.message || 'Sign-in failed.');
-        setLoading(false);
-        return;
-      }
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  console.log('LOGIN RESPONSE:', { data, error });
 
-      // Try to read role from profiles
-      let role: string | null = null;
-      try {
-        const { data: profile, error: pErr } = await supabase
-          .from('profiles')
-          .select('role')
-          .eq('id', data.user.id)
-          .single();
-        if (!pErr) role = (profile?.role as string) || null;
-      } catch {
-        // ignore; default below
-      }
-
-      const nextParam = new URLSearchParams(window.location.search).get('next');
-      const dest = nextParam || (role === 'cleaner' ? '/cleaner/jobs' : '/dashboard');
-
-      window.location.href = dest;
-    } catch (err: any) {
-      console.error('LOGIN HANDLER ERROR:', err);
-      setMsg(err?.message || 'Unexpected error during sign-in.');
-      setLoading(false);
-    }
+  if (error || !data?.user) {
+    // common friendly translations
+    const raw = error?.message || 'Sign-in failed.';
+    const friendly =
+      /Email not confirmed/i.test(raw) ? 'Please confirm your email before signing in.' :
+      /Invalid login credentials/i.test(raw) ? 'Invalid email or password.' :
+      raw;
+    setMsg(friendly);
+    setLoading(false);
+    return;
   }
+
+  // fetch role and redirect (unchanged)
+  let role: string | null = null;
+  try {
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('role')
+      .eq('id', data.user.id)
+      .single();
+    role = (profile?.role as string) || null;
+  } catch {}
+
+  const nextParam = new URLSearchParams(window.location.search).get('next');
+  const dest = nextParam || (role === 'cleaner' ? '/cleaner/jobs' : '/dashboard');
+  console.log('REDIRECTING TO:', dest);
+  window.location.href = dest;
+}
 
   return (
     <>
