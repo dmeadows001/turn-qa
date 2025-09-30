@@ -30,12 +30,12 @@ export default function Signup() {
 
     // Ask Supabase to send its email link to our auth callback
     const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        emailRedirectTo: `${base}/auth/callback?next=/dashboard`
-      }
-    });
+  email,
+  password,
+  options: {
+    emailRedirectTo: `${base}/auth/callback?next=/dashboard&email=${encodeURIComponent(email)}`
+  }
+});
 
     if (error) {
       setMsg(error.message);
