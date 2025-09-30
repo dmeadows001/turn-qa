@@ -18,7 +18,15 @@ export default function Dashboard() {
   const [msg, setMsg] = useState('');
   const [managerId, setManagerId] = useState(null);
 
-  // keep session in sync
+  // 1) Keep session in sync
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => setSession(data.session || null));
+    const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => setSession(s));
+    return () => sub.subscription.unsubscribe();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // 2) Bootstrap dashboard once we have a session
   useEffect(() => {
     if (!session) return;
     (async () => {
@@ -26,7 +34,7 @@ export default function Dashboard() {
         setLoading(true);
         setMsg('');
 
-        // 1) Ensure ONE managers row for this user (idempotent)
+        // Ensure ONE managers row for this user (idempotent)
         const { data: existing, error: mErr } = await supabase
           .from('managers')
           .select('id')
@@ -35,38 +43,34 @@ export default function Dashboard() {
         if (mErr) throw mErr;
 
         if (!existing || existing.length === 0) {
-          // create one
           const { error: insErr } = await supabase
             .from('managers')
             .upsert(
               { user_id: session.user.id, name: session.user.email || 'Manager' },
-              { onConflict: 'user_id' } // requires UNIQUE(user_id)
+              { onConflict: 'user_id' } // requires a UNIQUE(user_id) constraint
             );
           if (insErr) throw insErr;
         } else if (existing.length > 1) {
-          // if duplicates slipped in, keep first and delete rest (defensive)
+          // If duplicates slipped in, keep first and delete the rest (defensive)
           const keepId = existing[0].id;
           const extras = existing.slice(1).map(r => r.id);
           if (extras.length) {
-            const { error: delErr } = await supabase
-              .from('managers')
-              .delete()
-              .in('id', extras);
+            const { error: delErr } = await supabase.from('managers').delete().in('id', extras);
             if (delErr) throw delErr;
           }
         }
 
-        // reselect the single id (now guaranteed)
+        // Reselect the single id (now guaranteed)
         const { data: one, error: oneErr } = await supabase
           .from('managers')
           .select('id')
           .eq('user_id', session.user.id)
-          .single(); // safe now
+          .single();
         if (oneErr) throw oneErr;
 
         setManagerId(one.id);
 
-        // 2) Load properties list
+        // Load properties list
         const { data: props, error: pErr } = await supabase
           .from('properties')
           .select('id, name, created_at')
@@ -81,8 +85,36 @@ export default function Dashboard() {
         setLoading(false);
       }
     })();
-  }, [session]);
+  }, [session, supabase]);
 
+  // 3) Hoisted createProperty handler (so it exists before render/prerender)
+  async function createProperty(e) {
+    e?.preventDefault?.();
+    try {
+      if (!propName.trim()) return setMsg('Enter a property name.');
+      if (!managerId) return setMsg('Your account is initializing. Try again in a moment.');
+      setCreating(true);
+      setMsg('');
+
+      const { data, error } = await supabase
+        .from('properties')
+        .insert({ name: propName.trim(), manager_id: managerId })
+        .select('id')
+        .single();
+      if (error) throw error;
+
+      setPropName('');
+      setPropsList(prev => [
+        { id: data.id, name: propName.trim(), created_at: new Date().toISOString() },
+        ...prev,
+      ]);
+      router.push(`/properties/${data.id}/template`);
+    } catch (e) {
+      setMsg(e.message || 'Could not create property');
+    } finally {
+      setCreating(false);
+    }
+  }
 
   return (
     <ChromeDark title="Dashboard">
@@ -122,8 +154,13 @@ export default function Dashboard() {
                 <div
                   key={p.id}
                   style={{
-                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                    gap: 8, border: '1px solid #1f2937', borderRadius: 12, padding: 12
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 8,
+                    border: '1px solid #1f2937',
+                    borderRadius: 12,
+                    padding: 12,
                   }}
                 >
                   <div style={{ fontWeight: 600 }}>{p.name}</div>
