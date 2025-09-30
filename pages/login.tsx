@@ -57,11 +57,11 @@ export default function Login() {
     try {
       const supabase = supabaseBrowser();
       const { error } = await supabase.auth.signInWithOtp({
-        email,
-        options: {
-          emailRedirectTo: `${appBase()}/auth/callback?next=/dashboard`
-        }
-      });
+  email,
+  options: {
+    emailRedirectTo: `${appBase()}/auth/callback?next=/dashboard&email=${encodeURIComponent(email)}`
+  }
+});
       if (error) throw error;
       setMsg('Check your email—click the link to finish sign-in.');
     } catch (err: any) {
