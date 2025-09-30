@@ -1,22 +1,18 @@
 // pages/properties/[id]/start-turn.js
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/router';
-import { createClient } from '@supabase/supabase-js';
 import ChromeDark from '../../../components/ChromeDark';
 import { ui } from '../../../lib/theme';
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-);
+import { supabaseBrowser } from '@/lib/supabaseBrowser';
 
 export default function StartTurnPage() {
   const router = useRouter();
   const { id: propertyId } = router.query;
+  const supabase = supabaseBrowser();
 
   const [loading, setLoading] = useState(true);
   const [property, setProperty] = useState(null);
-  const [links, setLinks] = useState({}); // response details
+  const [links, setLinks] = useState({});
   const [msg, setMsg] = useState('');
 
   // Cleaners linked to this property
@@ -41,7 +37,7 @@ export default function StartTurnPage() {
         if (pErr) throw pErr;
         setProperty(prop);
 
-        // 2) Cleaners assigned to this property (requires FK property_cleaners.cleaner_id -> cleaners.id)
+        // 2) Cleaners assigned to this property
         const { data: rels, error: rErr } = await supabase
           .from('property_cleaners')
           .select('cleaner_id, cleaners:cleaner_id ( id, name, phone )')
@@ -50,12 +46,7 @@ export default function StartTurnPage() {
         if (rErr) throw rErr;
 
         setPcRows(rels || []);
-        if ((rels || []).length > 0) {
-          setSelectedCleanerId(rels[0].cleaner_id);
-        } else {
-          setSelectedCleanerId('');
-        }
-
+        setSelectedCleanerId((rels && rels[0]?.cleaner_id) || '');
         setMsg('');
       } catch (e) {
         setMsg(e.message || 'Failed to load start-turn data');
@@ -63,7 +54,7 @@ export default function StartTurnPage() {
         setLoading(false);
       }
     })();
-  }, [propertyId]);
+  }, [propertyId, supabase]);
 
   const cleaners = useMemo(() => {
     return (pcRows || []).map(r => ({
@@ -93,8 +84,7 @@ export default function StartTurnPage() {
       const json = await resp.json().catch(() => ({}));
       if (!resp.ok) throw new Error(json.error || 'Could not start turn');
 
-      // Expecting e.g. { ok:true, turn_id, capture_url, sms:"sent"|"skipped" }
-      setLinks(json);
+      setLinks(json); // { ok, turn_id, capture_url, sms }
       setMsg('Turn started ✅');
     } catch (e) {
       setMsg(e.message || 'Failed to start turn');
@@ -191,7 +181,6 @@ export default function StartTurnPage() {
                 </div>
               )}
 
-              {/* Show useful return details */}
               {links?.turn_id && (
                 <div style={{ marginTop: 12 }}>
                   <div style={ui.subtle}>
