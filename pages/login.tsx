@@ -1,73 +1,85 @@
-// pages/login.tsx
-import { useState } from 'react';
-import { supabaseBrowser } from '@/lib/supabaseBrowser';
+import { useMemo, useState } from 'react';
+import { useRouter } from 'next/router';
 import Link from 'next/link';
+import Image from 'next/image';
+import Header from '@/components/layout/Header';
 import Card from '@/components/ui/Card';
 import Input from '@/components/ui/Input';
 import { PrimaryButton } from '@/components/ui/Button';
-import Header from '@/components/layout/Header';
-import Image from 'next/image';
+import { supabaseBrowser } from '@/lib/supabaseBrowser';
 
 export default function Login() {
+  const router = useRouter();
+  const nextPath = useMemo(() => {
+    const qp = new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '');
+    return qp.get('next') || '/dashboard';
+  }, []);
+
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [msg, setMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [magicSending, setMagicSending] = useState(false);
-
-  function appBase() {
-    return (
-      typeof window !== 'undefined'
-        ? window.location.origin
-        : (process.env.NEXT_PUBLIC_BASE_URL ||
-           process.env.NEXT_PUBLIC_APP_BASE_URL ||
-           'https://www.turnqa.com')
-    ).replace(/\/+$/, '');
-  }
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
     setMsg(null);
-    try {
-      const supabase = supabaseBrowser();
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
-      if (error) throw error;
+    const supabase = supabaseBrowser();
 
-      // ensure profile + trial (safe if it already exists)
-      try { await fetch('/api/ensure-profile', { method: 'POST' }); } catch {}
-      window.location.href = '/dashboard';
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+
+      if (error) {
+        // Surface the exact reason
+        console.error('[login] signIn error:', error);
+        // Common friendly messages
+        if (/email not confirmed/i.test(error.message)) {
+          setMsg('Your email is not confirmed. Please click the magic link we sent you, or use "Email me a one-click sign-in link" below.');
+        } else if (/invalid login credentials/i.test(error.message)) {
+          setMsg('Invalid email or password. Please try again.');
+        } else {
+          setMsg(error.message || 'Sign-in failed.');
+        }
+        return;
+      }
+
+      // Success: double-check we have a session then redirect
+      const { data: userRes } = await supabase.auth.getUser();
+      if (userRes?.user) {
+        window.location.href = nextPath; // hard redirect so middleware sees session
+      } else {
+        setMsg('Signed in, but could not load session. Please refresh or try again.');
+      }
     } catch (err: any) {
-      setMsg(err?.message || 'Sign-in failed');
+      console.error('[login] unexpected error:', err);
+      setMsg(err?.message || 'Unexpected error.');
     } finally {
       setLoading(false);
     }
   }
 
-  async function sendMagicLink(e: React.MouseEvent) {
+  async function sendMagic(e: React.MouseEvent) {
     e.preventDefault();
     setMsg(null);
+    const supabase = supabaseBrowser();
 
-    if (!email) {
-      setMsg('Enter your email first to receive a magic link.');
-      return;
-    }
-
-    setMagicSending(true);
     try {
-      const supabase = supabaseBrowser();
+      if (!email) {
+        setMsg('Enter your email first, then click the link button.');
+        return;
+      }
+      const base = (typeof window !== 'undefined' ? window.location.origin : 'https://www.turnqa.com').replace(/\/+$/, '');
       const { error } = await supabase.auth.signInWithOtp({
-  email,
-  options: {
-    emailRedirectTo: `${appBase()}/auth/callback?next=/dashboard&email=${encodeURIComponent(email)}`
-  }
-});
+        email,
+        options: {
+          emailRedirectTo: `${base}/auth/callback?next=/dashboard&email=${encodeURIComponent(email)}`
+        }
+      });
       if (error) throw error;
-      setMsg('Check your email—click the link to finish sign-in.');
+      setMsg('We emailed you a one-click sign-in link.');
     } catch (err: any) {
+      console.error('[login] magic link error:', err);
       setMsg(err?.message || 'Could not send magic link.');
-    } finally {
-      setMagicSending(false);
     }
   }
 
@@ -93,40 +105,31 @@ export default function Login() {
           <h1 className="h1 accent" style={{ marginBottom: 18 }}>Sign in</h1>
 
           <form onSubmit={onSubmit} style={{ display: 'grid', gap: 12 }}>
-            <Input
-              placeholder="Email"
-              type="email"
-              value={email}
-              onChange={e => setEmail(e.target.value)}
-              required
-            />
-            <Input
-              placeholder="Password"
-              type="password"
-              value={password}
-              onChange={e => setPassword(e.target.value)}
-              required
-            />
+            <label htmlFor="email" className="hint" style={{ fontSize: 12 }}>Email</label>
+            <Input id="email" name="email" placeholder="you@example.com" type="email"
+              value={email} onChange={e => setEmail(e.target.value)} required />
+
+            <label htmlFor="password" className="hint" style={{ fontSize: 12 }}>Password</label>
+            <Input id="password" name="password" placeholder="••••••••" type="password"
+              value={password} onChange={e => setPassword(e.target.value)} required />
 
             <PrimaryButton disabled={loading}>
               {loading ? 'Signing in…' : 'Sign In'}
             </PrimaryButton>
 
-            {/* Magic link button (inline, under password sign-in) */}
-            <button
-              onClick={sendMagicLink}
-              className="btn"
-              style={{ marginTop: 8 }}
-              disabled={magicSending}
-              type="button"
-            >
-              {magicSending ? 'Sending link…' : 'Email me a one-click sign-in link'}
-            </button>
-
-            {msg && <p style={{ color: msg.includes('Check your email') ? '#22c55e' : '#fda4af', fontSize: 14 }}>{msg}</p>}
+            {msg && <p style={{ color: '#fda4af', fontSize: 14 }}>{msg}</p>}
           </form>
 
-          {/* Compact legal line */}
+          {/* Magic link helper */}
+          <button
+            onClick={sendMagic}
+            className="btn"
+            style={{ marginTop: 10, padding: '12px 16px', borderRadius: 12, border: '1px solid var(--border)', background: '#111827', color: 'var(--text)', fontWeight: 600 }}
+          >
+            Email me a one-click sign-in link
+          </button>
+
+          {/* Legal */}
           <p className="hint" style={{ marginTop: 10, fontSize: 12 }}>
             By continuing, you agree to our{' '}
             <Link href="/legal/terms" style={{ textDecoration: 'underline' }}>Terms</Link>
@@ -134,7 +137,7 @@ export default function Login() {
             <Link href="/legal/privacy" style={{ textDecoration: 'underline' }}>Privacy Policy</Link>.
           </p>
 
-          {/* Larger CTA */}
+          {/* CTA */}
           <p className="hint" style={{ marginTop: 16, fontSize: 15, fontWeight: 600 }}>
             New here?{' '}
             <Link href="/signup" style={{ textDecoration: 'underline', color: 'var(--text)' }}>
