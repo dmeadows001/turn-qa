@@ -2,9 +2,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
-import { createClient } from '@supabase/supabase-js';
+import { supabaseBrowser } from '@/lib/supabaseBrowser';
 
-const supabase = createClient(
+const supabase = supabaseBrowser();
   process.env.NEXT_PUBLIC_SUPABASE_URL,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 );
