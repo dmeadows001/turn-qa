@@ -2,19 +2,15 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
-import { createClient } from '@supabase/supabase-js';
 import ChromeDark from '../../components/ChromeDark';
 import { ui } from '../../lib/theme';
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-);
+import { supabaseBrowser } from '@/lib/supabaseBrowser';
 
 export default function Dashboard() {
   const router = useRouter();
-  const [session, setSession] = useState(null);
+  const supabase = supabaseBrowser();
 
+  const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [propName, setPropName] = useState('');
@@ -22,22 +18,25 @@ export default function Dashboard() {
   const [msg, setMsg] = useState('');
   const [managerId, setManagerId] = useState(null);
 
+  // keep session in sync
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session || null));
     const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => setSession(s));
     return () => sub.subscription.unsubscribe();
-  }, []);
+  }, [supabase]);
 
   // Ensure the user has a managers row; capture its id and load properties
   useEffect(() => {
-    if (!session) return;
+    if (!session?.user) return;
+
     (async () => {
       try {
-        const { data: m } = await supabase
+        const { data: m, error: mErr } = await supabase
           .from('managers')
           .select('id')
           .eq('user_id', session.user.id)
           .maybeSingle();
+        if (mErr) throw mErr;
 
         let id = m?.id;
         if (!id) {
@@ -64,7 +63,7 @@ export default function Dashboard() {
         setLoading(false);
       }
     })();
-  }, [session]);
+  }, [session, supabase]);
 
   async function createProperty(e) {
     e?.preventDefault?.();
@@ -125,10 +124,13 @@ export default function Dashboard() {
           ) : (
             <div style={{ display: 'grid', gap: 10, marginTop: 8 }}>
               {propsList.map(p => (
-                <div key={p.id} style={{
-                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                  gap: 8, border: '1px solid #1f2937', borderRadius: 12, padding: 12
-                }}>
+                <div
+                  key={p.id}
+                  style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    gap: 8, border: '1px solid #1f2937', borderRadius: 12, padding: 12
+                  }}
+                >
                   <div style={{ fontWeight: 600 }}>{p.name}</div>
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                     <Link href={`/properties/${p.id}/template`} style={ui.btnSecondary}>Checklist</Link>
