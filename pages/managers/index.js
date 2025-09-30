@@ -1,17 +1,13 @@
 // pages/managers/index.js
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
-import { createClient } from '@supabase/supabase-js';
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-);
+import { supabaseBrowser } from '@/lib/supabaseBrowser';
 
 export default function Managers() {
   const [session, setSession] = useState(null);
 
   useEffect(() => {
+    const supabase = supabaseBrowser();
     supabase.auth.getSession().then(({ data }) => setSession(data.session || null));
     const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => setSession(s));
     return () => sub.subscription.unsubscribe();
@@ -28,7 +24,7 @@ export default function Managers() {
   const title = { fontSize: 32, fontWeight: 800, letterSpacing: '-0.02em' };
   const card = {
     background: '#0f172a',
-    border: '1px solid #1f2937',
+    border: '1px solid '#1f2937',
     borderRadius: 16,
     padding: 20
   };
@@ -68,8 +64,8 @@ export default function Managers() {
               <Link href="/dashboard" style={btnPrimary}>Go to dashboard</Link>
             ) : (
               <>
-                <Link href="/auth/signin" style={btnPrimary}>Start free trial</Link>
-                <Link href="/auth/signin" style={btnSecondary}>Manager sign in</Link>
+                <Link href="/signup" style={btnPrimary}>Start free trial</Link>
+                <Link href="/login" style={btnSecondary}>Manager sign in</Link>
               </>
             )}
           </div>
