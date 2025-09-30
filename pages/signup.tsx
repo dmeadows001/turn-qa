@@ -1,3 +1,4 @@
+// pages/signup.tsx
 import { useState } from 'react';
 import { supabaseBrowser } from '@/lib/supabaseBrowser';
 import Link from 'next/link';
@@ -5,7 +6,7 @@ import Card from '@/components/ui/Card';
 import Input from '@/components/ui/Input';
 import { PrimaryButton } from '@/components/ui/Button';
 import Header from '@/components/layout/Header';
-import Image from 'next/image'; // ✅ use the camera logo
+import Image from 'next/image';
 
 export default function Signup() {
   const [email, setEmail] = useState('');
@@ -17,11 +18,46 @@ export default function Signup() {
     e.preventDefault();
     setLoading(true);
     setMsg(null);
+
     const supabase = supabaseBrowser();
-    const { error } = await supabase.auth.signUp({ email, password });
+
+    // Build a safe base for redirects (works locally and on Vercel)
+    const base =
+      (typeof window !== 'undefined'
+        ? window.location.origin
+        : (process.env.NEXT_PUBLIC_BASE_URL || process.env.NEXT_PUBLIC_APP_BASE_URL || 'https://www.turnqa.com')
+      ).replace(/\/+$/, '');
+
+    // Ask Supabase to send its email link to our auth callback
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        emailRedirectTo: `${base}/auth/callback?next=/dashboard`
+      }
+    });
+
+    if (error) {
+      setMsg(error.message);
+      setLoading(false);
+      return;
+    }
+
+    // If email confirmation is OFF, Supabase may return a session right away.
+    // In that case, create the trial profile and send them to dashboard.
+    if (data?.session?.user) {
+      try {
+        await fetch('/api/ensure-profile', { method: 'POST' });
+      } catch {}
+      window.location.href = '/dashboard';
+      return;
+    }
+
+    // Otherwise, email confirmation is ON — tell them to check their inbox.
+    setMsg(
+      'Account created. Please check your email to confirm your address. After you click the link, we’ll finish sign-in and take you to your dashboard.'
+    );
     setLoading(false);
-    if (error) setMsg(error.message);
-    else window.location.href = '/managers/turns';
   }
 
   return (
@@ -64,7 +100,7 @@ export default function Signup() {
             <PrimaryButton disabled={loading}>
               {loading ? 'Creating…' : 'Create Account'}
             </PrimaryButton>
-            {msg && <p style={{ color: '#fda4af', fontSize: 14 }}>{msg}</p>}
+            {msg && <p style={{ color: '#fda4af', fontSize: 14, marginTop: 6 }}>{msg}</p>}
           </form>
 
           {/* Compact legal line */}
