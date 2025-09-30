@@ -24,7 +24,7 @@ export default function Managers() {
   const title = { fontSize: 32, fontWeight: 800, letterSpacing: '-0.02em' };
   const card = {
     background: '#0f172a',
-    border: '1px solid '#1f2937',
+    border: '1px solid #1f2937',      // ← fixed
     borderRadius: 16,
     padding: 20
   };
