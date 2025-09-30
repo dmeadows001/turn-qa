@@ -36,8 +36,8 @@ export default function Home() {
               </Link>
             ) : (
               <>
-                <Link href="/auth/signin?mode=signup" style={ui.btnPrimary}>Start free trial</Link>
-                <Link href="/auth/signin?mode=signin" style={ui.btnSecondary}>Manager sign in</Link>
+                <Link href="/signup" ...>Start free trial</Link>
+                <Link href="/login" ...>Manager sign in</Link>
               </>
             )}
           </div>
