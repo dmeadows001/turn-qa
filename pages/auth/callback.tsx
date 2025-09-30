@@ -1,6 +1,5 @@
 // pages/auth/callback.tsx
 import { useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/router';
 import { supabaseBrowser } from '@/lib/supabaseBrowser';
 
 function parseHash(hash: string) {
@@ -15,7 +14,6 @@ function parseHash(hash: string) {
 }
 
 export default function AuthCallback() {
-  const router = useRouter();
   const [msg, setMsg] = useState('Completing sign-in…');
   const [fatal, setFatal] = useState<string | null>(null);
 
@@ -47,7 +45,7 @@ export default function AuthCallback() {
     (async () => {
       const supabase = supabaseBrowser();
 
-      // A) Explicit Supabase error in query (e.g., otp_expired)
+      // A) explicit error params from Supabase (e.g. otp_expired)
       const errCode = qs?.get('error_code');
       const errDesc = qs?.get('error_description');
       if (errCode || errDesc) {
@@ -55,55 +53,51 @@ export default function AuthCallback() {
         return;
       }
 
-      // B) PKCE code flow (?code=...)
+      // B) PKCE (?code=...)
       const code = qs?.get('code');
       if (code) {
         try {
           const { data, error } = await supabase.auth.exchangeCodeForSession(window.location.href);
           if (error) throw error;
-          // ensure profile/trial
           try { await fetch('/api/ensure-profile', { method: 'POST' }); } catch {}
-          router.replace(nextPath);
+          window.location.replace(nextPath); // hard redirect so middleware sees session
           return;
         } catch (e: any) {
-          // fall through to other methods
+          // try other flows
         }
       }
 
-      // C) Email confirm / recovery / change / magiclink (?token_hash=...&type=...)
+      // C) email confirm / magiclink / recovery (?token_hash=...&type=...)
       const tokenHash = qs?.get('token_hash') || qs?.get('token');
       const type = (qs?.get('type') || '').toLowerCase();
-      // Valid types per supabase-js: 'signup' | 'magiclink' | 'recovery' | 'email_change'
       if (tokenHash && type) {
         try {
-          const { data, error } = await supabase.auth.verifyOtp({
-            type: type as any,
-            token_hash: tokenHash
-          });
+          const { error } = await supabase.auth.verifyOtp({ type: type as any, token_hash: tokenHash });
           if (error) throw error;
           try { await fetch('/api/ensure-profile', { method: 'POST' }); } catch {}
-          router.replace(nextPath);
+          window.location.replace(nextPath);
           return;
         } catch (e: any) {
-          // continue to hash fallback
+          // try hash fallback next
         }
       }
 
-      // D) Hash tokens (#access_token=...&refresh_token=...)
+      // D) hash tokens (#access_token=...&refresh_token=...)
       const tokens = parseHash(typeof window !== 'undefined' ? window.location.hash : '');
       if (tokens.access_token && tokens.refresh_token) {
         const { error } = await supabase.auth.setSession({
           access_token: tokens.access_token,
           refresh_token: tokens.refresh_token,
         });
-        if (!error) {
-          try { await fetch('/api/ensure-profile', { method: 'POST' }); } catch {}
-          router.replace(nextPath);
+        if (error) {
+          setFatal(error.message || 'Could not set session from link.');
           return;
         }
+        try { await fetch('/api/ensure-profile', { method: 'POST' }); } catch {}
+        window.location.replace(nextPath);
+        return;
       }
 
-      // If we got here, nothing usable was present
       setFatal('We could not complete sign-in from this link.');
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
