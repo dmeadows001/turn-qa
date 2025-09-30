@@ -1,20 +1,16 @@
 // pages/index.js
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
-import { createClient } from '@supabase/supabase-js';
 import ChromeDark from '../components/ChromeDark';
 import { ui } from '../lib/theme';
 import Image from 'next/image';
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-);
+import { supabaseBrowser } from '@/lib/supabaseBrowser';
 
 export default function Home() {
   const [session, setSession] = useState(null);
 
   useEffect(() => {
+    const supabase = supabaseBrowser();
     supabase.auth.getSession().then(({ data }) => setSession(data.session || null));
     const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => setSession(s));
     return () => sub.subscription.unsubscribe();
@@ -25,7 +21,6 @@ export default function Home() {
       title={
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 12 }}>
           <Image src="/logo-camera.svg" alt="" width={36} height={36} priority />
-          {/* keep original title styling from ChromeDark */}
           <span>TurnQA</span>
         </span>
       }
