@@ -1,10 +1,9 @@
 // pages/auth/callback.tsx
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/router';
 import { supabaseBrowser } from '@/lib/supabaseBrowser';
 
 function parseHash(hash: string) {
-  // hash like: "#access_token=...&expires_in=...&refresh_token=...&token_type=bearer&type=signup"
   const out: Record<string, string> = {};
   const h = hash?.startsWith('#') ? hash.slice(1) : hash;
   h.split('&').forEach(pair => {
@@ -18,55 +17,59 @@ export default function AuthCallback() {
   const router = useRouter();
   const [msg, setMsg] = useState('Completing sign-in…');
 
+  const debug = useMemo(() => {
+    const qs = typeof window !== 'undefined' ? window.location.search : '';
+    const hs = typeof window !== 'undefined' ? window.location.hash : '';
+    return { search: qs, hash: hs };
+  }, [router.asPath]);
+
   useEffect(() => {
     (async () => {
       const supabase = supabaseBrowser();
 
-      // 1) Try PKCE/code flow first (works when ?code=... is present and the code_verifier exists)
-      let exchanged = false;
+      // Try PKCE (code param)
+      let ok = false;
       try {
         const { data, error } = await supabase.auth.exchangeCodeForSession(window.location.href);
-        if (!error && data?.session) {
-          exchanged = true;
-        }
-      } catch {
-        // ignore, we'll try hash fallback next
-      }
+        if (!error && data?.session) ok = true;
+      } catch {}
 
-      // 2) Fallback: handle hash tokens (#access_token & #refresh_token)
-      if (!exchanged) {
+      // Fallback: hash tokens
+      if (!ok) {
         const tokens = parseHash(window.location.hash);
         if (tokens.access_token && tokens.refresh_token) {
-          const { data: setData, error: setErr } = await supabase.auth.setSession({
+          const { error } = await supabase.auth.setSession({
             access_token: tokens.access_token,
             refresh_token: tokens.refresh_token,
           });
-          if (setErr) {
-            setMsg(setErr.message || 'Could not complete sign-in.');
-            return;
-          }
-        } else {
-          // Neither PKCE nor hash tokens available -> show helpful guidance
-          setMsg(
-            'We could not complete sign-in from this link. Please try opening the link in the same browser you used to sign up, or request a new email.'
-          );
-          return;
+          if (!error) ok = true;
         }
       }
 
-      // 3) Ensure the 30-day trial profile exists
+      if (!ok) {
+        setMsg('We could not complete sign-in from this link. Please request a new email.');
+        return;
+      }
+
       try { await fetch('/api/ensure-profile', { method: 'POST' }); } catch {}
 
-      // 4) Redirect to next or /dashboard
       const next = new URLSearchParams(window.location.search).get('next') || '/dashboard';
       router.replace(next);
     })();
   }, [router]);
 
+  // show debug if you append ?debug=1
+  const showDebug = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('debug') === '1';
+
   return (
     <div style={{minHeight:'100vh',display:'grid',placeItems:'center',color:'#e5e7eb',background:'#0b0b0d'}}>
-      <div style={{padding:20,border:'1px solid #1f2937',borderRadius:12,background:'#0f172a'}}>
-        {msg}
+      <div style={{padding:20,border:'1px solid #1f2937',borderRadius:12,background:'#0f172a',maxWidth:700}}>
+        <div>{msg}</div>
+        {showDebug && (
+          <pre style={{marginTop:12,whiteSpace:'pre-wrap'}}>
+{JSON.stringify({ href: typeof window!=='undefined'?window.location.href:null, ...debug }, null, 2)}
+          </pre>
+        )}
       </div>
     </div>
   );
