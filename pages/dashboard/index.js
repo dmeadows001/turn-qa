@@ -20,74 +20,69 @@ export default function Dashboard() {
 
   // keep session in sync
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => setSession(data.session || null));
-    const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => setSession(s));
-    return () => sub.subscription.unsubscribe();
-  }, [supabase]);
-
-  // Ensure the user has a managers row; capture its id and load properties
-  useEffect(() => {
-    if (!session?.user) return;
-
+    if (!session) return;
     (async () => {
       try {
-        const { data: m, error: mErr } = await supabase
+        setLoading(true);
+        setMsg('');
+
+        // 1) Ensure ONE managers row for this user (idempotent)
+        const { data: existing, error: mErr } = await supabase
+          .from('managers')
+          .select('id')
+          .eq('user_id', session.user.id);
+
+        if (mErr) throw mErr;
+
+        if (!existing || existing.length === 0) {
+          // create one
+          const { error: insErr } = await supabase
+            .from('managers')
+            .upsert(
+              { user_id: session.user.id, name: session.user.email || 'Manager' },
+              { onConflict: 'user_id' } // requires UNIQUE(user_id)
+            );
+          if (insErr) throw insErr;
+        } else if (existing.length > 1) {
+          // if duplicates slipped in, keep first and delete rest (defensive)
+          const keepId = existing[0].id;
+          const extras = existing.slice(1).map(r => r.id);
+          if (extras.length) {
+            const { error: delErr } = await supabase
+              .from('managers')
+              .delete()
+              .in('id', extras);
+            if (delErr) throw delErr;
+          }
+        }
+
+        // reselect the single id (now guaranteed)
+        const { data: one, error: oneErr } = await supabase
           .from('managers')
           .select('id')
           .eq('user_id', session.user.id)
-          .maybeSingle();
-        if (mErr) throw mErr;
+          .single(); // safe now
+        if (oneErr) throw oneErr;
 
-        let id = m?.id;
-        if (!id) {
-          const { data: created, error: cErr } = await supabase
-            .from('managers')
-            .insert({ user_id: session.user.id, name: session.user.email })
-            .select('id')
-            .single();
-          if (cErr) throw cErr;
-          id = created.id;
-        }
-        setManagerId(id);
+        setManagerId(one.id);
 
-        setLoading(true);
-        const { data, error } = await supabase
+        // 2) Load properties list
+        const { data: props, error: pErr } = await supabase
           .from('properties')
           .select('id, name, created_at')
           .order('created_at', { ascending: false });
-        if (error) throw error;
-        setPropsList(data || []);
+        if (pErr) throw pErr;
+
+        setPropsList(props || []);
       } catch (e) {
+        console.error('[dashboard bootstrap]', e);
         setMsg(e.message || 'Failed to initialize dashboard');
       } finally {
         setLoading(false);
       }
     })();
-  }, [session, supabase]);
+  }, [session]);
 
-  async function createProperty(e) {
-    e?.preventDefault?.();
-    try {
-      if (!propName.trim()) return setMsg('Enter a property name.');
-      if (!managerId) return setMsg('Your account is initializing. Try again in a moment.');
-      setCreating(true);
-      setMsg('');
-      const { data, error } = await supabase
-        .from('properties')
-        .insert({ name: propName.trim(), manager_id: managerId })
-        .select('id')
-        .single();
-      if (error) throw error;
-
-      setPropName('');
-      setPropsList(prev => [{ id: data.id, name: propName.trim(), created_at: new Date().toISOString() }, ...prev]);
-      router.push(`/properties/${data.id}/template`);
-    } catch (e) {
-      setMsg(e.message || 'Could not create property');
-    } finally {
-      setCreating(false);
-    }
-  }
 
   return (
     <ChromeDark title="Dashboard">
