@@ -1,0 +1,15 @@
+// middleware.ts — add ' /auth/smoke ' to PUBLIC_PATHS
+const PUBLIC_PATHS = [
+  '/',
+  '/login',
+  '/signup',
+  '/auth',               // covers /auth/callback AND /auth/smoke
+  '/api/ensure-profile',
+  '/api/health',
+  '/api/debug-sms-config',
+  '/billing',
+  '/legal',
+  '/support',
+  '/api/stripe/webhook',
+  '/api/billing'
+];
