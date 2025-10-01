@@ -1,25 +1,28 @@
-import { createClient } from '@supabase/supabase-js';
+// /lib/supabaseBrowser.ts
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-let _client: ReturnType<typeof createClient> | null = null;
+declare global {
+  // eslint-disable-next-line no-var
+  var __supabase__: SupabaseClient | undefined;
+}
 
-/** Singleton, do not create multiple clients in the browser */
 export const supabaseBrowser = () => {
-  if (_client) return _client;
-  _client = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
+  if (!globalThis.__supabase__) {
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+    const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+    globalThis.__supabase__ = createClient(url, key, {
       auth: {
         persistSession: true,
         autoRefreshToken: true,
-        /**
-         * IMPORTANT: we do our own token handling on /auth/callback.
-         * If this is true, the SDK will also try to process hash params,
-         * which can cause “double parse” weirdness.
-         */
-        detectSessionInUrl: false
-      }
+        detectSessionInUrl: true,
+        storageKey: 'turnqa-auth', // unique key so multiple clients don't clash
+      },
+    });
+    // Helpful once in the console so we know which URL/Key set is being used:
+    if (typeof window !== 'undefined') {
+      // eslint-disable-next-line no-console
+      console.log('[supabase] init', { url, storageKey: 'turnqa-auth' });
     }
-  );
-  return _client;
+  }
+  return globalThis.__supabase__!;
 };
