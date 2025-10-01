@@ -1,63 +1,104 @@
-// pages/login.tsx
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import Image from 'next/image';
-import Header from '@/components/layout/Header';
+import { useRouter } from 'next/router';
 import Card from '@/components/ui/Card';
 import Input from '@/components/ui/Input';
 import { PrimaryButton } from '@/components/ui/Button';
+import Header from '@/components/layout/Header';
+import Image from 'next/image';
 import { supabaseBrowser } from '@/lib/supabaseBrowser';
 
 export default function Login() {
+  const router = useRouter();
+  const supabase = supabaseBrowser();
+
+  // where to go after login
+  const nextPath = useMemo(() => {
+    const n = (router.query?.next as string) || '/dashboard';
+    return n.startsWith('/') ? n : '/dashboard';
+  }, [router.query?.next]);
+
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [msg, setMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
+  // if already signed in, bounce to next
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      if (data.session?.user) router.replace(nextPath);
+    });
+  }, [router, supabase, nextPath]);
+
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setLoading(true);
     setMsg(null);
+    setLoading(true);
     try {
-      const supabase = supabaseBrowser();
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
-      if (error) throw error;
-      // where to send managers after login
-      window.location.href = '/managers/turns';
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      // log raw so we can see 400/401 payloads in DevTools if anything is odd
+      console.log('[login] result', { data, error });
+
+      if (error) {
+        setMsg(error.message || 'Invalid credentials');
+        return;
+      }
+      // optional: create/refresh profile & trial window on successful login
+      try {
+        await fetch('/api/ensure-profile', { method: 'POST' });
+      } catch (e) {
+        console.warn('[login] ensure-profile failed (non-blocking)', e);
+      }
+      router.replace(nextPath);
     } catch (err: any) {
-      setMsg(err?.message || 'Invalid login credentials');
+      console.error('[login] unexpected', err);
+      setMsg(err?.message || 'Sign-in failed');
     } finally {
       setLoading(false);
     }
   }
 
-  // 👉 This is the new bit: send a reset-password email that will open /auth/new-password
-  async function sendPasswordReset(e?: React.MouseEvent) {
-    e?.preventDefault?.();
+  // Optional helpers (visible + very explicit)
+  async function sendMagicLink() {
+    setMsg(null);
+    setLoading(true);
     try {
-      setMsg('');
-      if (!email) {
-        setMsg('Enter your email above, then click “Reset password”.');
-        return;
-      }
-
-      const base = (
-        typeof window !== 'undefined'
+      const base =
+        (typeof window !== 'undefined'
           ? window.location.origin
-          : (process.env.NEXT_PUBLIC_BASE_URL ||
-             process.env.NEXT_PUBLIC_APP_BASE_URL ||
-             'https://www.turnqa.com')
-      ).replace(/\/+$/, '');
+          : (process.env.NEXT_PUBLIC_BASE_URL || process.env.NEXT_PUBLIC_APP_BASE_URL || 'https://www.turnqa.com'))
+        .replace(/\/+$/, '');
+      const { error } = await supabase.auth.signInWithOtp({
+        email,
+        options: { emailRedirectTo: `${base}/auth/callback?next=${encodeURIComponent(nextPath)}` },
+      });
+      if (error) throw error;
+      setMsg('We sent you a one-click sign-in link.');
+    } catch (e: any) {
+      setMsg(e?.message || 'Could not send link');
+    } finally {
+      setLoading(false);
+    }
+  }
 
-      const supabase = supabaseBrowser();
+  async function beginPasswordReset() {
+    setMsg(null);
+    setLoading(true);
+    try {
+      const base =
+        (typeof window !== 'undefined'
+          ? window.location.origin
+          : (process.env.NEXT_PUBLIC_BASE_URL || process.env.NEXT_PUBLIC_APP_BASE_URL || 'https://www.turnqa.com'))
+        .replace(/\/+$/, '');
       const { error } = await supabase.auth.resetPasswordForEmail(email, {
         redirectTo: `${base}/auth/new-password`,
       });
       if (error) throw error;
-
-      setMsg('Reset email sent. Check your inbox for a link to set a new password.');
-    } catch (err: any) {
-      setMsg(err?.message || 'Could not send reset email.');
+      setMsg('Check your email for a password reset link.');
+    } catch (e: any) {
+      setMsg(e?.message || 'Could not start password reset');
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -83,51 +124,26 @@ export default function Login() {
           <h1 className="h1 accent" style={{ marginBottom: 18 }}>Sign in</h1>
 
           <form onSubmit={onSubmit} style={{ display: 'grid', gap: 12 }}>
-            <Input
-              id="email"
-              placeholder="Email"
-              type="email"
-              value={email}
-              onChange={e => setEmail(e.target.value)}
-              required
-            />
-            <Input
-              id="password"
-              placeholder="Password"
-              type="password"
-              value={password}
-              onChange={e => setPassword(e.target.value)}
-              required
-            />
-
-            <PrimaryButton disabled={loading}>
-              {loading ? 'Signing in…' : 'Sign In'}
-            </PrimaryButton>
-
-            {/* 🔹 New: password reset link placed directly under the button */}
-            <p className="hint" style={{ marginTop: 2, fontSize: 13 }}>
-              Forgot your password?{' '}
-              <a href="#" onClick={sendPasswordReset} style={{ textDecoration: 'underline' }}>
-                Reset it via email
-              </a>
-            </p>
-
+            <Input placeholder="Email" type="email" value={email} onChange={e => setEmail(e.target.value)} required />
+            <Input placeholder="Password" type="password" value={password} onChange={e => setPassword(e.target.value)} required />
+            <PrimaryButton disabled={loading}>{loading ? 'Signing in…' : 'Sign In'}</PrimaryButton>
             {msg && (
-              <p style={{ color: msg.toLowerCase().includes('sent') ? '#22c55e' : '#fda4af', fontSize: 14 }}>
+              <p style={{ color: msg.toLowerCase().includes('sent you') || msg.toLowerCase().includes('check your email') ? '#22c55e' : '#fda4af', fontSize: 14 }}>
                 {msg}
               </p>
             )}
           </form>
 
-          {/* Compact legal line */}
-          <p className="hint" style={{ marginTop: 10, fontSize: 12 }}>
-            By continuing, you agree to our{' '}
-            <Link href="/legal/terms" style={{ textDecoration: 'underline' }}>Terms</Link>
-            {' '}and{' '}
-            <Link href="/legal/privacy" style={{ textDecoration: 'underline' }}>Privacy Policy</Link>.
-          </p>
+          {/* Helpful actions beneath the button */}
+          <div className="hint" style={{ marginTop: 12, display: 'grid', gap: 8 }}>
+            <button onClick={sendMagicLink} style={{ textDecoration: 'underline', textAlign: 'left' }} disabled={loading || !email}>
+              Prefer no password? Email me a one-click sign-in link
+            </button>
+            <button onClick={beginPasswordReset} style={{ textDecoration: 'underline', textAlign: 'left' }} disabled={loading || !email}>
+              Forgot password? Reset it via email
+            </button>
+          </div>
 
-          {/* Larger CTA */}
           <p className="hint" style={{ marginTop: 16, fontSize: 15, fontWeight: 600 }}>
             New here?{' '}
             <Link href="/signup" style={{ textDecoration: 'underline', color: 'var(--text)' }}>
