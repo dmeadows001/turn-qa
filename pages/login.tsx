@@ -31,71 +31,111 @@ export default function Login() {
   }, []);
 
   const finishLogin = useCallback(async () => {
-    // Create / update trial profile; ignore failures (they’ll still be logged)
-    try { await fetch('/api/ensure-profile', { method: 'POST' }); } catch (e) { console.warn('[login] ensure-profile failed', e); }
-    // Go where the app wanted to go
-    router.replace(nextUrl || '/dashboard');
-  }, [nextUrl, router]);
+    // Create / update trial profile; ignore failures (we log them)
+    try {
+      const resp = await fetch('/api/ensure-profile', { method: 'POST' });
+      console.log('[login] ensure-profile status', resp.status);
+    } catch (e) {
+      console.warn('[login] ensure-profile failed', e);
+    }
+    // Hard reload so middleware reads fresh cookies
+    window.location.href = nextUrl || '/dashboard';
+  }, [nextUrl]);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setMsg(null);
     setLoading(true);
-    console.log('[login] attempting password sign-in', { email });
+    try {
+      console.log('[login] attempting password sign-in', { email });
 
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
 
-    console.log('[login] signInWithPassword result', { data, error });
+      console.log('[login] signInWithPassword result', { user: data?.user?.id, error });
 
-    if (error) {
+      if (error) {
+        setMsg(error.message || 'Invalid login credentials');
+        return;
+      }
+
+      // Copy session to cookie so middleware sees it
+      const at = data?.session?.access_token;
+      const rt = data?.session?.refresh_token;
+      if (at && rt) {
+        try {
+          const setCookieResp = await fetch('/api/auth/set-cookie', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ access_token: at, refresh_token: rt })
+          });
+          console.log('[login] set-cookie status', setCookieResp.status);
+        } catch (err) {
+          console.warn('[login] set-cookie failed', err);
+        }
+      } else {
+        console.warn('[login] no tokens returned from password sign-in');
+      }
+
+      await finishLogin();
+    } catch (e: any) {
+      console.error('[login] unexpected', e);
+      setMsg(e?.message || 'Sign-in failed');
+    } finally {
       setLoading(false);
-      setMsg(error.message || 'Invalid login credentials');
-      return;
     }
-
-    // Successful password sign-in sets the session client-side immediately.
-    await finishLogin();
   }
 
   async function sendMagicLink(e: React.MouseEvent) {
     e.preventDefault();
     setMsg(null);
     setLoading(true);
-    console.log('[login] sending magic link', { email });
+    try {
+      console.log('[login] sending magic link', { email });
 
-    const { data, error } = await supabase.auth.signInWithOtp({
-      email,
-      options: { emailRedirectTo: `${base}/auth/callback?next=${encodeURIComponent(nextUrl)}` }
-    });
+      const { data, error } = await supabase.auth.signInWithOtp({
+        email,
+        options: { emailRedirectTo: `${base}/auth/callback?next=${encodeURIComponent(nextUrl)}` }
+      });
 
-    console.log('[login] signInWithOtp result', { data, error });
+      console.log('[login] signInWithOtp result', { data, error });
 
-    setLoading(false);
-    if (error) {
-      setMsg(error.message || 'Could not send link');
-      return;
+      if (error) {
+        setMsg(error.message || 'Could not send link');
+        return;
+      }
+      setMsg('We sent you a one-click sign-in link. Check your email.');
+    } catch (e: any) {
+      console.error('[login] magic-link unexpected', e);
+      setMsg(e?.message || 'Could not send link');
+    } finally {
+      setLoading(false);
     }
-    setMsg('We sent you a one-click sign-in link. Check your email.');
   }
 
   async function startPasswordReset(e: React.MouseEvent) {
     e.preventDefault();
     setMsg(null);
     setLoading(true);
-    console.log('[login] starting password reset', { email });
+    try {
+      console.log('[login] starting password reset', { email });
 
-    const { data, error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${base}/auth/new-password?next=${encodeURIComponent(nextUrl)}`
-    });
+      const { data, error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${base}/auth/new-password?next=${encodeURIComponent(nextUrl)}`
+      });
 
-    console.log('[login] resetPasswordForEmail result', { data, error });
+      console.log('[login] resetPasswordForEmail result', { data, error });
 
-    setLoading(false);
-    if (error) {
-      setMsg(error.message || 'Could not start password reset');
-      return;
+      if (error) {
+        setMsg(error.message || 'Could not start password reset');
+        return;
+      }
+      setMsg('Password reset email sent. Check your inbox.');
+    } catch (e: any) {
+      console.error('[login] reset unexpected', e);
+      setMsg(e?.message || 'Could not start password reset');
+    } finally {
+      setLoading(false);
     }
-    setMsg('Password reset email sent. Check your inbox.');
   }
 
   return (
@@ -139,13 +179,12 @@ export default function Login() {
             </PrimaryButton>
 
             {msg && (
-              <p style={{ color: msg.match(/sent|link|Check|We sent/i) ? '#22c55e' : '#fda4af', fontSize: 14 }}>
+              <p style={{ color: /sent|link|check/i.test(msg) ? '#22c55e' : '#fda4af', fontSize: 14 }}>
                 {msg}
               </p>
             )}
           </form>
 
-          {/* Small helper actions */}
           <div className="hint" style={{ marginTop: 10, display: 'grid', gap: 8 }}>
             <button
               onClick={sendMagicLink}
@@ -162,7 +201,6 @@ export default function Login() {
             </button>
           </div>
 
-          {/* Legal & CTA */}
           <p className="hint" style={{ marginTop: 12, fontSize: 12 }}>
             By continuing, you agree to our{' '}
             <Link href="/legal/terms" style={{ textDecoration: 'underline' }}>Terms</Link>{' '}
