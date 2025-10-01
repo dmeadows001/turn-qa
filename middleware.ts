@@ -16,7 +16,7 @@ export async function middleware(req: NextRequest) {
 
   // ... keep your existing code below ...
   const PUBLIC_PATHS = [
-    '/', '/login', '/signup', '/dashboard', '/auth', '/api/ensure-profile',
+    '/', '/login', '/signup', '/dashboard', '/auth', '/api/auth', /api/ensure-profile',
     '/api/health', '/api/debug-sms-config', '/billing',
     '/legal', '/support', '/api/stripe/webhook', '/api/billing'
   ];
