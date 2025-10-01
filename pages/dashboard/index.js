@@ -18,7 +18,7 @@ export default function Dashboard() {
   const [msg, setMsg] = useState('');
   const [managerId, setManagerId] = useState(null);
 
-  // 1) Keep session in sync
+  // keep session in sync
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session || null));
     const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => setSession(s));
@@ -26,7 +26,7 @@ export default function Dashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 2) Bootstrap dashboard once we have a session
+  // bootstrap manager row + load properties
   useEffect(() => {
     if (!session) return;
     (async () => {
@@ -34,7 +34,7 @@ export default function Dashboard() {
         setLoading(true);
         setMsg('');
 
-        // Ensure ONE managers row for this user (idempotent)
+        // 1) Ensure exactly one managers row for this user (idempotent)
         const { data: existing, error: mErr } = await supabase
           .from('managers')
           .select('id')
@@ -47,30 +47,29 @@ export default function Dashboard() {
             .from('managers')
             .upsert(
               { user_id: session.user.id, name: session.user.email || 'Manager' },
-              { onConflict: 'user_id' } // requires a UNIQUE(user_id) constraint
+              { onConflict: 'user_id' }
             );
           if (insErr) throw insErr;
         } else if (existing.length > 1) {
-          // If duplicates slipped in, keep first and delete the rest (defensive)
           const keepId = existing[0].id;
           const extras = existing.slice(1).map(r => r.id);
           if (extras.length) {
             const { error: delErr } = await supabase.from('managers').delete().in('id', extras);
             if (delErr) throw delErr;
           }
+          setManagerId(keepId);
         }
 
-        // Reselect the single id (now guaranteed)
+        // reselect the single id
         const { data: one, error: oneErr } = await supabase
           .from('managers')
           .select('id')
           .eq('user_id', session.user.id)
           .single();
         if (oneErr) throw oneErr;
-
         setManagerId(one.id);
 
-        // Load properties list
+        // 2) Load properties
         const { data: props, error: pErr } = await supabase
           .from('properties')
           .select('id, name, created_at')
@@ -87,7 +86,7 @@ export default function Dashboard() {
     })();
   }, [session, supabase]);
 
-  // 3) Hoisted createProperty handler (so it exists before render/prerender)
+  // ✅ RESTORED: createProperty handler
   async function createProperty(e) {
     e?.preventDefault?.();
     try {
@@ -106,8 +105,9 @@ export default function Dashboard() {
       setPropName('');
       setPropsList(prev => [
         { id: data.id, name: propName.trim(), created_at: new Date().toISOString() },
-        ...prev,
+        ...prev
       ]);
+
       router.push(`/properties/${data.id}/template`);
     } catch (e) {
       setMsg(e.message || 'Could not create property');
@@ -154,13 +154,8 @@ export default function Dashboard() {
                 <div
                   key={p.id}
                   style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: 8,
-                    border: '1px solid #1f2937',
-                    borderRadius: 12,
-                    padding: 12,
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    gap: 8, border: '1px solid #1f2937', borderRadius: 12, padding: 12
                   }}
                 >
                   <div style={{ fontWeight: 600 }}>{p.name}</div>
@@ -178,4 +173,9 @@ export default function Dashboard() {
       </section>
     </ChromeDark>
   );
+}
+
+// ⛔ Prevent static optimization (force SSR for this page)
+export async function getServerSideProps() {
+  return { props: {} };
 }
