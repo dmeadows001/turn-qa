@@ -31,16 +31,39 @@ export default function Login() {
   }, []);
 
   const finishLogin = useCallback(async () => {
-    // Create / update trial profile; ignore failures (we log them)
+    // 1) read the current client session
+    const { data: { session } } = await supabase.auth.getSession();
+
+    // 2) copy it to a server cookie so middleware can see it
+    if (session?.access_token && session?.refresh_token) {
+      try {
+        const r = await fetch('/api/auth', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            access_token: session.access_token,
+            refresh_token: session.refresh_token,
+          }),
+        });
+        console.log('[login] /api/auth set cookie status', r.status);
+      } catch (e) {
+        console.warn('[login] /api/auth failed', e);
+      }
+    } else {
+      console.warn('[login] no tokens on session after sign-in');
+    }
+
+    // 3) create / update trial profile (now the API will see the cookie)
     try {
       const resp = await fetch('/api/ensure-profile', { method: 'POST' });
       console.log('[login] ensure-profile status', resp.status);
     } catch (e) {
       console.warn('[login] ensure-profile failed', e);
     }
-    // Hard reload so middleware reads fresh cookies
-    window.location.href = nextUrl || '/dashboard';
-  }, [nextUrl]);
+
+    // 4) go where we were headed
+    router.replace(nextUrl || '/dashboard');
+  }, [nextUrl, router, supabase]);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -50,7 +73,6 @@ export default function Login() {
       console.log('[login] attempting password sign-in', { email });
 
       const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-
       console.log('[login] signInWithPassword result', { user: data?.user?.id, error });
 
       if (error) {
@@ -58,24 +80,7 @@ export default function Login() {
         return;
       }
 
-      // Copy session to cookie so middleware sees it
-      const at = data?.session?.access_token;
-      const rt = data?.session?.refresh_token;
-      if (at && rt) {
-        try {
-          const setCookieResp = await fetch('/api/auth/set-cookie', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ access_token: at, refresh_token: rt })
-          });
-          console.log('[login] set-cookie status', setCookieResp.status);
-        } catch (err) {
-          console.warn('[login] set-cookie failed', err);
-        }
-      } else {
-        console.warn('[login] no tokens returned from password sign-in');
-      }
-
+      // IMPORTANT: this sets the server cookie + ensures profile + navigates
       await finishLogin();
     } catch (e: any) {
       console.error('[login] unexpected', e);
