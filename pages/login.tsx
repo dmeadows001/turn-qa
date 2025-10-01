@@ -46,6 +46,36 @@ export default function Login() {
     setMsg(error ? error.message : 'We emailed you a one-click sign-in link.');
   }
 
+// inside Login component
+async function sendPasswordReset(e?: React.MouseEvent) {
+  e?.preventDefault?.();
+  try {
+    setMsg('');
+    if (!email) {
+      setMsg('Enter your email above, then click “Reset password”.');
+      return;
+    }
+
+    const base =
+      (typeof window !== 'undefined'
+        ? window.location.origin
+        : (process.env.NEXT_PUBLIC_BASE_URL ||
+           process.env.NEXT_PUBLIC_APP_BASE_URL ||
+           'https://www.turnqa.com')
+      ).replace(/\/+$/, '');
+
+    const supabase = supabaseBrowser();
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: `${base}/auth/new-password`,
+    });
+    if (error) throw error;
+
+    setMsg('Reset email sent. Check your inbox for a link to set a new password.');
+  } catch (err: any) {
+    setMsg(err.message || 'Could not send reset email.');
+  }
+}
+  
   return (
     <>
       <Header />
