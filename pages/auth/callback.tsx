@@ -10,22 +10,27 @@ export default function AuthCallback() {
 
   useEffect(() => {
     const run = async () => {
-      const next = (router.query.next as string) || '/dashboard';
+      const rawNext = (router.query.next as string | undefined) || '/dashboard';
+      const next = typeof rawNext === 'string' && rawNext.length ? rawNext : '/dashboard';
 
       // Read URL hash
-      const hash = window.location.hash.replace(/^#/, '');
+      const hash = typeof window !== 'undefined' ? window.location.hash.replace(/^#/, '') : '';
       const params = new URLSearchParams(hash);
 
-      // If GoTrue sent an error (e.g., otp_expired), route back to login with context
+      // Error from Supabase (e.g., otp_expired)
       const err = params.get('error');
       const errCode = params.get('error_code');
       const errDesc = params.get('error_description');
+
       if (err || errCode) {
-        router.replace(`/login?next=${encodeURIComponent(next)}&reason=${encodeURIComponent(errCode || err)}&msg=${encodeURIComponent(errDesc || 'Link invalid or expired')}`);
+        const qNext   = encodeURIComponent(next);
+        const qReason = encodeURIComponent(String(errCode || err || 'unknown'));
+        const qMsg    = encodeURIComponent(String(errDesc || 'Link invalid or expired'));
+        router.replace(`/login?next=${qNext}&reason=${qReason}&msg=${qMsg}`);
         return;
       }
 
-      // Normal magic-link flow: tokens in the hash
+      // Normal magic-link flow
       const access_token  = params.get('access_token');
       const refresh_token = params.get('refresh_token');
 
@@ -34,23 +39,24 @@ export default function AuthCallback() {
           setMsg('Finalizing session…');
           const { error } = await supabase.auth.setSession({ access_token, refresh_token });
           if (error) throw error;
-          // Non-blocking: ensure profile/trial row
+          // Best-effort: create/ensure profile
           fetch('/api/ensure-profile', { method: 'POST' }).catch(() => {});
           router.replace(next);
           return;
         }
 
-        // No tokens: maybe session already exists?
+        // Maybe we already have a session?
         const { data } = await supabase.auth.getSession();
         if (data.session) {
           router.replace(next);
           return;
         }
 
-        // Fallback: go to login
+        // Fallback
         router.replace(`/login?next=${encodeURIComponent(next)}&reason=no_tokens`);
       } catch (e: any) {
-        router.replace(`/login?next=${encodeURIComponent(next)}&reason=set_session_failed&msg=${encodeURIComponent(e?.message || 'Could not complete sign-in')}`);
+        const qMsg = encodeURIComponent(String(e?.message || 'Could not complete sign-in'));
+        router.replace(`/login?next=${encodeURIComponent(next)}&reason=set_session_failed&msg=${qMsg}`);
       }
     };
 
