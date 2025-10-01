@@ -1,11 +1,9 @@
 // lib/supabaseServer.ts
-import { createClient } from '@supabase/supabase-js';
+import type { NextApiRequest, NextApiResponse } from 'next';
+import { createServerSupabaseClient } from '@supabase/auth-helpers-nextjs';
 
-export function createServerSupabase() {
-  // Simple server-side client; good enough for API routes.
-  // (We can switch to SSR cookies later if needed.)
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  );
+// Returns a server-side Supabase client *bound to the request/response cookies*.
+// This lets supabase.auth.getUser() work in API routes.
+export function createServerSupabase(req: NextApiRequest, res: NextApiResponse) {
+  return createServerSupabaseClient({ req, res });
 }
