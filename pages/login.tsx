@@ -31,27 +31,17 @@ export default function Login() {
   }, []);
 
   const finishLogin = useCallback(async () => {
-    // 1) read the current client session
-    const { data: { session } } = await supabase.auth.getSession();
+  try {
+    // Make the DB ready for this user — no cookies required
+    await supabase.rpc('ensure_profile');
+    await supabase.rpc('ensure_manager');
+  } catch (e) {
+    console.warn('[login] ensure_* RPC failed (non-fatal)', e);
+  }
+  // Simple, reliable redirect
+  window.location.href = nextUrl || '/dashboard';
+}, [nextUrl, supabase]);
 
-    // 2) copy it to a server cookie so middleware can see it
-    if (session?.access_token && session?.refresh_token) {
-      try {
-        const r = await fetch('/api/auth', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            access_token: session.access_token,
-            refresh_token: session.refresh_token,
-          }),
-        });
-        console.log('[login] /api/auth set cookie status', r.status);
-      } catch (e) {
-        console.warn('[login] /api/auth failed', e);
-      }
-    } else {
-      console.warn('[login] no tokens on session after sign-in');
-    }
 
     // 3) create / update trial profile (now the API will see the cookie)
     try {
