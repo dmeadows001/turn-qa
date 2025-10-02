@@ -32,7 +32,7 @@ export default function Login() {
 
   const finishLogin = useCallback(async () => {
   try {
-    // Make the DB ready for this user — no cookies required
+    // Make DB-ready for this user (no cookies required)
     await supabase.rpc('ensure_profile');
     await supabase.rpc('ensure_manager');
   } catch (e) {
