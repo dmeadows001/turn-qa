@@ -13,7 +13,8 @@ import Header from '@/components/layout/Header';
 export default function Login() {
   const router = useRouter();
   const supabase = supabaseBrowser();
-  const nextUrl = typeof router.query?.next === 'string' ? router.query.next : '/dashboard';
+  const nextUrl =
+    typeof router.query?.next === 'string' ? router.query.next : '/dashboard';
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -24,36 +25,22 @@ export default function Login() {
     const origin =
       typeof window !== 'undefined'
         ? window.location.origin
-        : (process.env.NEXT_PUBLIC_BASE_URL ||
-           process.env.NEXT_PUBLIC_APP_BASE_URL ||
-           'https://www.turnqa.com');
+        : process.env.NEXT_PUBLIC_BASE_URL ||
+          process.env.NEXT_PUBLIC_APP_BASE_URL ||
+          'https://www.turnqa.com';
     return origin.replace(/\/+$/, '');
   }, []);
 
+  // Finalize login: make sure profile/manager rows exist, then hard-redirect
   const finishLogin = useCallback(async () => {
-  try {
-    // Make DB-ready for this user (no cookies required)
-    await supabase.rpc('ensure_profile');
-    await supabase.rpc('ensure_manager');
-  } catch (e) {
-    console.warn('[login] ensure_* RPC failed (non-fatal)', e);
-  }
-  // Simple, reliable redirect
-  window.location.href = nextUrl || '/dashboard';
-}, [nextUrl, supabase]);
-
-
-    // 3) create / update trial profile (now the API will see the cookie)
     try {
-      const resp = await fetch('/api/ensure-profile', { method: 'POST' });
-      console.log('[login] ensure-profile status', resp.status);
+      await supabase.rpc('ensure_profile');
+      await supabase.rpc('ensure_manager');
     } catch (e) {
-      console.warn('[login] ensure-profile failed', e);
+      console.warn('[login] ensure_* RPC failed (non-fatal)', e);
     }
-
-    // 4) go where we were headed
-    router.replace(nextUrl || '/dashboard');
-  }, [nextUrl, router, supabase]);
+    window.location.href = nextUrl || '/dashboard';
+  }, [nextUrl, supabase]);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -62,15 +49,20 @@ export default function Login() {
     try {
       console.log('[login] attempting password sign-in', { email });
 
-      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-      console.log('[login] signInWithPassword result', { user: data?.user?.id, error });
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+      console.log('[login] signInWithPassword result', {
+        user: data?.user?.id,
+        error,
+      });
 
       if (error) {
         setMsg(error.message || 'Invalid login credentials');
         return;
       }
 
-      // IMPORTANT: this sets the server cookie + ensures profile + navigates
       await finishLogin();
     } catch (e: any) {
       console.error('[login] unexpected', e);
@@ -89,7 +81,11 @@ export default function Login() {
 
       const { data, error } = await supabase.auth.signInWithOtp({
         email,
-        options: { emailRedirectTo: `${base}/auth/callback?next=${encodeURIComponent(nextUrl)}` }
+        options: {
+          emailRedirectTo: `${base}/auth/callback?next=${encodeURIComponent(
+            nextUrl
+          )}`,
+        },
       });
 
       console.log('[login] signInWithOtp result', { data, error });
@@ -114,9 +110,14 @@ export default function Login() {
     try {
       console.log('[login] starting password reset', { email });
 
-      const { data, error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: `${base}/auth/new-password?next=${encodeURIComponent(nextUrl)}`
-      });
+      const { data, error } = await supabase.auth.resetPasswordForEmail(
+        email,
+        {
+          redirectTo: `${base}/auth/new-password?next=${encodeURIComponent(
+            nextUrl
+          )}`,
+        }
+      );
 
       console.log('[login] resetPasswordForEmail result', { data, error });
 
@@ -141,32 +142,43 @@ export default function Login() {
         style={{
           minHeight: 'calc(100vh - 56px)',
           background:
-            'var(--bg), radial-gradient(1000px 600px at 80% -10%, rgba(124,92,255,.16), transparent 60%), radial-gradient(800px 500px at 0% 100%, rgba(0,229,255,.08), transparent 60%), linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0) 40%)'
+            'var(--bg), radial-gradient(1000px 600px at 80% -10%, rgba(124,92,255,.16), transparent 60%), radial-gradient(800px 500px at 0% 100%, rgba(0,229,255,.08), transparent 60%), linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0) 40%)',
         }}
       >
         <Card className="auth-card">
           <div className="auth-brand" style={{ gap: 12 }}>
-            <Image src="/logo-camera.svg" alt="TurnQA" width={28} height={28} priority />
-            <div className="muted" style={{ fontWeight: 700, letterSpacing: 0.2 }}>
+            <Image
+              src="/logo-camera.svg"
+              alt="TurnQA"
+              width={28}
+              height={28}
+              priority
+            />
+            <div
+              className="muted"
+              style={{ fontWeight: 700, letterSpacing: 0.2 }}
+            >
               TurnQA • Manager
             </div>
           </div>
 
-          <h1 className="h1 accent" style={{ marginBottom: 18 }}>Sign in</h1>
+          <h1 className="h1 accent" style={{ marginBottom: 18 }}>
+            Sign in
+          </h1>
 
           <form onSubmit={onSubmit} style={{ display: 'grid', gap: 12 }}>
             <Input
               placeholder="Email"
               type="email"
               value={email}
-              onChange={e => setEmail(e.target.value)}
+              onChange={(e) => setEmail(e.target.value)}
               required
             />
             <Input
               placeholder="Password"
               type="password"
               value={password}
-              onChange={e => setPassword(e.target.value)}
+              onChange={(e) => setPassword(e.target.value)}
               required
             />
             <PrimaryButton disabled={loading}>
@@ -174,7 +186,12 @@ export default function Login() {
             </PrimaryButton>
 
             {msg && (
-              <p style={{ color: /sent|link|check/i.test(msg) ? '#22c55e' : '#fda4af', fontSize: 14 }}>
+              <p
+                style={{
+                  color: /sent|link|check/i.test(msg) ? '#22c55e' : '#fda4af',
+                  fontSize: 14,
+                }}
+              >
                 {msg}
               </p>
             )}
@@ -183,14 +200,32 @@ export default function Login() {
           <div className="hint" style={{ marginTop: 10, display: 'grid', gap: 8 }}>
             <button
               onClick={sendMagicLink}
-              style={{ background: 'transparent', border: 'none', color: 'var(--muted)', textDecoration: 'underline', cursor: 'pointer', fontSize: 14, padding: 0, textAlign: 'left' }}
+              style={{
+                background: 'transparent',
+                border: 'none',
+                color: 'var(--muted)',
+                textDecoration: 'underline',
+                cursor: 'pointer',
+                fontSize: 14,
+                padding: 0,
+                textAlign: 'left',
+              }}
             >
               Prefer no password? Email me a one-click sign-in link
             </button>
 
             <button
               onClick={startPasswordReset}
-              style={{ background: 'transparent', border: 'none', color: 'var(--muted)', textDecoration: 'underline', cursor: 'pointer', fontSize: 14, padding: 0, textAlign: 'left' }}
+              style={{
+                background: 'transparent',
+                border: 'none',
+                color: 'var(--muted)',
+                textDecoration: 'underline',
+                cursor: 'pointer',
+                fontSize: 14,
+                padding: 0,
+                textAlign: 'left',
+              }}
             >
               Forgot password? Reset it via email
             </button>
@@ -198,9 +233,14 @@ export default function Login() {
 
           <p className="hint" style={{ marginTop: 12, fontSize: 12 }}>
             By continuing, you agree to our{' '}
-            <Link href="/legal/terms" style={{ textDecoration: 'underline' }}>Terms</Link>{' '}
+            <Link href="/legal/terms" style={{ textDecoration: 'underline' }}>
+              Terms
+            </Link>{' '}
             and{' '}
-            <Link href="/legal/privacy" style={{ textDecoration: 'underline' }}>Privacy Policy</Link>.
+            <Link href="/legal/privacy" style={{ textDecoration: 'underline' }}>
+              Privacy Policy
+            </Link>
+            .
           </p>
 
           <p className="hint" style={{ marginTop: 16, fontSize: 15, fontWeight: 600 }}>
