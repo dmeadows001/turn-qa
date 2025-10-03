@@ -1,12 +1,13 @@
 // pages/_app.tsx
+import '../styles/globals.css';
 import type { AppProps } from 'next/app';
 import Head from 'next/head';
-import '../styles/globals.css';
 
 // -------- BEGIN TEMP PROBE (remove after we fix the caller) --------
+// We patch fetch very early, on the client only.
 if (typeof window !== 'undefined') {
-  // bind() to avoid "Illegal invocation" in some browsers
-  const __ORIG_FETCH = window.fetch.bind(window);
+  const origFetch = window.fetch.bind(window);
+
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     try {
       const url =
@@ -14,28 +15,31 @@ if (typeof window !== 'undefined') {
           ? input
           : (input as Request)?.url ?? (input as URL)?.toString();
 
-      if (
-        typeof url === 'string' &&
-        url.includes('/rest/v1/properties') &&
-        url.includes('id=eq,')
-      ) {
-        console.group('[BAD REST CALL] found "=eq,"');
-        console.warn('URL:', url);
-        console.warn('Caller stack:');
-        console.warn(new Error().stack);
-        console.groupEnd();
+      if (typeof url === 'string' && url.includes('/rest/v1/properties')) {
+        // Patch both plain and URL-encoded commas after eq
+        const fixed = url
+          .replace(/id=eq,/g, 'id=eq.')
+          .replace(/id=eq%2C/g, 'id=eq.');
 
-        // hot-fix so the page still works while we locate the caller
-        const fixed = url.replace(/id=eq,/g, 'id=eq.');
-        input =
-          typeof input === 'string'
-            ? fixed
-            : new Request(fixed, input as RequestInit);
+        if (fixed !== url) {
+          // Log the before/after and the call stack so we can find the real source file
+          console.groupCollapsed('[fix] Patched "id=eq," → "id=eq." in REST URL');
+          console.log('Before:', url);
+          console.log('After :', fixed);
+          console.log('Caller stack (open this):');
+          console.trace();
+          console.groupEnd();
+
+          input =
+            typeof input === 'string'
+              ? fixed
+              : new Request(fixed, input as RequestInit);
+        }
       }
     } catch {
-      // swallow probe errors
+      // ignore
     }
-    return __ORIG_FETCH(input as any, init);
+    return origFetch(input as any, init);
   };
 }
 // -------- END TEMP PROBE --------
