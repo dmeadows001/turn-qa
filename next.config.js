@@ -1,7 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  // DO NOT set `output: 'export'` — we need SSR for auth pages
+  productionBrowserSourceMaps: true, // <-- enable readable stacks in prod
 };
 
 module.exports = nextConfig;
