@@ -1,30 +1,46 @@
 // lib/data/properties.ts
 import { supabaseBrowser } from '@/lib/supabaseBrowser';
 
+export type PropertyRow = {
+  id: string;
+  name: string;
+  address: string | null;
+  created_at: string;
+};
+
+const SELECT_COLS = 'id,name,address,created_at';
+
+/** List properties visible to the current user (RLS enforces scope). */
 export async function listMyProperties() {
   const supabase = supabaseBrowser();
-  // adjust columns as needed
-  return supabase
+  const { data, error } = await supabase
     .from('properties')
-    .select('id,name')
+    .select<PropertyRow>(SELECT_COLS)
     .order('created_at', { ascending: false });
+
+  return { data: data ?? [], error };
 }
 
+/** Load a single property by id (returns null if not found). */
 export async function getPropertyById(id: string) {
   const supabase = supabaseBrowser();
-  return supabase
+  const { data, error } = await supabase
     .from('properties')
-    .select('id,name') // add columns you need on the template page
+    .select<PropertyRow>(SELECT_COLS)
     .eq('id', id)
-    .single(); // 404-style behavior if not found
+    .maybeSingle(); // don't throw; just return null
+
+  return { data: data ?? null, error };
 }
 
-export async function createProperty(name: string) {
+/** Create a property; RLS must allow current user to insert. */
+export async function createProperty(name: string, address?: string) {
   const supabase = supabaseBrowser();
-  // If your schema requires more fields, include them here.
-  return supabase
+  const { data, error } = await supabase
     .from('properties')
-    .insert({ name })
-    .select('id,name')
+    .insert([{ name, address: address ?? null }])
+    .select<PropertyRow>(SELECT_COLS)
     .single();
+
+  return { data: data ?? null, error };
 }
