@@ -1,10 +1,8 @@
 // pages/api/turn-template.js
-import { createClient } from '@supabase/supabase-js';
+import { supabaseAdmin as _admin } from '@/lib/supabaseAdmin';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-);
+// Support either export style from supabaseAdmin (client instance or factory)
+const supabase = typeof _admin === 'function' ? _admin() : _admin;
 
 export default async function handler(req, res) {
   try {
@@ -73,7 +71,7 @@ export default async function handler(req, res) {
     }
 
     const rules = {
-      property: propertyName,           // <-- now set
+      property: propertyName,
       template: tpl?.name || ''
     };
 
@@ -81,7 +79,7 @@ export default async function handler(req, res) {
       ok: true,
       turn_id: turn.id,
       property_id: turn.property_id,
-      property_name: propertyName,      // <-- helpful extra
+      property_name: propertyName,
       template_id: tpl?.id || null,
       rules,
       shots
