@@ -1,10 +1,7 @@
 // pages/api/turns/create.js
-import { createClient } from '@supabase/supabase-js';
+import { supabaseAdmin as _admin } from '@/lib/supabaseAdmin';
 
-const supa = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY
-);
+const supa = typeof _admin === 'function' ? _admin() : _admin;
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -13,54 +10,82 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { property_id, cleaner_id, notes = '' } = req.body || {};
+    const { property_id, cleaner_id, notes = '', cleaner_phone = '' } = req.body || {};
     if (!property_id || !cleaner_id) {
       return res.status(400).json({ error: 'property_id and cleaner_id are required' });
     }
 
-    // create the turn
-    const { data: turn, error } = await supa
+    // 1) Create the turn (tolerant if your schema doesn't have a `notes` column)
+    let turnRow = null;
+
+    // Attempt with `notes`
+    let ins = await supa
       .from('turns')
       .insert({ property_id, cleaner_id, status: 'in_progress', notes })
       .select('id')
-      .single();
-    if (error) throw error;
+      .maybeSingle();
 
-    // build absolute link (always https + plural /turns/)
-    const base =
-      process.env.APP_BASE_URL ||
-      process.env.NEXT_PUBLIC_APP_BASE_URL ||
-      'https://www.turnqa.com';
-    const link = `${base.replace(/\/+$/, '')}/turns/${turn.id}/capture`;
+    if (ins.error) {
+      const msg = (ins.error.message || '').toLowerCase();
+      const looksLikeMissingNotes =
+        msg.includes('column') && msg.includes('notes') && (msg.includes('does not exist') || msg.includes('unknown'));
 
-    // send SMS to cleaner
+      if (!looksLikeMissingNotes) throw ins.error;
+
+      // Retry without `notes`
+      ins = await supa
+        .from('turns')
+        .insert({ property_id, cleaner_id, status: 'in_progress' })
+        .select('id')
+        .maybeSingle();
+
+      if (ins.error) throw ins.error;
+    }
+
+    turnRow = ins.data;
+    if (!turnRow?.id) throw new Error('Could not create turn');
+
+    // 2) Build absolute capture link (always plural /turns/)
+    const base = (process.env.NEXT_PUBLIC_BASE_URL ||
+                  process.env.APP_BASE_URL ||
+                  process.env.NEXT_PUBLIC_APP_BASE_URL ||
+                  'https://www.turnqa.com').replace(/\/+$/, '');
+    const link = `${base}/turns/${turnRow.id}/capture`;
+
+    // 3) Send SMS to cleaner (optional but typical)
     const { default: twilio } = await import('twilio');
+
+    const to = cleaner_phone || (await lookupCleanerPhone(cleaner_id));
+    if (!to) throw new Error('Cleaner phone not found');
+
+    const body = `TurnQA: Start clean: ${link} STOP=stop`;
+
     const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+    const smsOpts = { to, body };
 
-    const body = `TurnQA: Start clean: ${link} STOP=stop`; // short for trial
-
-    const opts = { to: req.body.cleaner_phone || '' , body }; // optional if you post the phone
     if (process.env.TWILIO_MESSAGING_SERVICE_SID) {
-      opts.messagingServiceSid = process.env.TWILIO_MESSAGING_SERVICE_SID;
+      smsOpts.messagingServiceSid = process.env.TWILIO_MESSAGING_SERVICE_SID;
+    } else if (process.env.TWILIO_FROM_NUMBER) {
+      smsOpts.from = process.env.TWILIO_FROM_NUMBER;
     } else {
-      opts.from = process.env.TWILIO_FROM_NUMBER;
+      // Don’t hard fail the whole request—return the link even if SMS config is missing
+      return res.status(200).json({ ok: true, turn: turnRow, link, sms: 'skipped (no FROM or MESSAGING_SERVICE_SID)' });
     }
 
-    // If you don’t post cleaner_phone, look it up by cleaner_id:
-    if (!opts.to) {
-      const { data: c, error: cErr } = await supa
-        .from('cleaners')
-        .select('phone')
-        .eq('id', cleaner_id)
-        .single();
-      if (cErr || !c?.phone) throw new Error('Cleaner phone not found');
-      opts.to = c.phone;
-    }
+    const sms = await client.messages.create(smsOpts);
 
-    const sms = await client.messages.create(opts);
-
-    return res.status(200).json({ ok: true, turn, link, sms: { sid: sms.sid } });
+    return res.status(200).json({ ok: true, turn: turnRow, link, sms: { sid: sms.sid } });
   } catch (e) {
     return res.status(500).json({ error: e.message || 'unexpected error' });
   }
+}
+
+async function lookupCleanerPhone(cleaner_id) {
+  const { data, error } = await supa
+    .from('cleaners')
+    .select('phone')
+    .eq('id', cleaner_id)
+    .maybeSingle();
+  if (error) throw error;
+  return data?.phone || '';
 }
