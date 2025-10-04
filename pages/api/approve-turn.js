@@ -1,10 +1,8 @@
 // pages/api/approve-turn.js
-import { createClient } from '@supabase/supabase-js';
+import { supabaseAdmin as _admin } from '@/lib/supabaseAdmin';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY
-);
+// Support both export styles (client or factory function)
+const supabase = typeof _admin === 'function' ? _admin() : _admin;
 
 // Placeholder for future payouts integration
 async function sendCleanerPayout({ turnId, cleanerId, amountCents, currency = 'USD' }) {
@@ -32,7 +30,7 @@ export default async function handler(req, res) {
     const { turn_id, approved_by, payout_amount_cents } = req.body || {};
     if (!turn_id) return res.status(400).json({ error: 'turn_id is required' });
 
-    // 1) Load the turn + property (no cleaner embed; we fetch cleaner separately to avoid FK assumptions)
+    // 1) Load the turn + property
     const { data: turn, error: tErr } = await supabase
       .from('turns')
       .select(`
