@@ -1,21 +1,26 @@
 // pages/api/sms/otp-send.js
 import twilio from 'twilio';
-import { createClient } from '@supabase/supabase-js';
+import { supabaseAdmin as _admin } from '@/lib/supabaseAdmin';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-);
+// Reuse your admin client (handles RLS with service role)
+const supabase = typeof _admin === 'function' ? _admin() : _admin;
 
-// ----- helpers -----
-function e164(s = '') {
-  const digits = String(s || '').replace(/[^\d+]/g, '');
-  return digits.startsWith('+') ? digits : '+' + digits;
+// ---------- helpers ----------
+function toE164(raw = '') {
+  const only = String(raw || '').replace(/[^\d+]/g, '');
+  if (!only) return '';
+  // If it already starts with +, assume E.164-ish
+  if (only.startsWith('+')) return only;
+  // Naive US default; adjust if you have international numbers at onboarding
+  if (/^\d{10}$/.test(only)) return `+1${only}`;
+  // As a last resort, add "+"
+  return `+${only}`;
 }
+
 function pickSender() {
   const msid = (process.env.TWILIO_MESSAGING_SERVICE_SID || '').trim();
-  // Support common aliases; you said you use TWILIO_FROM_NUMBER
-  let from =
+  // Support common FROM env names
+  const fromRaw =
     (process.env.TWILIO_FROM || '').trim() ||
     (process.env.TWILIO_FROM_NUMBER || '').trim() ||
     (process.env.TWILIO_PHONE_NUMBER || '').trim() ||
@@ -23,22 +28,33 @@ function pickSender() {
     (process.env.TWILIO_TF_FROM || '').trim();
 
   if (msid) return { type: 'ms', msid };
-  if (from) return { type: 'from', from: from.startsWith('MG') ? from : e164(from) };
+  if (fromRaw) {
+    // If it’s already an MG… SID, pass as-is; otherwise normalize to E.164
+    const from = fromRaw.startsWith('MG') ? fromRaw : toE164(fromRaw);
+    return { type: 'from', from };
+  }
   return { type: 'none' };
 }
+
 function twilioClient() {
   const sid = (process.env.TWILIO_ACCOUNT_SID || '').trim();
   const tok = (process.env.TWILIO_AUTH_TOKEN || '').trim();
   if (!sid || !tok) return null;
   return twilio(sid, tok);
 }
-const mask = s => !s ? s : s.startsWith('MG')
-  ? s.slice(0,2) + '••••' + s.slice(-4)
-  : s.startsWith('+') ? s.slice(0,3) + '•••' + s.slice(-2) : '••••';
 
-// ----- handler -----
+const mask = (s) =>
+  !s
+    ? s
+    : s.startsWith('MG')
+    ? s.slice(0, 2) + '••••' + s.slice(-4)
+    : s.startsWith('+')
+    ? s.slice(0, 3) + '•••' + s.slice(-2)
+    : '••••';
+
+// ---------- handler ----------
 export default async function handler(req, res) {
-  // Debug probe to prove what this lambda sees in Production
+  // Optional debug probe (GET /api/sms/otp-send?debug=1)
   if (req.method === 'GET' && 'debug' in req.query) {
     const sender = pickSender();
     return res.json({
@@ -50,7 +66,10 @@ export default async function handler(req, res) {
     });
   }
 
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', ['POST']);
+    return res.status(405).json({ error: 'Method Not Allowed' });
+  }
 
   try {
     const client = twilioClient();
@@ -58,56 +77,58 @@ export default async function handler(req, res) {
     if (!client || sender.type === 'none') {
       return res.status(500).json({
         error:
-          'Twilio sender not configured (set TWILIO_MESSAGING_SERVICE_SID or TWILIO_FROM / TWILIO_FROM_NUMBER).'
+          'Twilio sender not configured. Set TWILIO_MESSAGING_SERVICE_SID or TWILIO_FROM / TWILIO_FROM_NUMBER.',
       });
     }
 
-    // Accept { phone } (from your onboard page), or resolve from ids if provided
+    // Accept { phone } or resolve via invite_id / cleaner_id
     const { phone, to, invite_id, cleaner_id } = req.body || {};
     let dest = phone || to || '';
 
-    if (!dest) {
-      // optional lookups if you wire them later
-      if (invite_id) {
-        const { data } = await supabase
-          .from('cleaner_invites')
-          .select('phone')
-          .eq('id', invite_id)
-          .maybeSingle();
-        dest = data?.phone || '';
-      } else if (cleaner_id) {
-        const { data } = await supabase
-          .from('cleaners')
-          .select('phone')
-          .eq('id', cleaner_id)
-          .maybeSingle();
-        dest = data?.phone || '';
-      }
+    if (!dest && invite_id) {
+      const { data } = await supabase
+        .from('cleaner_invites')
+        .select('phone')
+        .eq('id', invite_id)
+        .maybeSingle();
+      dest = data?.phone || '';
+    }
+
+    if (!dest && cleaner_id) {
+      const { data } = await supabase
+        .from('cleaners')
+        .select('phone')
+        .eq('id', cleaner_id)
+        .maybeSingle();
+      dest = data?.phone || '';
     }
 
     if (!dest) return res.status(400).json({ error: 'No destination phone.' });
 
-    const e = e164(dest);
+    const e = toE164(dest);
     if (!/^\+\d{8,15}$/.test(e)) return res.status(400).json({ error: 'Invalid phone format.' });
 
-    // Generate and store 6-digit OTP, 10-min expiry
-    const code = String(Math.floor(100000 + Math.random() * 900000)).slice(0,6);
+    // Generate 6-digit code; 10-minute expiry
+    const code = String(Math.floor(100000 + Math.random() * 900000)).slice(0, 6);
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
 
+    // Store OTP using the SAME table your verify endpoint expects (`phone_otps`)
+    // Columns assumed: phone (PK or unique), code, role, subject_id, expires_at, used_at
+    // We clear used_at on send so a fresh code is valid.
     const { error: upErr } = await supabase
-      .from('sms_otp')
+      .from('phone_otps')
       .upsert(
-        { phone: e, code, expires_at: expiresAt },  // phone is PK, so onConflict implicit
+        { phone: e, code, role: 'cleaner', subject_id: cleaner_id || null, expires_at: expiresAt, used_at: null },
         { onConflict: 'phone' }
       );
     if (upErr) throw upErr;
 
-    // Short, trial-safe message
     const body = `TurnQA code: ${code}. Reply STOP to opt out, HELP for help.`;
 
-    const payload = sender.type === 'ms'
-      ? { to: e, body, messagingServiceSid: sender.msid }
-      : { to: e, body, from: sender.from };
+    const payload =
+      sender.type === 'ms'
+        ? { to: e, body, messagingServiceSid: sender.msid }
+        : { to: e, body, from: sender.from };
 
     await client.messages.create(payload);
 
