@@ -1,10 +1,7 @@
 // pages/api/list-cleaner-turns.js
-import { createClient } from '@supabase/supabase-js';
+import { supabaseAdmin } from '@/lib/supabaseAdmin'; // ✅ server-side admin client (service role)
 
-const supa = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY
-);
+const supa = supabaseAdmin(); // one client for this module
 
 function normPhone(raw = '') {
   const only = (raw || '').replace(/[^\d+]/g, '');
@@ -84,7 +81,10 @@ async function selectTurnsTolerant(cleanerId) {
 }
 
 export default async function handler(req, res) {
-  if (req.method !== 'GET') return res.status(405).json({ error: 'Method Not Allowed' });
+  if (req.method !== 'GET') {
+    res.setHeader('Allow', ['GET']);
+    return res.status(405).json({ error: 'Method Not Allowed' });
+  }
 
   try {
     const qPhone = (req.query.phone || '').toString().trim();
