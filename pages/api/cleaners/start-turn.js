@@ -1,13 +1,14 @@
 // pages/api/cleaner/start-turn.js
-import { createClient } from '@supabase/supabase-js';
+import { supabaseAdmin as _admin } from '@/lib/supabaseAdmin';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-);
+// Works whether supabaseAdmin exports an instance or a factory
+const supabase = typeof _admin === 'function' ? _admin() : _admin;
 
 export default async function handler(req, res) {
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', ['POST']);
+    return res.status(405).json({ error: 'Method Not Allowed' });
+  }
 
   try {
     const { cleaner_id, property_id, notes } = req.body || {};
@@ -15,7 +16,7 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'cleaner_id and property_id are required' });
     }
 
-    // sanity: ensure cleaner is assigned to this property
+    // 1) Ensure cleaner is assigned to this property (prevents random starts)
     const { data: allowed, error: aErr } = await supabase
       .from('property_cleaners')
       .select('property_id')
@@ -23,23 +24,25 @@ export default async function handler(req, res) {
       .eq('cleaner_id', cleaner_id)
       .maybeSingle();
     if (aErr) throw aErr;
-    if (!allowed) return res.status(403).json({ error: 'Cleaner not assigned to this property' });
+    if (!allowed) {
+      return res.status(403).json({ error: 'Cleaner not assigned to this property' });
+    }
 
-    // create a turn in_progress
+    // 2) Create the turn
     const { data: turn, error: tErr } = await supabase
       .from('turns')
       .insert({
         property_id,
         cleaner_id,
-        notes: notes || null,
-        status: 'in_progress'
+        status: 'in_progress',
+        notes: notes || null
       })
       .select('id')
       .single();
     if (tErr) throw tErr;
 
-    res.json({ ok: true, turn_id: turn.id });
+    return res.json({ ok: true, turn_id: turn.id });
   } catch (e) {
-    res.status(500).json({ error: e.message || 'server error' });
+    return res.status(500).json({ error: e.message || 'server error' });
   }
 }
