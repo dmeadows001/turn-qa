@@ -1,10 +1,8 @@
 // pages/api/health.js
-import { createClient } from '@supabase/supabase-js';
+import { supabaseAdmin as _admin } from '@/lib/supabaseAdmin';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY
-);
+// Handle both export styles (function returning a client vs direct client)
+const supabase = typeof _admin === 'function' ? _admin() : _admin;
 
 /**
  * Portable health check:
@@ -25,11 +23,11 @@ export default async function handler(req, res) {
       db_ok: true,
       env: {
         site: process.env.NEXT_PUBLIC_SITE_URL || null,
-        has_service_role: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
-        has_anon: !!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-      }
+        has_service_role: !!(process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim(),
+        has_anon: !!(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '').trim(),
+      },
     });
   } catch (e) {
-    res.status(500).json({ ok: false, error: e.message || String(e) });
+    res.status(500).json({ ok: false, error: e?.message || String(e) });
   }
 }
