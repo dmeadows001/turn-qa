@@ -1,11 +1,8 @@
 // pages/api/submit-turn.js
-import { createClient } from '@supabase/supabase-js';
+import { supabaseAdmin as _admin } from '@/lib/supabaseAdmin';
 
-const supa = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  // server-side key so RLS won't block writes
-  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY
-);
+// Support both export styles (function returning client vs direct client)
+const supa = typeof _admin === 'function' ? _admin() : _admin;
 
 function nowIso() { return new Date().toISOString(); }
 
