@@ -1,24 +1,24 @@
 // pages/api/cleaner/properties.js
-import { createClient } from '@supabase/supabase-js';
+import { supabaseAdmin as _admin } from '@/lib/supabaseAdmin';
+
+// Handle either export style from supabaseAdmin (factory or instance)
+const supabase = typeof _admin === 'function' ? _admin() : _admin;
 
 function normalizePhone(s = '') {
   const digits = (s || '').replace(/[^\d+]/g, '');
-  return digits.startsWith('+') ? digits : `+${digits}`;
+  return digits ? (digits.startsWith('+') ? digits : `+${digits}`) : '';
 }
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-);
-
 export default async function handler(req, res) {
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', ['POST']);
+    return res.status(405).json({ error: 'Method Not Allowed' });
+  }
 
   try {
     const { phone } = req.body || {};
-    if (!phone) return res.status(400).json({ error: 'phone is required' });
-
-    const e164 = normalizePhone(phone);
+    const e164 = normalizePhone(phone || '');
+    if (!e164) return res.status(400).json({ error: 'phone is required' });
 
     // 1) find cleaner by phone
     const { data: cleaner, error: cErr } = await supabase
@@ -32,14 +32,17 @@ export default async function handler(req, res) {
     // 2) list properties this cleaner can work on
     const { data: rows, error: pErr } = await supabase
       .from('property_cleaners')
-      .select('property_id, properties(name)')
+      .select('property_id, properties:properties(name)')
       .eq('cleaner_id', cleaner.id);
     if (pErr) throw pErr;
 
-    const properties = (rows || []).map(r => ({ id: r.property_id, name: r.properties?.name || 'Untitled' }));
+    const properties = (rows || []).map(r => ({
+      id: r.property_id,
+      name: r.properties?.name || 'Untitled',
+    }));
 
-    res.json({ cleaner, properties });
+    return res.json({ cleaner, properties });
   } catch (e) {
-    res.status(500).json({ error: e.message || 'server error' });
+    return res.status(500).json({ error: e.message || 'server error' });
   }
 }
