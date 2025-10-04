@@ -1,11 +1,35 @@
 // lib/supabaseAdmin.ts
-import { createClient } from '@supabase/supabase-js';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
+// If you generated types (optional):
+// import type { Database } from '@/types/supabase';
 
-/**
- * Service-role client for server-only code (webhooks, CRON, admin jobs).
- * Never expose the SERVICE_ROLE key to the browser.
- */
-export const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,        // e.g. https://xxxx.supabase.co
-  process.env.SUPABASE_SERVICE_ROLE_KEY!        // add this in Vercel env
-);
+declare global {
+  // Allows caching in dev/hot-reload without TS complaints
+  // eslint-disable-next-line no-var
+  var __supabaseAdmin: SupabaseClient /* <Database> */ | undefined;
+}
+
+let _admin: SupabaseClient /* <Database> */ | undefined;
+
+export function supabaseAdmin(): SupabaseClient /* <Database> */ {
+  if (_admin) return _admin;
+  if (globalThis.__supabaseAdmin) return ( _admin = globalThis.__supabaseAdmin );
+
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+  // Prefer the service key; optionally fall back to anon during local dev.
+  const key =
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+
+  _admin = createClient(/* <Database> */ url, key, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+    },
+  });
+
+  // cache for dev/hot-reload
+  globalThis.__supabaseAdmin = _admin;
+  return _admin;
+}
