@@ -1,13 +1,8 @@
 // pages/api/list-turn-photos.js
-import { createClient } from '@supabase/supabase-js';
-
-const supa = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY // server-side secret
-);
+import { supabaseAdmin } from '@/lib/supabaseAdmin';
 
 // ---------- Signing helpers ----------
-async function trySign(bucket, objectPath, expires = 600) {
+async function trySign(supa, bucket, objectPath, expires = 600) {
   if (!bucket || !objectPath) return null;
   try {
     const { data, error } = await supa.storage.from(bucket).createSignedUrl(objectPath, expires);
@@ -24,7 +19,7 @@ async function trySign(bucket, objectPath, expires = 600) {
  *  - "bucket/dir/file.jpg" -> use bucket=first segment
  *  - "dir/file.jpg" (no bucket) -> try candidate buckets
  */
-async function signUnknownPath(fullPath, { candidates = [] } = {}) {
+async function signUnknownPath(supa, fullPath, { candidates = [] } = {}) {
   if (!fullPath || typeof fullPath !== 'string') return null;
 
   const trimmed = fullPath.trim();
@@ -38,20 +33,18 @@ async function signUnknownPath(fullPath, { candidates = [] } = {}) {
   if (parts.length > 1) {
     const bucket = parts[0];
     const objectPath = parts.slice(1).join('/');
-    url = await trySign(bucket, objectPath);
+    url = await trySign(supa, bucket, objectPath);
     if (url) return url;
   }
 
   // B. Try candidate buckets with the whole path as objectPath
   const envBucket = process.env.NEXT_PUBLIC_SUPABASE_STORAGE_BUCKET;
   const guesses = Array.from(
-    new Set(
-      [envBucket, ...candidates, 'turn_photos', 'photos', 'public', 'images', 'assets'].filter(Boolean)
-    )
+    new Set([envBucket, ...candidates, 'turn_photos', 'photos', 'public', 'images', 'assets'].filter(Boolean))
   );
 
   for (const b of guesses) {
-    url = await trySign(b, clean);
+    url = await trySign(supa, b, clean);
     if (url) return url;
   }
 
@@ -60,7 +53,7 @@ async function signUnknownPath(fullPath, { candidates = [] } = {}) {
 }
 
 // ---------- Tolerant SELECT ----------
-async function tolerantSelect({ table, turnId, orderCol = 'created_at' }) {
+async function tolerantSelect(supa, { table, turnId, orderCol = 'created_at' }) {
   const variants = [
     { cols: 'id, turn_id, area_key, shot_id, storage_path, created_at', pathOf: r => r.storage_path },
     { cols: 'id, turn_id, area_key, shot_id, path, created_at',          pathOf: r => r.path },
@@ -79,8 +72,8 @@ async function tolerantSelect({ table, turnId, orderCol = 'created_at' }) {
         .order(orderCol, { ascending: true });
 
       if (error) {
-        // Only keep trying if it's a column-missing style error
         const msg = (error.message || '').toLowerCase();
+        // Only keep trying if it's a column-missing style error
         if (/(column|does not exist|unknown column)/i.test(msg)) continue;
         throw error;
       }
@@ -104,20 +97,23 @@ async function tolerantSelect({ table, turnId, orderCol = 'created_at' }) {
 
 export default async function handler(req, res) {
   try {
-    const turnId = (req.query.id || '').trim();
+    const turnId = (req.query.id || '').toString().trim();
     const debug = req.query.debug === '1';
     if (!turnId) return res.status(400).json({ error: 'id (turnId) is required' });
 
+    // Use the service-role singleton (server-only, bypasses RLS for this trusted route)
+    const supa = supabaseAdmin();
+
     // 1) Prefer new table
-    let rows = await tolerantSelect({ table: 'turn_photos', turnId });
+    let rows = await tolerantSelect(supa, { table: 'turn_photos', turnId });
 
     // 2) Fallback to legacy if empty
-    if (!rows.length) rows = await tolerantSelect({ table: 'photos', turnId });
+    if (!rows.length) rows = await tolerantSelect(supa, { table: 'photos', turnId });
 
     // 3) Sign URLs (robust to missing bucket names)
     const signed = [];
     for (const r of rows) {
-      const signedUrl = await signUnknownPath(r.path_like, { candidates: ['turns', 'uploads'] });
+      const signedUrl = await signUnknownPath(supa, r.path_like, { candidates: ['turns', 'uploads'] });
       signed.push({
         id: r.id,
         turn_id: r.turn_id,
@@ -131,8 +127,18 @@ export default async function handler(req, res) {
     if (debug) {
       return res.json({
         photos: signed,
-        note: 'debug=1 included raw path and signedUrl. If signedUrl is empty, the stored path is missing a bucket name and none of the guessed buckets worked.',
-        guessedBuckets: ['env.NEXT_PUBLIC_SUPABASE_STORAGE_BUCKET', 'turn_photos', 'photos', 'public', 'images', 'assets', 'turns', 'uploads'],
+        note:
+          'debug=1 includes raw path and signedUrl. If signedUrl is empty, the stored path is missing a bucket name and none of the guessed buckets worked.',
+        guessedBuckets: [
+          'env.NEXT_PUBLIC_SUPABASE_STORAGE_BUCKET',
+          'turn_photos',
+          'photos',
+          'public',
+          'images',
+          'assets',
+          'turns',
+          'uploads',
+        ],
       });
     }
 
