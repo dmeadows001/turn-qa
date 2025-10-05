@@ -162,7 +162,7 @@ export default function TemplateBuilder() {
   // -------------- Render --------------
   if (loading) {
     return (
-      <ChromeDark title="Property Template">
+      <ChromeDark title="Property">
         <section style={ui.sectionGrid}>
           <div style={ui.card}>Loading…</div>
         </section>
@@ -172,7 +172,7 @@ export default function TemplateBuilder() {
 
   if (!property || !template) {
     return (
-      <ChromeDark title="Property Template">
+      <ChromeDark title="Property">
         <section style={ui.sectionGrid}>
           <div style={ui.card}>
             Could not load this property/template.
@@ -183,7 +183,7 @@ export default function TemplateBuilder() {
   }
 
   return (
-    <ChromeDark title={`${property.name} — Template`}>
+    <ChromeDark title={property.name}>
       <section style={ui.sectionGrid}>
         {/* Builder */}
         <div style={ui.card}>
