@@ -75,12 +75,18 @@ export default async function handler(req, res) {
     if (!sid) {
       const { data, error } = await supabase
         .from(table)
-        .insert({ name: name || role, phone })
+        .insert({
+          name: name || role,
+          phone,
+          // 🔒 Satisfy NOT NULL without assuming consent (actual opt-in happens later)
+          sms_consent: false
+        })
         .select('id')
         .single();
       if (error) throw error;
       sid = data.id;
     } else {
+      // Do NOT touch sms_consent here—verification flow can set it true later
       const { error: upErr } = await supabase
         .from(table)
         .update({ phone })
