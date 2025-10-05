@@ -1,5 +1,6 @@
 // pages/api/otp/verify.js
 import { supabaseAdmin } from '@/lib/supabaseAdmin';
+import { makeCleanerSession } from '@/lib/session';
 
 function normalizePhone(s = '') {
   const d = (s || '').replace(/[^\d+]/g, '');
@@ -70,6 +71,12 @@ export default async function handler(req, res) {
       .eq('id', sid);
 
     if (upErr) throw upErr;
+
+    // 4) Create cleaner session cookie so /capture sees them as logged in
+    if (role === 'cleaner') {
+      const { cookie } = makeCleanerSession({ cleaner_id: sid, phone: normPhone });
+      res.setHeader('Set-Cookie', cookie);
+    }
 
     return res.status(200).json({ ok: true, subject_id: sid });
   } catch (e) {
