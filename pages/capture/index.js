@@ -1,31 +1,38 @@
 // pages/capture/index.js
 import { useState } from 'react';
 import ResendOtpButton from '@/components/ResendOtpButton';
-import ChromeDark from '@/components/ChromeDark'; // remove if you don't use it
+import ChromeDark from '@/components/ChromeDark';
+
+function normalizePhone(s = '') {
+  const d = String(s || '').replace(/[^\d+]/g, '');
+  if (!d) return '';
+  if (d.startsWith('+')) return d;
+  // naive US default if 10 digits; tweak for intl if you like
+  if (/^\d{10}$/.test(d)) return `+1${d}`;
+  return `+${d}`;
+}
 
 export default function Capture() {
-  const [phone, setPhone]   = useState('');
-  const [code, setCode]     = useState('');
-  const [phase, setPhase]   = useState('request'); // 'request' | 'code'
-  const [msg, setMsg]       = useState(null);
+  const [phone, setPhone] = useState('');
+  const [code, setCode]   = useState('');
+  const [phase, setPhase] = useState('request'); // 'request' | 'code'
+  const [msg, setMsg]     = useState(null);
   const [loading, setLoading] = useState(false);
 
   async function sendCode() {
     setMsg(null);
     setLoading(true);
     try {
+      const e164 = normalizePhone(phone);
+      if (!e164) throw new Error('Please enter a valid phone number.');
       const r = await fetch('/api/otp/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          role: 'cleaner',
-          phone,
-          consent: true, // we ask for consent before sending
-        }),
+        body: JSON.stringify({ role: 'cleaner', phone: e164, consent: true }),
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || 'Could not send code');
-      setPhase('code'); // move to code entry step
+      setPhase('code');
       setMsg('Code sent! Check your texts.');
     } catch (e) {
       setMsg(e.message || 'Send failed');
@@ -38,20 +45,20 @@ export default function Capture() {
     setMsg(null);
     setLoading(true);
     try {
+      const e164 = normalizePhone(phone);
+      if (!e164) throw new Error('Please enter a valid phone number.');
+      if (!code || String(code).length < 4) throw new Error('Please enter the code.');
+
       const r = await fetch('/api/otp/verify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          role: 'cleaner',
-          phone,
-          code,
-        }),
+        body: JSON.stringify({ role: 'cleaner', phone: e164, code }),
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || 'Verify failed');
 
-      // Verified — proceed to the capture flow. If your capture UI
-      // is also at /capture, just reload to pick up “verified” state.
+      // Server sets the cleaner session cookie on success. Reload into /capture
+      // so your capture UI (which checks /api/me/cleaner) will render.
       setMsg('Verified! Loading capture…');
       window.location.href = '/capture';
     } catch (e) {
@@ -61,7 +68,7 @@ export default function Capture() {
     }
   }
 
-  // ---- styles (kept simple / inline like your project) ----
+  // ---- styles ----
   const wrap  = { maxWidth: 520, margin: '40px auto', display: 'grid', gap: 12 };
   const input = { width:'100%', padding:10, borderRadius:8, border:'1px solid #334155' };
   const btn   = { padding:'10px 14px', borderRadius:10, border:'1px solid #0ea5e9', background:'#e0f2fe', cursor:'pointer' };
@@ -97,7 +104,7 @@ export default function Capture() {
             {loading ? 'Verifying…' : 'Verify'}
           </button>
 
-          {/* Resend button shown on the same page during the code phase */}
+          {/* Resend lives on the same page during the code phase */}
           <ResendOtpButton phone={phone} role="cleaner" />
         </>
       )}
@@ -106,8 +113,5 @@ export default function Capture() {
     </div>
   );
 
-  // If you use ChromeDark site-wide:
   return <ChromeDark title="Verify to start">{content}</ChromeDark>;
-  // If you don’t use ChromeDark, just:
-  // return content;
 }
