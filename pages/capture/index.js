@@ -114,33 +114,43 @@ export default function Capture() {
   }
 
   async function startTurn() {
-    setStartMsg(null);
-    if (!propertyId) {
-      setStartMsg('Please choose a property.');
-      return;
-    }
-    setStarting(true);
-    try {
-      // You already have /api/cleaner/start-turn which checks assignment:
-      const r = await fetch('/api/cleaner/start-turn', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          cleaner_id: cleaner.id,
-          property_id: propertyId,
-        }),
-      });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.error || 'Could not start turn');
-
-      // Jump into your existing capture route:
-      window.location.href = `/turns/${j.turn_id}/capture`;
-    } catch (e) {
-      setStartMsg(e.message || 'Start failed');
-    } finally {
-      setStarting(false);
-    }
+  setStartMsg(null);
+  if (!propertyId) {
+    setStartMsg('Please choose a property.');
+    return;
   }
+  setStarting(true);
+  try {
+    const r = await fetch('/api/cleaner/start-turn', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        cleaner_id: cleaner.id,
+        property_id: propertyId,
+      }),
+    });
+
+    // Try JSON first, fall back to text so we don’t crash on HTML/empty bodies
+    let payload;
+    try {
+      payload = await r.json();
+    } catch {
+      const txt = await r.text();
+      throw new Error(txt || `HTTP ${r.status}`);
+    }
+
+    if (!r.ok || !payload?.ok || !payload?.turn_id) {
+      throw new Error(payload?.error || 'Could not start turn');
+    }
+
+    // Go to your existing capture route
+    window.location.href = `/turns/${payload.turn_id}/capture`;
+  } catch (e) {
+    setStartMsg(e.message || 'Start failed');
+  } finally {
+    setStarting(false);
+  }
+}
 
   // ---- styles ----
   const wrap  = { maxWidth: 520, margin: '40px auto', display: 'grid', gap: 12 };
