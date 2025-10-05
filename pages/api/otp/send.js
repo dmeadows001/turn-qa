@@ -141,13 +141,27 @@ export default async function handler(req, res) {
     const table = role === 'manager' ? 'managers' : 'cleaners';
     const sid = await resolveSubjectId({ table, sid: subject_id, phone, name, role });
 
-    // Create OTP row (10 min expiry)
+    // Create/refresh OTP row (10 min expiry) - idempotent per phone
     const code = randCode();
     const expires = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+
     const { error: iErr } = await supabase
       .from('phone_otps')
-      .insert({ role, subject_id: sid, phone, code, expires_at: expires });
-    if (iErr) throw iErr;
+      .upsert(
+        {
+          role,
+          subject_id: sid,
+          phone,
+          code,
+          expires_at: expires,
+          used_at: null,        // reset in case prior attempt left it set
+          created_at: new Date().toISOString(), // optional; keep if your schema has it
+        },
+        { onConflict: 'phone' } // <- key part: uses your unique index on (phone)
+      );
+
+  if (iErr) throw iErr;
+
 
     // Send via Twilio
     const sidEnv = (process.env.TWILIO_ACCOUNT_SID || '').trim();
