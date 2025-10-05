@@ -8,8 +8,7 @@ function e164(s = '') {
   const digits = String(s || '').replace(/[^\d+]/g, '');
   if (!digits) return '';
   if (digits.startsWith('+')) return digits;
-  // naive US default if 10 digits; adjust if you need intl behavior
-  if (/^\d{10}$/.test(digits)) return `+1${digits}`;
+  if (/^\d{10}$/.test(digits)) return `+1${digits}`; // simple US default
   return `+${digits}`;
 }
 
@@ -18,7 +17,6 @@ function randCode() {
 }
 
 async function isOptedOut(phone) {
-  // Check both managers & cleaners for an opt-out flag on this phone
   let opted = false;
 
   const { data: m } = await supabase
@@ -38,6 +36,77 @@ async function isOptedOut(phone) {
   if (c?.sms_opt_out_at) opted = true;
 
   return opted;
+}
+
+/**
+ * Resolve a subject id in a “duplicate-safe” way.
+ * - table: 'cleaners' | 'managers'
+ * - If sid given → try to update phone; on unique/duplicate violation, reuse
+ *   the existing row that already has that phone.
+ * - If no sid → first try SELECT by phone; if missing, INSERT; if INSERT hits
+ *   unique/duplicate (race), SELECT again and use that id.
+ */
+async function resolveSubjectId({ table, sid, phone, name, role }) {
+  // A) Existing subject id provided
+  if (sid) {
+    const { error: upErr } = await supabase
+      .from(table)
+      .update({ phone })
+      .eq('id', sid);
+
+    if (upErr) {
+      const msg = (upErr.message || '').toLowerCase();
+      const isUnique = /unique|duplicate|constraint/i.test(msg);
+
+      if (isUnique) {
+        // Another row already owns this phone — reuse that row's id.
+        const { data: existing } = await supabase
+          .from(table)
+          .select('id')
+          .eq('phone', phone)
+          .maybeSingle();
+        if (existing?.id) return existing.id;
+      }
+      // Some other error
+      throw upErr;
+    }
+    return sid;
+  }
+
+  // B) No subject id: try to find by phone first
+  {
+    const { data: existing } = await supabase
+      .from(table)
+      .select('id')
+      .eq('phone', phone)
+      .maybeSingle();
+    if (existing?.id) return existing.id;
+  }
+
+  // C) Insert new subject (recover if unique race)
+  {
+    const { data, error } = await supabase
+      .from(table)
+      .insert({ name: name || role, phone })
+      .select('id')
+      .single();
+
+    if (error) {
+      const msg = (error.message || '').toLowerCase();
+      const isUnique = /unique|duplicate|constraint/i.test(msg);
+      if (isUnique) {
+        // Someone inserted it concurrently — select and use that id.
+        const { data: again } = await supabase
+          .from(table)
+          .select('id')
+          .eq('phone', phone)
+          .maybeSingle();
+        if (again?.id) return again.id;
+      }
+      throw error;
+    }
+    return data.id;
+  }
 }
 
 export default async function handler(req, res) {
@@ -68,31 +137,9 @@ export default async function handler(req, res) {
       });
     }
 
-    // Ensure subject record exists and phone is saved (admin client bypasses RLS)
+    // Resolve subject id safely (dedupe on unique phone)
     const table = role === 'manager' ? 'managers' : 'cleaners';
-    let sid = subject_id;
-
-    if (!sid) {
-      const { data, error } = await supabase
-        .from(table)
-        .insert({
-          name: name || role,
-          phone,
-          // 🔒 Satisfy NOT NULL without assuming consent (actual opt-in happens later)
-          sms_consent: false
-        })
-        .select('id')
-        .single();
-      if (error) throw error;
-      sid = data.id;
-    } else {
-      // Do NOT touch sms_consent here—verification flow can set it true later
-      const { error: upErr } = await supabase
-        .from(table)
-        .update({ phone })
-        .eq('id', sid);
-      if (upErr) throw upErr;
-    }
+    const sid = await resolveSubjectId({ table, sid: subject_id, phone, name, role });
 
     // Create OTP row (10 min expiry)
     const code = randCode();
