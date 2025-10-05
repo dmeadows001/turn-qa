@@ -96,13 +96,13 @@ export default async function handler(req, res) {
     if (!cleaner) {
       const { data: created, error: iErr } = await supa
         .from('cleaners')
-        .insert({ phone, name: name || null, sms_consent: null })
+        .insert({ phone, name: name || null, sms_consent: false })
         .select('id, phone, name, sms_consent')
         .single();
       if (iErr) throw iErr;
       cleaner = created;
     } else if (name && !cleaner.name) {
-      // Backfill a name if we were just given one
+      // tiny enhancement: backfill a name if we were just given one
       await supa.from('cleaners').update({ name }).eq('id', cleaner.id).limit(1);
     }
 
