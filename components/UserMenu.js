@@ -31,14 +31,13 @@ export default function UserMenu() {
     try {
       await supabase.auth.signOut();
     } finally {
-      // Always bounce to home after sign-out
       window.location.href = '/';
     }
   }
 
   if (loading) return null;
 
-  // Not signed in: show a subtle Sign in link (or return null if you prefer)
+  // Not signed in: show Sign in (or return null to hide)
   if (!session) {
     return (
       <a href="/auth/signin" style={{ ...ui.btnSecondary, padding: '6px 10px' }}>
@@ -47,14 +46,10 @@ export default function UserMenu() {
     );
   }
 
-  const email = session?.user?.email || 'Account';
-
+  // Signed in: show only a Sign out button (no email/PII)
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-      <span style={{ fontSize: 12, opacity: 0.7 }}>{email}</span>
-      <button onClick={signOut} style={{ ...ui.btnSecondary, padding: '6px 10px' }}>
-        Sign out
-      </button>
-    </div>
+    <button onClick={signOut} style={{ ...ui.btnSecondary, padding: '6px 10px' }}>
+      Sign out
+    </button>
   );
 }
