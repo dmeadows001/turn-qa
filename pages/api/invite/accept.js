@@ -12,7 +12,7 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method Not Allowed' });
   }
 
-  // Use the service-role singleton (RLS bypass for this controlled flow)
+  // service-role client (RLS bypass for this controlled flow)
   const supa = supabaseAdmin();
 
   try {
@@ -30,7 +30,7 @@ export default async function handler(req, res) {
 
     const normPhone = normalizePhone(phone || inv.phone || '');
 
-    // 2) Resolve cleaner_id (find by phone or create)
+    // 2) Resolve cleaner_id (find by phone or create with safe defaults)
     let cleanerId = inv.cleaner_id || null;
 
     if (!cleanerId && normPhone) {
@@ -46,7 +46,11 @@ export default async function handler(req, res) {
     if (!cleanerId && normPhone) {
       const { data: created, error: cErr } = await supa
         .from('cleaners')
-        .insert({ phone: normPhone })
+        .insert({
+          phone: normPhone,
+          // 🔒 satisfy NOT NULL and be explicit about default
+          sms_consent: false
+        })
         .select('id')
         .maybeSingle();
       if (cErr) throw cErr;
