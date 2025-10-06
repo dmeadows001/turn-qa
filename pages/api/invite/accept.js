@@ -7,6 +7,29 @@ function normalizePhone(s = '') {
   return digits ? (digits.startsWith('+') ? digits : `+${digits}`) : '';
 }
 
+// ---- SMS helpers (non-blocking use) ----
+function canSendSMS(rec) {
+  if (!rec) return { ok: false, reason: 'no_recipient' };
+  if (!rec.phone) return { ok: false, reason: 'no_phone' };
+  if (rec.sms_consent !== true) return { ok: false, reason: 'no_consent' };
+  if (rec.sms_opt_out_at) return { ok: false, reason: 'opted_out' };
+  return { ok: true };
+}
+
+async function twilioSend({ to, body }) {
+  const sid  = (process.env.TWILIO_ACCOUNT_SID || '').trim();
+  const tok  = (process.env.TWILIO_AUTH_TOKEN || '').trim();
+  const msid = (process.env.TWILIO_MESSAGING_SERVICE_SID || '').trim();
+  const from = (process.env.TWILIO_FROM_NUMBER || '').trim();
+  if (!sid || !tok || (!msid && !from)) return { ok: false, reason: 'twilio_not_configured' };
+
+  const { default: twilio } = await import('twilio');
+  const client = twilio(sid, tok);
+  const payload = msid ? { to, body, messagingServiceSid: msid } : { to, body, from };
+  const msg = await client.messages.create(payload);
+  return { ok: true, sid: msg.sid };
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method Not Allowed' });
@@ -48,7 +71,7 @@ export default async function handler(req, res) {
         .from('cleaners')
         .insert({
           phone: normPhone,
-          // 🔒 satisfy NOT NULL and be explicit about default
+          // satisfy NOT NULL explicitly
           sms_consent: false
         })
         .select('id')
@@ -76,6 +99,34 @@ export default async function handler(req, res) {
         { onConflict: 'property_id,cleaner_id' }
       );
     if (upAssignErr) throw upAssignErr;
+
+    // 5) Notify the property's manager (best-effort, non-blocking)
+    (async () => {
+      try {
+        // load property -> manager
+        const { data: prop } = await supa
+          .from('properties')
+          .select('id, name, manager_id')
+          .eq('id', inv.property_id)
+          .maybeSingle();
+
+        if (!prop?.manager_id) return;
+
+        const { data: mgr } = await supa
+          .from('managers')
+          .select('id, name, phone, sms_consent, sms_opt_out_at')
+          .eq('id', prop.manager_id)
+          .maybeSingle();
+
+        const guard = canSendSMS(mgr);
+        if (!guard.ok) return;
+
+        const body = `TurnQA: Cleaner ${normPhone || 'a cleaner'} accepted the invite for "${prop.name || 'a property'}".`;
+        await twilioSend({ to: mgr.phone, body });
+      } catch (notifyErr) {
+        console.warn('[invite/accept] manager notify failed', notifyErr);
+      }
+    })();
 
     return res.status(200).json({
       ok: true,
