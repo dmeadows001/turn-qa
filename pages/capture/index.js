@@ -1,69 +1,59 @@
 // pages/capture/index.js
-import { useEffect, useMemo, useState } from 'react';
-import ResendOtpButton from '@/components/ResendOtpButton';
+import { useEffect, useState } from 'react';
 import ChromeDark from '@/components/ChromeDark';
+import ResendOtpButton from '@/components/ResendOtpButton';
+import { ui } from '@/lib/theme';
 
 export default function Capture() {
-  const [authed, setAuthed]   = useState(null); // null=checking, false=not, true=cleaner
-  const [cleaner, setCleaner] = useState(null);
-
-  // verify form state
-  const [phone, setPhone]     = useState('');
-  const [code, setCode]       = useState('');
-  const [phase, setPhase]     = useState('request'); // 'request' | 'code'
-  const [msg, setMsg]         = useState(null);
+  const [phase, setPhase] = useState('loading'); // loading | request | code | choose
+  const [msg, setMsg] = useState(null);
   const [loading, setLoading] = useState(false);
 
-  // authed (capture) state
-  const [propsLoading, setPropsLoading] = useState(false);
-  const [properties, setProperties]     = useState([]);
-  const [propertyId, setPropertyId]     = useState('');
-  const [startMsg, setStartMsg]         = useState(null);
-  const [starting, setStarting]         = useState(false);
+  // phone/code input (verify flow)
+  const [phone, setPhone] = useState('');
+  const [code, setCode] = useState('');
 
-  // 1) On mount, see if we already have a cleaner session cookie
+  // session + property selection
+  const [me, setMe] = useState(null); // { id, phone, ... }
+  const [properties, setProperties] = useState([]);
+  const [propertyId, setPropertyId] = useState('');
+
+  // ---- helpers ----
+  async function fetchMe() {
+    try {
+      const r = await fetch('/api/me/cleaner');
+      if (!r.ok) return null;
+      const j = await r.json();
+      return j?.cleaner || null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function fetchMyProperties(cleanerId) {
+    const r = await fetch(`/api/list-my-properties?cleaner_id=${encodeURIComponent(cleanerId)}`);
+    const j = await r.json().catch(() => ({}));
+    return Array.isArray(j.rows) ? j.rows : [];
+  }
+
+  // On load: if cookie/session exists, go straight to choose phase
   useEffect(() => {
     (async () => {
-      try {
-        const r = await fetch('/api/me/cleaner');
-        const j = await r.json();
-        if (r.ok && j?.ok) {
-          setCleaner(j.cleaner);
-          setAuthed(true);
-        } else {
-          setAuthed(false);
-        }
-      } catch {
-        setAuthed(false);
+      const who = await fetchMe();
+      if (who?.id) {
+        setMe(who);
+        const props = await fetchMyProperties(who.id);
+        setProperties(props);
+        if (props[0]?.id) setPropertyId(props[0].id);
+        setPhase('choose');
+        setPhone(who.phone || '');
+      } else {
+        setPhase('request');
       }
     })();
   }, []);
 
-  // 2) If authed, load the properties this cleaner can work on
-  useEffect(() => {
-    if (!authed || !cleaner?.id) return;
-    (async () => {
-      setPropsLoading(true);
-      setStartMsg(null);
-      try {
-        // you already have this endpoint:
-        // GET /api/list-my-properties?cleaner_id=<uuid> -> { rows: [{id,name}, ...] }
-        const r = await fetch(`/api/list-my-properties?cleaner_id=${encodeURIComponent(cleaner.id)}`);
-        const j = await r.json();
-        if (!r.ok) throw new Error(j.error || 'Could not load properties');
-        const rows = Array.isArray(j.rows) ? j.rows : [];
-        setProperties(rows);
-        if (rows.length === 1) {
-          setPropertyId(rows[0].id);
-        }
-      } catch (e) {
-        setStartMsg(e.message || 'Could not load properties');
-      } finally {
-        setPropsLoading(false);
-      }
-    })();
-  }, [authed, cleaner?.id]);
-
+  // ---- actions: OTP send/verify ----
   async function sendCode() {
     setMsg(null);
     setLoading(true);
@@ -96,16 +86,17 @@ export default function Capture() {
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || 'Verify failed');
 
-      // verify.js sets the cookie – refresh session state:
-      const m = await fetch('/api/me/cleaner');
-      const mj = await m.json();
-      if (m.ok && mj?.ok) {
-        setCleaner(mj.cleaner);
-        setAuthed(true);
-        setMsg('Verified! You’re ready to capture.');
-      } else {
-        window.location.href = '/capture'; // fallback refresh
-      }
+      // We now have a session cookie → fetch cleaner + properties
+      const who = await fetchMe();
+      if (!who?.id) throw new Error('Session not established');
+      setMe(who);
+
+      const props = await fetchMyProperties(who.id);
+      setProperties(props);
+      if (props[0]?.id) setPropertyId(props[0].id);
+
+      setPhase('choose');
+      setMsg('You’re verified.');
     } catch (e) {
       setMsg(e.message || 'Verify failed');
     } finally {
@@ -113,122 +104,111 @@ export default function Capture() {
     }
   }
 
+  // ---- start turn ----
   async function startTurn() {
-  setStartMsg(null);
-  if (!propertyId) {
-    setStartMsg('Please choose a property.');
-    return;
-  }
-  setStarting(true);
-  try {
-    const r = await fetch('/api/cleaner/start-turn', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        cleaner_id: cleaner.id,
-        property_id: propertyId,
-      }),
-    });
-
-    // Try JSON first, fall back to text so we don’t crash on HTML/empty bodies
-    let payload;
+    setMsg(null);
+    setLoading(true);
     try {
-      payload = await r.json();
-    } catch {
-      const txt = await r.text();
-      throw new Error(txt || `HTTP ${r.status}`);
-    }
+      if (!me?.id) throw new Error('Cleaner not found in session');
+      if (!propertyId) throw new Error('Choose a property first');
 
-    if (!r.ok || !payload?.ok || !payload?.turn_id) {
-      throw new Error(payload?.error || 'Could not start turn');
-    }
+      const r = await fetch('/api/cleaner/start-turn', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cleaner_id: me.id, property_id: propertyId }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || 'Could not start turn');
 
-    // Go to your existing capture route
-    window.location.href = `/turns/${payload.turn_id}/capture`;
-  } catch (e) {
-    setStartMsg(e.message || 'Start failed');
-  } finally {
-    setStarting(false);
+      // Navigate to camera/capture UI for this new turn
+      window.location.href = `/turns/${j.turn_id}/capture`;
+    } catch (e) {
+      setMsg(e.message || 'Start failed');
+    } finally {
+      setLoading(false);
+    }
   }
-}
 
-  // ---- styles ----
-  const wrap  = { maxWidth: 520, margin: '40px auto', display: 'grid', gap: 12 };
-  const input = { width:'100%', padding:10, borderRadius:8, border:'1px solid #334155' };
-  const btn   = { padding:'10px 14px', borderRadius:10, border:'1px solid #0ea5e9', background:'#e0f2fe', cursor:'pointer' };
+  // ---- UI blocks ----
+  const verifyCard = (
+    <div style={ui.card}>
+      <div style={ui.sectionTitle}>Verify your phone</div>
+      <div style={ui.sectionGrid}>
+        <input
+          style={ui.input}
+          placeholder="+1 555 123 4567"
+          value={phone}
+          onChange={(e) => setPhone(e.target.value)}
+        />
 
-  // Authed capture UI: choose property → start turn
-  const authedContent = (
-    <div style={{ maxWidth: 720, margin: '40px auto', display: 'grid', gap: 16 }}>
-      <h1>Ready to capture</h1>
-      <div>Signed in as {cleaner?.phone || cleaner?.name || 'cleaner'}.</div>
-
-      <div style={{ padding: 16, border: '1px solid #334155', borderRadius: 10, display:'grid', gap:12 }}>
-        <label style={{ fontWeight: 600 }}>Choose a property</label>
-        <select
-          disabled={propsLoading}
-          value={propertyId}
-          onChange={(e) => setPropertyId(e.target.value)}
-          style={{ ...input, padding: 8 }}
-        >
-          <option value="">-- Select --</option>
-          {properties.map(p => (
-            <option key={p.id} value={p.id}>{p.name || p.id}</option>
-          ))}
-        </select>
-
-        <div>
-          <button onClick={startTurn} disabled={starting || !propertyId} style={btn}>
-            {starting ? 'Starting…' : 'Start turn'}
+        {phase === 'request' ? (
+          <button style={ui.button} onClick={sendCode} disabled={loading}>
+            {loading ? 'Sending…' : 'Text me a code'}
           </button>
-        </div>
+        ) : (
+          <>
+            <input
+              style={ui.input}
+              placeholder="6-digit code"
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+              maxLength={6}
+              inputMode="numeric"
+              pattern="\d*"
+            />
+            <div style={ui.row}>
+              <button style={ui.button} onClick={verifyCode} disabled={loading}>
+                {loading ? 'Verifying…' : 'Verify'}
+              </button>
+              <ResendOtpButton phone={phone} role="cleaner" />
+            </div>
+          </>
+        )}
 
-        {startMsg && <div>{startMsg}</div>}
+        {msg && <div style={msg.startsWith('You’re') ? ui.ok : ui.hint}>{msg}</div>}
       </div>
     </div>
   );
 
-  // Verify form (when not authenticated)
-  const verifyContent = (
-    <div style={wrap}>
-      <h1>{phase === 'request' ? 'Verify your phone' : 'Enter the 6-digit code'}</h1>
+  const chooseCard = (
+    <div style={ui.card}>
+      <div style={ui.sectionTitle}>Choose a property</div>
+      <div style={ui.sectionGrid}>
+        <select
+          value={propertyId}
+          onChange={(e) => setPropertyId(e.target.value)}
+          style={ui.select}
+        >
+          {properties.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name || p.id}
+            </option>
+          ))}
+        </select>
 
-      <input
-        placeholder="+1 555 123 4567"
-        value={phone}
-        onChange={(e) => setPhone(e.target.value)}
-        style={input}
-      />
-
-      {phase === 'request' ? (
-        <button onClick={sendCode} disabled={loading} style={btn}>
-          {loading ? 'Sending…' : 'Text me a code'}
+        <button style={ui.button} onClick={startTurn} disabled={loading || !propertyId}>
+          {loading ? 'Starting…' : 'Start turn'}
         </button>
-      ) : (
-        <>
-          <input
-            placeholder="6-digit code"
-            value={code}
-            onChange={(e) => setCode(e.target.value)}
-            maxLength={6}
-            style={input}
-            inputMode="numeric"
-            pattern="\d*"
-          />
-          <button onClick={verifyCode} disabled={loading} style={btn}>
-            {loading ? 'Verifying…' : 'Verify'}
-          </button>
-          <ResendOtpButton phone={phone} role="cleaner" />
-        </>
-      )}
 
-      {msg && <div style={{ marginTop: 6 }}>{msg}</div>}
+        {msg && <div style={ui.hint}>{msg}</div>}
+      </div>
     </div>
   );
 
-  const body =
-    authed === null ? <div style={{ padding: 24 }}>Checking…</div> :
-    authed ? authedContent : verifyContent;
+  const content = (
+    <div style={ui.wrap(720)}>
+      <header style={{ ...ui.header, textAlign: 'left' }}>
+        <h1 style={ui.title}>Capture</h1>
+        {me?.phone && (
+          <div style={ui.subtle}>Signed in as <strong>{me.phone}</strong>.</div>
+        )}
+      </header>
 
-  return <ChromeDark title={authed ? 'Capture' : 'Verify to start'}>{body}</ChromeDark>;
+      {phase === 'loading' && <div style={ui.hint}>Loading…</div>}
+      {(phase === 'request' || phase === 'code') && verifyCard}
+      {phase === 'choose' && chooseCard}
+    </div>
+  );
+
+  return <ChromeDark title="Capture">{content}</ChromeDark>;
 }
