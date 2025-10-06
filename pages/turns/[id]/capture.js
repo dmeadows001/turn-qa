@@ -14,63 +14,32 @@ const DEFAULT_SHOTS = [
   { shot_id: 'fallback-bedroom',        area_key: 'bedroom_overall',     label: 'Bedroom - Overall',         min_count: 1 }
 ];
 
-/** Touch-friendly button with built-in loading + debounce */
-function BigButton({ children, onPress, loading=false, kind='primary', full=false, ariaLabel }) {
-  const busyRef = useRef(false);
-  const lastFireRef = useRef(0);
-
-  const handlePointerUp = async (e) => {
-    e.preventDefault();
-    if (loading || busyRef.current) return;
-    const now = Date.now();
-    if (now - lastFireRef.current < 250) return;
-    lastFireRef.current = now;
-
-    try {
-      busyRef.current = true;
-      await onPress?.();
-    } finally {
-      setTimeout(() => { busyRef.current = false; }, 200);
-    }
+// Re-usable button variants that honor theme.js
+function ThemedButton({ children, onClick, disabled=false, loading=false, kind='primary', full=false, ariaLabel }) {
+  const base = {
+    ...ui.button,
+    width: full ? '100%' : ui.button.width,
+    cursor: loading || disabled ? 'default' : 'pointer',
+    opacity: loading ? 0.85 : 1,
+    transform: loading ? 'scale(0.99)' : 'none',
   };
-
-  const styles = {
-    base: {
-      userSelect: 'none',
-      WebkitTapHighlightColor: 'transparent',
-      outline: 'none',
-      cursor: loading ? 'default' : 'pointer',
-      fontWeight: 600,
-      fontSize: 16,
-      lineHeight: '22px',
-      padding: '14px 18px',
-      minHeight: 48,
-      borderRadius: 12,
-      border: '1px solid transparent',
-      display: 'inline-flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      gap: 8,
-      width: full ? '100%' : 'auto',
-      transition: 'transform 80ms ease, opacity 120ms ease',
-      transform: loading ? 'scale(0.99)' : 'none',
-      opacity: loading ? 0.85 : 1,
-      boxSizing: 'border-box'
-    },
-    primary: { background: '#0ea5e9', color: '#fff' },
-    // Themed secondary (TurnQA Midnight)
-    secondary: { background: '#111827', color: '#e5e7eb', border: '1px solid #334155' }
+  const secondary = {
+    padding: '10px 14px',
+    borderRadius: 10,
+    border: ui.btnSecondary.border,
+    background: ui.btnSecondary.background,
+    color: ui.btnSecondary.color,
+    fontWeight: ui.btnSecondary.fontWeight,
   };
-
-  const style = { ...styles.base, ...(kind === 'primary' ? styles.primary : styles.secondary) };
+  const style = kind === 'primary' ? base : { ...base, ...secondary };
 
   return (
     <button
       type="button"
-      onPointerUp={handlePointerUp}
+      onClick={onClick}
       aria-label={ariaLabel}
       aria-busy={loading ? 'true' : 'false'}
-      disabled={loading}
+      disabled={disabled || loading}
       style={style}
     >
       {loading ? 'Working…' : children}
@@ -83,17 +52,17 @@ export default function Capture() {
   const turnId = query.id;
 
   // -------- State --------
-  const [shots, setShots] = useState(null);                     // [{shot_id, area_key, label, min_count, notes, rules_text}]
-  const [uploadsByShot, setUploadsByShot] = useState({});       // { [shotId]: [{name,url,width,height,shotId,preview}] }
-  const [aiFlags, setAiFlags] = useState([]);                   // combined findings
-  const [aiByPath, setAiByPath] = useState({});                 // { [storagePath]: issues[] }
+  const [shots, setShots] = useState(null);
+  const [uploadsByShot, setUploadsByShot] = useState({}); // { [shotId]: [{name,url,width,height,shotId,preview}] }
+  const [aiFlags, setAiFlags] = useState([]);             // summary lines
+  const [aiByPath, setAiByPath] = useState({});           // { [storagePath]: issues[] }
   const [submitting, setSubmitting] = useState(false);
   const [prechecking, setPrechecking] = useState(false);
   const [templateRules, setTemplateRules] = useState({ property: '', template: '' });
-  const [scannedPaths, setScannedPaths] = useState(new Set());  // Cache of paths we’ve already scanned in this session
+  const [scannedPaths, setScannedPaths] = useState(new Set());
   const [scanProgress, setScanProgress] = useState({ done: 0, total: 0 });
 
-  // --- Lightbox state ---
+  // Lightbox
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [lightboxUrl, setLightboxUrl] = useState(null);
   const [lightboxPath, setLightboxPath] = useState(null);
@@ -104,15 +73,16 @@ export default function Capture() {
   const inputRefs = useRef({});
 
   // -------- Helpers / UI bits --------
-  const sevStyle = (s='info') => ({
-    display:'inline-block',
-    padding:'2px 6px',
-    borderRadius:8,
-    fontSize:12,
-    marginRight:6,
-    background: s==='fail' ? '#FEE2E2' : s==='warn' ? '#FFF4E5' : '#EEF2FF',
-    color: s==='fail' ? '#991B1B' : s==='warn' ? '#9A5B00' : '#334155'
-  });
+  const sevPill = (sev='info') => {
+    const bg = sev === 'fail' ? '#3f1a1a' : sev === 'warn' ? '#3a2b10' : '#111b2f';
+    const fg = sev === 'fail' ? '#fecaca' : sev === 'warn' ? '#fde68a' : '#cbd5e1';
+    return {
+      display:'inline-block', padding:'2px 6px', borderRadius:8, fontSize:12, marginRight:6,
+      background: bg, color: fg, border: '1px solid rgba(148,163,184,.25)'
+    };
+  };
+
+  const smallMeta = { fontSize: 12, color: '#94a3b8' };
 
   async function getDims(file) {
     return await new Promise((resolve, reject) => {
@@ -238,29 +208,29 @@ export default function Capture() {
     }
   }
 
-  // Cleanup preview URLs on unmount to avoid memory leaks
+  // Cleanup preview URLs on unmount
   useEffect(() => {
     return () => {
       Object.values(uploadsByShot).flat().forEach(f => {
         if (f.preview) URL.revokeObjectURL(f.preview);
       });
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  // -------- AI Pre-Check (local + OpenAI vision) — batched & progress --------
+  // -------- AI Pre-Check (batched) --------
   async function runPrecheck() {
     if (prechecking) return;
     setPrechecking(true);
 
-    // Tune to taste
-    const CHUNK_SIZE = 4;   // images per API call
-    const PARALLEL   = 3;   // concurrent API calls
+    const CHUNK_SIZE = 4;
+    const PARALLEL   = 3;
 
     try {
       const localFlags = [];
       const MIN_LONGEST = 1024;
 
-      // Local quality checks
+      // Local checks
       Object.entries(uploadsByShot).forEach(([shotId, files]) => {
         files.forEach(f => {
           const longest = Math.max(f.width || 0, f.height || 0);
@@ -270,7 +240,7 @@ export default function Capture() {
         });
       });
 
-      // Build all items with context
+      // Build items
       const allItems = [];
       (shots || []).forEach(s => {
         (uploadsByShot[s.shot_id] || []).forEach(f => {
@@ -284,10 +254,7 @@ export default function Capture() {
         });
       });
 
-      // Skip ones we already scanned
       const toScan = allItems.filter(it => !scannedPaths.has(it.url));
-
-      // Init progress
       setScanProgress({ done: 0, total: toScan.length });
 
       if (toScan.length === 0) {
@@ -300,10 +267,8 @@ export default function Capture() {
         template: (templateRules?.template || '')
       };
 
-      // chunk helper
       const chunk = (arr, size) =>
         arr.reduce((acc, _, i) => (i % size ? acc : acc.concat([arr.slice(i, i + size)])), []);
-
       const chunks = chunk(toScan, CHUNK_SIZE);
 
       const results = [];
@@ -314,11 +279,7 @@ export default function Capture() {
           const myIdx = nextIndex++;
           const items = chunks[myIdx];
 
-          // Give half progress when dispatching this batch
-          setScanProgress(prev => ({
-            done: Math.min(prev.done + items.length * 0.5, prev.total),
-            total: prev.total
-          }));
+          setScanProgress(prev => ({ done: Math.min(prev.done + items.length * 0.5, prev.total), total: prev.total }));
 
           try {
             const resp = await fetch('/api/vision-scan', {
@@ -327,34 +288,22 @@ export default function Capture() {
               body: JSON.stringify({ items, global_rules })
             });
             const json = await resp.json();
-            if (Array.isArray(json.results)) {
-              results.push(...json.results);
-            }
-          } catch (e) {
-            console.warn('vision batch failed', e);
-            continue;
+            if (Array.isArray(json.results)) results.push(...json.results);
+          } catch {
+            // continue
           }
 
-          // Grant the remaining half when the batch completes
-          setScanProgress(prev => ({
-            done: Math.min(prev.done + items.length * 0.5, prev.total),
-            total: prev.total
-          }));
+          setScanProgress(prev => ({ done: Math.min(prev.done + items.length * 0.5, prev.total), total: prev.total }));
         }
       }
 
-      // run limited concurrency
       const workers = Array.from({ length: Math.min(PARALLEL, chunks.length) }, () => worker());
       await Promise.all(workers);
 
-      // Merge per-photo issues
       const perPhoto = { ...aiByPath };
-      results.forEach(r => {
-        perPhoto[r.path] = Array.isArray(r.issues) ? r.issues : [];
-      });
+      results.forEach(r => { perPhoto[r.path] = Array.isArray(r.issues) ? r.issues : []; });
       setAiByPath(perPhoto);
 
-      // Summary lines
       const aiLines = [];
       results.forEach(r => {
         (r.issues || []).forEach(issue => {
@@ -364,7 +313,6 @@ export default function Capture() {
         });
       });
 
-      // Remember scanned paths
       setScannedPaths(prev => {
         const next = new Set(prev);
         toScan.forEach(it => next.add(it.url));
@@ -426,22 +374,23 @@ export default function Capture() {
     <ChromeDark title="Start Taking Photos">
       <section style={ui.sectionGrid}>
         <div style={ui.card}>
-          {/* Sub-title: Property name (centered) */}
-          <h2 style={{ textAlign:'center', margin:'0 0 4px', color:'#fff', fontWeight:700 }}>
+          {/* Property name */}
+          <h2 style={{ textAlign:'center', margin:'0 0 4px', color: ui.title?.color || '#fff', fontWeight:700 }}>
             {templateRules?.property || ''}
           </h2>
 
-          {/* Cleaner tips (white for readability) */}
-          <div style={{ marginTop: 12, color: '#fff', fontSize: 14 }}>
+          {/* Tips */}
+          <div style={{ ...ui.subtle, color:'#e5e7eb', marginTop: 12 }}>
             ✅ Tap + inside the box to take a picture
           </div>
-          <div style={{ marginTop: 6, color: '#fff', fontSize: 14 }}>
+          <div style={{ ...ui.subtle, color:'#e5e7eb', marginTop: 6 }}>
             ✅ Run AI Pre-Check before submitting
           </div>
 
-          {/* Show Turn ID only if ?showId=1 is in the URL */}
-          {typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('showId') === '1' && (
-            <div style={{ color:'#94a3b8', fontSize: 12, marginTop: 6 }}>
+          {/* Optional Turn ID */}
+          {typeof window !== 'undefined' &&
+            new URLSearchParams(window.location.search).get('showId') === '1' && (
+            <div style={{ ...smallMeta, marginTop: 6 }}>
               Turn ID: <code style={{ userSelect:'all' }}>{turnId}</code>
             </div>
           )}
@@ -452,7 +401,16 @@ export default function Capture() {
             const missing = Math.max(0, required - files.length);
 
             return (
-              <div key={s.shot_id} style={{ border:'1px solid #334155', borderRadius:12, padding:12, margin:'12px 0', background:'#0f172a' }}>
+              <div
+                key={s.shot_id}
+                style={{
+                  border: ui.card.border,
+                  borderRadius: 12,
+                  padding: 12,
+                  margin: '12px 0',
+                  background: ui.card.background
+                }}
+              >
                 {/* Hidden input per shot */}
                 <input
                   ref={el => { inputRefs.current[s.shot_id] = el; }}
@@ -467,22 +425,29 @@ export default function Capture() {
                 <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:12 }}>
                   <div>
                     <b>{s.label}</b>
-                    {s.notes ? <div style={{ fontSize:12, color:'#94a3b8' }}>{s.notes}</div> : null}
-                    <div style={{ fontSize:12, marginTop:4, color: missing>0 ? '#f59e0b' : '#22c55e' }}>
+                    {s.notes ? <div style={{ ...smallMeta }}>{s.notes}</div> : null}
+                    <div
+                      style={{
+                        fontSize: 12,
+                        marginTop: 4,
+                        color: missing > 0 ? '#f59e0b' : '#22c55e'
+                      }}
+                    >
                       Required: {required} • Uploaded: {files.length} {missing>0 ? `• Missing: ${missing}` : '• ✅'}
                     </div>
                   </div>
-                  <BigButton kind="secondary" onPress={() => openPicker(s.shot_id)} ariaLabel={`Add photo for ${s.label}`}>
+
+                  <ThemedButton kind="secondary" onClick={() => openPicker(s.shot_id)} ariaLabel={`Add photo for ${s.label}`}>
                     ➕ Add photo
-                  </BigButton>
+                  </ThemedButton>
                 </div>
 
                 {/* File cards + placeholders */}
                 <div style={{ marginTop:10, display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(260px,1fr))', gap:16 }}>
                   {/* Existing uploads */}
                   {files.map(f => (
-                    <div key={f.url} style={{ border:'1px solid #334155', borderRadius:10, padding:10, background:'#0b1220' }}>
-                      {/* Thumbnail preview (local, immediate) */}
+                    <div key={f.url} style={{ border: ui.card.border, borderRadius:10, padding:10, background: '#0b1220' }}>
+                      {/* Thumbnail preview */}
                       {f.preview && (
                         <div style={{ marginBottom:8 }}>
                           <img
@@ -495,13 +460,13 @@ export default function Capture() {
                       )}
 
                       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:6 }}>
-                        <div style={{ fontSize:13, maxWidth:'70%', color:'#e5e7eb' }}>
+                        <div style={{ fontSize:13, maxWidth:'70%' }}>
                           <b title={f.name}>{f.name}</b><br/>
                           {f.width}×{f.height}
                         </div>
-                        <BigButton kind="secondary" onPress={() => viewPhoto(f.url)} ariaLabel={`View ${f.name}`}>
+                        <ThemedButton kind="secondary" onClick={() => viewPhoto(f.url)} ariaLabel={`View ${f.name}`}>
                           👁️ View
-                        </BigButton>
+                        </ThemedButton>
                       </div>
 
                       {/* AI flags under each photo */}
@@ -509,8 +474,8 @@ export default function Capture() {
                         <div>
                           {aiByPath[f.url].map((iss, idx) => (
                             <div key={idx} style={{ marginBottom:4 }}>
-                              <span style={sevStyle(iss.severity)}>{(iss.severity || 'info').toUpperCase()}</span>
-                              <span style={{ fontSize:13, color:'#e5e7eb' }}>
+                              <span style={sevPill(iss.severity)}>{(iss.severity || 'info').toUpperCase()}</span>
+                              <span style={{ fontSize:13 }}>
                                 {iss.label}
                                 {typeof iss.confidence === 'number' ? ` (${Math.round(iss.confidence * 100)}%)` : ''}
                               </span>
@@ -525,7 +490,7 @@ export default function Capture() {
                   {Array.from({ length: missing }).map((_, i) => (
                     <button
                       key={`ph-${s.shot_id}-${i}`}
-                      onPointerUp={() => openPicker(s.shot_id)}
+                      onClick={() => openPicker(s.shot_id)}
                       aria-label={`Add required photo for ${s.label}`}
                       style={{
                         border:'2px dashed #334155',
@@ -554,10 +519,10 @@ export default function Capture() {
           })}
 
           {/* AI findings summary */}
-          <div style={{ border:'1px dashed #334155', borderRadius:12, padding:12, marginTop:16, background:'#0f172a' }}>
+          <div style={{ border:'1px dashed #334155', borderRadius:12, padding:12, marginTop:16, background: ui.card.background }}>
             <div style={{ fontWeight:600, marginBottom:8 }}>AI Findings</div>
             {aiFlags.length === 0 ? (
-              <div style={{ color:'#94a3b8' }}>No findings yet — tap “Run AI Pre-Check”.</div>
+              <div style={ui.subtle}>No findings yet — tap “Run AI Pre-Check”.</div>
             ) : (
               <ul style={{ marginLeft:18 }}>
                 {aiFlags.map((f, i) => <li key={i}>{f}</li>)}
@@ -567,8 +532,8 @@ export default function Capture() {
 
           {/* Buttons + progress */}
           <div style={{ display:'flex', flexDirection:'column', gap:12, marginTop:16, maxWidth:420 }}>
-            <BigButton
-              onPress={runPrecheck}
+            <ThemedButton
+              onClick={runPrecheck}
               loading={prechecking}
               kind="primary"
               ariaLabel="Run AI Pre-Check"
@@ -576,17 +541,19 @@ export default function Capture() {
               {prechecking && scanProgress.total > 0
                 ? `🔎 Scanning ${scanProgress.done}/${scanProgress.total} (${pct}%)`
                 : '🔎 Run AI Pre-Check'}
-            </BigButton>
+            </ThemedButton>
 
             {prechecking && scanProgress.total > 0 && (
               <div>
                 <div style={{ height:8, background:'#1f2937', borderRadius:6, overflow:'hidden' }}>
-                  <div style={{
-                    height:'100%',
-                    width: `${pct}%`,
-                    background:'#0ea5e9',
-                    transition:'width 200ms ease'
-                  }} />
+                  <div
+                    style={{
+                      height:'100%',
+                      width: `${pct}%`,
+                      background: '#0ea5e9',
+                      transition:'width 200ms ease'
+                    }}
+                  />
                 </div>
                 <div style={{ fontSize:12, color:'#94a3b8', marginTop:6 }}>
                   Scanning {scanProgress.done} of {scanProgress.total}…
@@ -594,15 +561,15 @@ export default function Capture() {
               </div>
             )}
 
-            <BigButton
-              onPress={submitAll}
+            <ThemedButton
+              onClick={submitAll}
               loading={submitting}
               kind="secondary"
               ariaLabel="Submit Turn"
               full
             >
               ✅ Submit Turn
-            </BigButton>
+            </ThemedButton>
           </div>
         </div>
       </section>
@@ -619,14 +586,14 @@ export default function Capture() {
           <div style={{ position:'relative', width:'min(95vw,1100px)', maxHeight:'90vh', background:'#111', borderRadius:12, overflow:'hidden' }}>
             {/* Toolbar */}
             <div style={{ display:'flex', gap:8, padding:'8px 10px', alignItems:'center', background:'#0f172a', color:'#fff' }}>
-              <button onClick={closeLightbox} style={{ padding:'10px 12px', fontSize:14, borderRadius:10 }}>✖ Close (Esc)</button>
+              <ThemedButton kind="secondary" onClick={closeLightbox}>✖ Close (Esc)</ThemedButton>
               <div style={{ flex:1 }} />
-              <button onClick={zoomOut} style={{ padding:'10px 12px', fontSize:14, borderRadius:10 }}>➖ Zoom</button>
-              <button onClick={zoomIn} style={{ padding:'10px 12px', fontSize:14, borderRadius:10 }}>➕ Zoom</button>
-              <button onClick={rotateLeft} style={{ padding:'10px 12px', fontSize:14, borderRadius:10 }}>⟲ Rotate</button>
-              <button onClick={rotateRight} style={{ padding:'10px 12px', fontSize:14, borderRadius:10 }}>⟳ Rotate</button>
-              <button onClick={refreshSignedUrl} style={{ padding:'10px 12px', fontSize:14, borderRadius:10 }}>⟳ Refresh URL</button>
-              <button onClick={downloadCurrent} style={{ padding:'10px 12px', fontSize:14, borderRadius:10 }}>⬇ Download</button>
+              <ThemedButton kind="secondary" onClick={zoomOut}>➖ Zoom</ThemedButton>
+              <ThemedButton kind="secondary" onClick={zoomIn}>➕ Zoom</ThemedButton>
+              <ThemedButton kind="secondary" onClick={rotateLeft}>⟲ Rotate</ThemedButton>
+              <ThemedButton kind="secondary" onClick={rotateRight}>⟳ Rotate</ThemedButton>
+              <ThemedButton kind="secondary" onClick={refreshSignedUrl}>⟳ Refresh URL</ThemedButton>
+              <ThemedButton kind="secondary" onClick={downloadCurrent}>⬇ Download</ThemedButton>
             </div>
 
             {/* Image */}
