@@ -131,22 +131,23 @@ export default function Capture() {
   // ------------------------------------------------------------------
   // UI
   // ------------------------------------------------------------------
+  const sectionStyle = { ...ui.sectionGrid, maxWidth: 720, margin: '0 auto' };
   const card = (children) => (
-    <div style={{ ...ui.card, maxWidth: 680, margin: '0 auto' }}>{children}</div>
+    <div style={{ ...ui.card, width: '100%' }}>{children}</div>
   );
 
   if (phase === 'checking') {
     return (
-      <ChromeDark title="Capture">
-        <section style={ui.sectionGrid}>{card('Loading…')}</section>
+      <ChromeDark title="Capture" max={760}>
+        <section style={sectionStyle}>{card('Loading…')}</section>
       </ChromeDark>
     );
   }
 
   if (phase === 'verify') {
     return (
-      <ChromeDark title="Capture">
-        <section style={ui.sectionGrid}>
+      <ChromeDark title="Capture" max={760}>
+        <section style={sectionStyle}>
           {card(
             <>
               <h2 style={{ marginTop: 0 }}>Verify your phone</h2>
@@ -192,8 +193,8 @@ export default function Capture() {
 
   // phase === 'start'
   return (
-    <ChromeDark title="Capture">
-      <section style={ui.sectionGrid}>
+    <ChromeDark title="Capture" max={760}>
+      <section style={sectionStyle}>
         {card(
           <>
             <h2 style={{ marginTop: 0 }}>Start turn</h2>
