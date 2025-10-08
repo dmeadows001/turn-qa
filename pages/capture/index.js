@@ -8,7 +8,7 @@ function e164(s='') {
   const d = String(s||'').replace(/[^\d+]/g,'');
   if (!d) return '';
   if (d.startsWith('+')) return d;
-  if (/^\d{10}$/.test(d)) return `+1${d}`; // naive US default
+  if (/^\d{10}$/.test(d)) return `+1${d}`;
   return `+${d}`;
 }
 
@@ -27,10 +27,20 @@ export default function Capture() {
   const [properties, setProperties] = useState([]);
   const [propertyId, setPropertyId] = useState('');
 
+  // “My turns” (needs_fix / in_progress)
+  const [attention, setAttention] = useState([]); // turns needing action
+
+  // Next hop if we arrived via /capture?next=/turns/ID/capture
+  const [nextPath, setNextPath] = useState('');
+
   // --------------------------------------------------------------
-  // 1) Check existing cleaner session
+  // 1) Check existing cleaner session (+ collect ?next)
   // --------------------------------------------------------------
   useEffect(() => {
+    const usp = new URLSearchParams(window.location.search);
+    const next = usp.get('next') || '';
+    if (next && next.startsWith('/')) setNextPath(next);
+
     (async () => {
       try {
         const r = await fetch('/api/me/cleaner');
@@ -44,8 +54,21 @@ export default function Capture() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ phone: j.cleaner.phone }),
         }).then(x => x.json());
-        setProperties(p.properties || []);
-        if ((p.properties || []).length) setPropertyId(p.properties[0].id);
+        const props = p.properties || [];
+        setProperties(props);
+        if (props.length) setPropertyId(props[0].id);
+
+        // Load turns needing attention
+        const t = await fetch('/api/cleaner/turns?status=needs_fix,in_progress')
+          .then(x => x.json()).catch(() => ({ rows: [] }));
+        setAttention(t.rows || []);
+
+        // If a ?next= is present and we’re already verified, go there
+        if (next && next.startsWith('/')) {
+          window.location.href = next;
+          return;
+        }
+
         setPhase('start');
       } catch {
         setPhase('verify');
@@ -76,7 +99,7 @@ export default function Capture() {
   }
 
   // --------------------------------------------------------------
-  // 3) Verify OTP → cookie set server side → reload
+  // 3) Verify OTP → cookie set server side → redirect
   // --------------------------------------------------------------
   async function verifyCode() {
     setMsg(null);
@@ -89,7 +112,13 @@ export default function Capture() {
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || 'Verify failed');
-      window.location.href = '/capture'; // pick up session on reload
+
+      // If we had ?next= queued, honor it now
+      if (nextPath) {
+        window.location.href = nextPath;
+      } else {
+        window.location.href = '/capture';
+      }
     } catch (e) {
       setMsg(e.message || 'Verify failed');
     } finally {
@@ -108,7 +137,7 @@ export default function Capture() {
       const r = await fetch('/api/cleaner/start-turn', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ property_id: propertyId }), // cleaner is read from session server-side
+        body: JSON.stringify({ property_id: propertyId }),
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || 'start failed');
@@ -125,14 +154,7 @@ export default function Capture() {
   // UI helpers (phone-friendly layout)
   // --------------------------------------------------------------
   const card = (children) => (
-    <div
-      style={{
-        ...ui.card,
-        maxWidth: 420,
-        width: '100%',
-        margin: '0 auto'
-      }}
-    >
+    <div style={{ ...ui.card, maxWidth: 420, width: '100%', margin: '0 auto' }}>
       {children}
     </div>
   );
@@ -142,15 +164,10 @@ export default function Capture() {
       <select
         value={value}
         onChange={onChange}
-        style={{
-          ...ui.input,
-          appearance: 'none',
-          paddingRight: 36,
-        }}
+        style={{ ...ui.input, appearance: 'none', paddingRight: 36 }}
       >
         {children}
       </select>
-      {/* chevron */}
       <div
         aria-hidden
         style={{
@@ -158,8 +175,7 @@ export default function Capture() {
           right: 12,
           top: '50%',
           transform: 'translateY(-50%)',
-          width: 0,
-          height: 0,
+          width: 0, height: 0,
           borderLeft: '6px solid transparent',
           borderRight: '6px solid transparent',
           borderTop: '8px solid #94a3b8',
@@ -232,6 +248,32 @@ export default function Capture() {
   return (
     <ChromeDark title="Capture" max={520}>
       <section style={ui.sectionGrid}>
+        {/* Needs your attention */}
+        {attention.length > 0 && card(
+          <>
+            <h2 style={{ marginTop: 0 }}>Needs your attention</h2>
+            <div style={{ display: 'grid', gap: 10 }}>
+              {attention.map(t => (
+                <div key={t.id} style={{ ...ui.row, justifyContent:'space-between' }}>
+                  <div>
+                    <div><b>{t.property_name}</b></div>
+                    <div style={ui.subtle}>
+                      {t.status === 'needs_fix' ? 'Needs fix' : 'In progress'}
+                    </div>
+                  </div>
+                  <a
+                    href={`/turns/${t.id}/capture`}
+                    style={ui.btnSecondary}
+                  >
+                    Resume
+                  </a>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+
+        {/* Start turn (unchanged) */}
         {card(
           <>
             <h2 style={{ marginTop: 0 }}>Start turn</h2>
