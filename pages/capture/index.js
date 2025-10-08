@@ -29,22 +29,43 @@ export default function Capture() {
 
   // needs-fix
   const [fixTurns, setFixTurns] = useState([]);
+
+  // Read ?tab=... once on mount; normalize "needs-fix" -> "fix"
   const urlTab = useMemo(() => {
     if (typeof window === 'undefined') return '';
-    return new URLSearchParams(window.location.search).get('tab') || '';
+    const raw = new URLSearchParams(window.location.search).get('tab') || '';
+    return raw === 'needs-fix' ? 'fix' : raw;
   }, []);
-  const [activeTab, setActiveTab] = useState(urlTab || 'fix'); // default to fix if any exist
+  const [activeTab, setActiveTab] = useState(urlTab || 'fix');
 
   // ------------------------------------------------------------------
   // 1) Check cookie; if logged in as cleaner, preload properties + needs_fix
+  //    If 401: stash the deep link and show OTP.
   // ------------------------------------------------------------------
   useEffect(() => {
     (async () => {
       try {
         const r = await fetch('/api/me/cleaner');
-        if (r.status === 401) { setPhase('verify'); return; }
+        if (r.status === 401) {
+          // remember where we were trying to go (e.g. ?tab=needs-fix&turn=...)
+          if (typeof window !== 'undefined') {
+            sessionStorage.setItem(
+              'after-verify',
+              window.location.pathname + window.location.search
+            );
+          }
+          setPhase('verify');
+          return;
+        }
+
         const j = await r.json();
-        if (!j?.cleaner?.phone) { setPhase('verify'); return; }
+        if (!j?.cleaner?.phone) {
+          setPhase('verify');
+          return;
+        }
+
+        // Session is good — clear any stale return target.
+        sessionStorage.removeItem('after-verify');
 
         // Load properties
         const p = await fetch('/api/cleaner/properties', {
@@ -74,7 +95,7 @@ export default function Capture() {
   }, [urlTab]);
 
   // ------------------------------------------------------------------
-  // 2) Verify: send + verify code
+  // 2) Verify: send + verify code (after verify, return to deep link if any)
   // ------------------------------------------------------------------
   async function sendCode() {
     setMsg(null); setLoading(true);
@@ -100,7 +121,16 @@ export default function Capture() {
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || 'Verify failed');
-      window.location.href = '/capture?tab=start';
+
+      // If we were coming from a deep link, go back there;
+      // otherwise land on the normal start-tab.
+      const after = sessionStorage.getItem('after-verify');
+      if (after) {
+        sessionStorage.removeItem('after-verify');
+        window.location.href = after;
+      } else {
+        window.location.href = '/capture?tab=start';
+      }
     } catch (e) {
       setMsg(e.message || 'Verify failed');
     } finally { setLoading(false); }
