@@ -4,15 +4,16 @@ import ChromeDark from '@/components/ChromeDark';
 import ResendOtpButton from '@/components/ResendOtpButton';
 import { ui } from '@/lib/theme';
 
-function e164(s='') {
-  const d = String(s||'').replace(/[^\d+]/g,'');
+function e164(s = '') {
+  const d = String(s || '').replace(/[^\d+]/g, '');
   if (!d) return '';
   if (d.startsWith('+')) return d;
-  if (/^\d{10}$/.test(d)) return `+1${d}`;
+  if (/^\d{10}$/.test(d)) return `+1${d}`; // naive US default
   return `+${d}`;
 }
 
 export default function Capture() {
+  // phase: 'checking' | 'verify' | 'start'
   const [phase, setPhase] = useState('checking');
   const [msg, setMsg] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -26,22 +27,34 @@ export default function Capture() {
   const [properties, setProperties] = useState([]);
   const [propertyId, setPropertyId] = useState('');
 
+  // --------------------------------------------------------------------------------
+  // 1) Check if we already have a cleaner session
+  // --------------------------------------------------------------------------------
   useEffect(() => {
     (async () => {
       try {
         const r = await fetch('/api/me/cleaner');
-        if (r.status === 401) { setPhase('verify'); return; }
+        if (r.status === 401) {
+          setPhase('verify');
+          return;
+        }
         const j = await r.json();
-        if (!j?.cleaner?.phone) { setPhase('verify'); return; }
+        const phoneFromSession = j?.cleaner?.phone;
+        if (!phoneFromSession) {
+          setPhase('verify');
+          return;
+        }
 
+        // Load properties for this phone
         const p = await fetch('/api/cleaner/properties', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ phone: j.cleaner.phone }),
-        }).then(x => x.json());
+          body: JSON.stringify({ phone: phoneFromSession }),
+        }).then((x) => x.json());
 
-        setProperties(p.properties || []);
-        if ((p.properties || []).length) setPropertyId(p.properties[0].id);
+        const props = p.properties || [];
+        setProperties(props);
+        if (props.length) setPropertyId(props[0].id);
         setPhase('start');
       } catch {
         setPhase('verify');
@@ -49,8 +62,12 @@ export default function Capture() {
     })();
   }, []);
 
+  // --------------------------------------------------------------------------------
+  // 2) Verify: send code
+  // --------------------------------------------------------------------------------
   async function sendCode() {
-    setMsg(null); setLoading(true);
+    setMsg(null);
+    setLoading(true);
     try {
       const r = await fetch('/api/otp/send', {
         method: 'POST',
@@ -62,55 +79,70 @@ export default function Capture() {
       setMsg('Code sent! Check your texts.');
     } catch (e) {
       setMsg(e.message || 'Send failed');
-    } finally { setLoading(false); }
+    } finally {
+      setLoading(false);
+    }
   }
 
+  // --------------------------------------------------------------------------------
+  // 3) Verify: submit code (sets cookie server-side), then reload into "start" phase
+  // --------------------------------------------------------------------------------
+  async function verifyCode() {
+    setMsg(null);
+    setLoading(true);
+    try {
+      const r = await fetch('/api/otp/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role: 'cleaner', phone: e164(phone), code }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || 'Verify failed');
+
+      // Cookie set by server → reload so /api/me/cleaner succeeds
+      window.location.href = '/capture';
+    } catch (e) {
+      setMsg(e.message || 'Verify failed');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // --------------------------------------------------------------------------------
+  // 4) Start turn for selected property
+  // --------------------------------------------------------------------------------
   async function startTurn() {
-  if (!propertyId) return;
-  setPropsLoading(true);
-  setMsg(null);
-  try {
-    const r = await fetch('/api/cleaner/start-turn', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      // ⬇️ don't send cleaner_id anymore; server reads it from the session cookie
-      body: JSON.stringify({ property_id: propertyId }),
-    });
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.error || 'start failed');
-    if (!j.turn_id) throw new Error('No turn id returned');
-    window.location.href = `/turns/${j.turn_id}/capture`;
-  } catch (e) {
-    setMsg(e.message || 'Start failed');
-  } finally {
-    setPropsLoading(false);
+    if (!propertyId) return;
+    setPropsLoading(true);
+    setMsg(null);
+    try {
+      const r = await fetch('/api/cleaner/start-turn', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ property_id: propertyId }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || 'start failed');
+      if (!j.turn_id) throw new Error('No turn id returned');
+      window.location.href = `/turns/${j.turn_id}/capture`;
+    } catch (e) {
+      setMsg(e.message || 'Start failed');
+    } finally {
+      setPropsLoading(false);
+    }
   }
-}
 
-  // Shared “card” wrapper with responsive width + nice spacing
+  // --------------------------------------------------------------------------------
+  // UI
+  // --------------------------------------------------------------------------------
   const card = (children) => (
-    <div
-      style={{
-        ...ui.card,
-        width: 'min(520px, 92vw)',   // <- responsive phone-ish width
-        margin: '24px auto 0',       // a bit of breathing room under the header
-      }}
-    >
-      {children}
-    </div>
+    <div style={{ ...ui.card, maxWidth: 420, margin: '0 auto' }}>{children}</div>
   );
-
-  // Center the card within the section
-  const sectionStyle = {
-    ...ui.sectionGrid,
-    justifyContent: 'center',
-    alignItems: 'flex-start',
-  };
 
   if (phase === 'checking') {
     return (
       <ChromeDark title="Capture">
-        <section style={sectionStyle}>{card('Loading…')}</section>
+        <section style={ui.sectionGrid}>{card('Loading…')}</section>
       </ChromeDark>
     );
   }
@@ -118,7 +150,7 @@ export default function Capture() {
   if (phase === 'verify') {
     return (
       <ChromeDark title="Capture">
-        <section style={sectionStyle}>
+        <section style={ui.sectionGrid}>
           {card(
             <>
               <h2 style={{ marginTop: 0 }}>Verify your phone</h2>
@@ -130,7 +162,6 @@ export default function Capture() {
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
               />
-
               <div style={{ display: 'flex', gap: 10, marginTop: 10 }}>
                 <button style={ui.btnPrimary} onClick={sendCode} disabled={loading}>
                   {loading ? 'Sending…' : 'Text me a code'}
@@ -150,7 +181,6 @@ export default function Capture() {
                 inputMode="numeric"
                 pattern="\d*"
               />
-
               <div style={{ display: 'flex', gap: 10, marginTop: 10 }}>
                 <button style={ui.btnSecondary} onClick={verifyCode} disabled={loading}>
                   {loading ? 'Verifying…' : 'Verify'}
@@ -168,7 +198,7 @@ export default function Capture() {
   // phase === 'start'
   return (
     <ChromeDark title="Capture">
-      <section style={sectionStyle}>
+      <section style={ui.sectionGrid}>
         {card(
           <>
             <h2 style={{ marginTop: 0 }}>Start turn</h2>
@@ -178,19 +208,16 @@ export default function Capture() {
               <select
                 value={propertyId}
                 onChange={(e) => setPropertyId(e.target.value)}
-                style={{
-                  ...ui.input,
-                  appearance: 'none',
-                  paddingRight: 40,
-                  lineHeight: '1.3',
-                }}
+                style={{ ...ui.input, appearance: 'none', paddingRight: 34 }}
               >
-                {properties.map(p => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
+                {properties.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
                 ))}
               </select>
+              {/* chevron */}
               <div
-                aria-hidden="true"
                 style={{
                   position: 'absolute',
                   right: 12,
@@ -206,12 +233,8 @@ export default function Capture() {
               />
             </div>
 
-            <div style={{ marginTop: 14 }}>
-              <button
-                style={ui.btnPrimary}
-                onClick={startTurn}
-                disabled={propsLoading || !propertyId}
-              >
+            <div style={{ marginTop: 12 }}>
+              <button style={ui.btnPrimary} onClick={startTurn} disabled={propsLoading || !propertyId}>
                 {propsLoading ? 'Starting…' : 'Start turn'}
               </button>
             </div>
