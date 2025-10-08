@@ -8,12 +8,13 @@ const supa = typeof _admin === 'function' ? _admin() : _admin;
 export default async function handler(req, res) {
   try {
     const sess = readCleanerSession(req);
-    if (!sess) return res.status(401).json({ error: 'not_authenticated' });
+    const cleaner_id = sess?.cleaner_id || sess?.sub || sess?.id || null; // normalize
+    if (!cleaner_id) return res.status(401).json({ error: 'not_authenticated' });
 
     const { data: cl, error } = await supa
       .from('cleaners')
       .select('id, name, phone')
-      .eq('id', sess.sub)
+      .eq('id', cleaner_id)
       .maybeSingle();
 
     if (error) throw error;
