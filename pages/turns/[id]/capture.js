@@ -160,6 +160,49 @@ export default function Capture() {
     loadTemplate();
   }, [turnId]);
 
+  // --- NEW: when resuming a turn, load existing photos and show them ---
+useEffect(() => {
+  async function loadExisting() {
+    if (!turnId) return;
+
+    try {
+      const r = await fetch(`/api/turns/${turnId}/photos`);
+      const j = await r.json();
+      const items = Array.isArray(j.items) ? j.items : [];
+      if (items.length === 0) return;
+
+      // Group by shotId (fallback to area_key or a generic bucket)
+      const byShot = {};
+      items.forEach(p => {
+        const shotId = p.shot_id || p.area_key || 'existing';
+        byShot[shotId] = byShot[shotId] || [];
+        byShot[shotId].push({
+          name: p.filename || 'photo.jpg',
+          shotId,                     // keep our UI contract
+          url: p.path,                // storage path; viewer will sign it
+          width: p.width || undefined,
+          height: p.height || undefined,
+          preview: null,              // no local preview (already uploaded)
+        });
+      });
+
+      // Merge into current state (avoid dupes by path)
+      setUploadsByShot(prev => {
+        const next = { ...prev };
+        Object.entries(byShot).forEach(([key, arr]) => {
+          const existing = new Set((next[key] || []).map(f => f.url));
+          const merged = (next[key] || []).concat(arr.filter(f => !existing.has(f.url)));
+          next[key] = merged;
+        });
+        return next;
+      });
+    } catch {
+      // ignore — showing empty is okay
+    }
+  }
+  loadExisting();
+}, [turnId]); // runs when the resume page mounts
+
   // -------- Add files (quality + upload to Storage) --------
   async function addFiles(shotId, fileList) {
     const files = Array.from(fileList || []);
