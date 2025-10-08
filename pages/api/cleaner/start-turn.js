@@ -1,80 +1,58 @@
 // pages/api/cleaner/start-turn.js
-import { supabaseAdmin as _admin } from '@/lib/supabaseAdmin';
+import { createClient } from '@supabase/supabase-js';
+import { parseCleanerSession } from '@/lib/session'; // must exist alongside makeCleanerSession
 
-// Support both “function that returns a client” and “client” exports
-const supa = typeof _admin === 'function' ? _admin() : _admin;
-
-function normalizePhone(s = '') {
-  const digits = (s || '').replace(/[^\d+]/g, '');
-  return digits ? (digits.startsWith('+') ? digits : `+${digits}`) : '';
-}
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+);
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
-    res.setHeader('Allow', ['POST']);
-    return res.status(405).json({ ok: false, error: 'Method Not Allowed' });
+    return res.status(405).json({ error: 'Method Not Allowed' });
   }
 
   try {
-    const { phone, cleaner_id, property_id, notes } = req.body || {};
-
-    // Prefer cleaner_id. (phone is optional convenience)
-    let cid = (cleaner_id || '').toString().trim();
-
-    if (!cid && phone) {
-      const norm = normalizePhone(phone);
-      const { data: cl, error: cErr } = await supa
-        .from('cleaners')
-        .select('id')
-        .eq('phone', norm)
-        .maybeSingle();
-      if (cErr) throw cErr;
-      cid = cl?.id || '';
+    // 1) Get the cleaner from the secure cookie (set by /api/otp/verify)
+    const sess = parseCleanerSession(req); // { cleaner_id, phone } or null
+    if (!sess?.cleaner_id) {
+      return res.status(401).json({ error: 'not_authenticated' });
     }
 
-    if (!cid) return res.status(400).json({ ok: false, error: 'cleaner_id (or phone) is required' });
-    if (!property_id) return res.status(400).json({ ok: false, error: 'property_id is required' });
-
-    // Verify property exists
-    {
-      const { data: prop, error: pErr } = await supa
-        .from('properties')
-        .select('id')
-        .eq('id', property_id)
-        .maybeSingle();
-      if (pErr) throw pErr;
-      if (!prop) return res.status(404).json({ ok: false, error: 'property not found' });
+    const { property_id, notes } = req.body || {};
+    if (!property_id) {
+      return res.status(400).json({ error: 'property_id is required' });
     }
 
-    // Ensure assignment exists (idempotent)
-    const { error: upAssignErr } = await supa
+    // 2) Authorization: ensure this cleaner is assigned to the property
+    const { data: allowed, error: aErr } = await supabase
       .from('property_cleaners')
-      .upsert(
-        { property_id, cleaner_id: cid },
-        { onConflict: 'property_id,cleaner_id' }
-      );
-    if (upAssignErr) throw upAssignErr;
+      .select('property_id')
+      .eq('property_id', property_id)
+      .eq('cleaner_id', sess.cleaner_id)
+      .maybeSingle();
 
-    // Create turn
-    const { data: turn, error: tErr } = await supa
+    if (aErr) throw aErr;
+    if (!allowed) {
+      return res.status(403).json({ error: 'Cleaner not assigned to this property' });
+    }
+
+    // 3) Create the in-progress turn
+    const { data: turn, error: tErr } = await supabase
       .from('turns')
       .insert({
         property_id,
-        cleaner_id: cid,
-        status: 'in_progress',
-        ...(notes ? { notes } : {}),
+        cleaner_id: sess.cleaner_id,
+        notes: notes || null,
+        status: 'in_progress'
       })
       .select('id')
-      .maybeSingle();
+      .single();
 
     if (tErr) throw tErr;
-    if (!turn?.id) throw new Error('could not create turn');
 
-    return res.status(200).json({ ok: true, turn_id: turn.id });
+    return res.json({ ok: true, turn_id: turn.id });
   } catch (e) {
-    console.error('[cleaner/start-turn] error:', e);
-    return res
-      .status(500)
-      .json({ ok: false, error: e?.message || 'start failed' });
+    return res.status(500).json({ error: e.message || 'server error' });
   }
 }
