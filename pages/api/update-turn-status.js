@@ -1,109 +1,108 @@
 // pages/api/update-turn-status.js
-import { supabaseAdmin } from '../../lib/supabase';
+import { supabaseAdmin as _admin } from '@/lib/supabaseAdmin';
 
-function getTwilioClient() {
-  const sid   = process.env.TWILIO_ACCOUNT_SID;
-  const token = process.env.TWILIO_AUTH_TOKEN;
-  if (!sid || !token) return null;
-  try {
-    // lazy-require so missing module never breaks the API if SMS isn't configured
-    // eslint-disable-next-line global-require, import/no-extraneous-dependencies
-    const Twilio = require('twilio');
-    return new Twilio(sid, token);
-  } catch {
-    return null;
-  }
+const supa = typeof _admin === 'function' ? _admin() : _admin;
+
+function nowIso() { return new Date().toISOString(); }
+const SITE_ORIGIN = process.env.NEXT_PUBLIC_SITE_URL || 'https://www.turnqa.com';
+
+function twilioClient() {
+  const sid = (process.env.TWILIO_ACCOUNT_SID || '').trim();
+  const tok = (process.env.TWILIO_AUTH_TOKEN || '').trim();
+  if (!sid || !tok) return null;
+  const { default: twilio } = require('twilio');
+  return twilio(sid, tok);
 }
 
-function normalizePhone(s = '') {
-  const digits = (s || '').replace(/[^\d+]/g, '');
-  return digits.startsWith('+') ? digits : `+${digits}`;
+async function notifyCleanersNeedsFix(turn) {
+  // turn: { id, property_id }
+  const client = twilioClient();
+  if (!client) return; // no-op if Twilio not configured
+
+  const msid = (process.env.TWILIO_MESSAGING_SERVICE_SID || '').trim();
+  const from = (process.env.TWILIO_FROM_NUMBER || '').trim();
+
+  // Find all cleaners assigned to this property (adjust if you target a specific cleaner)
+  const { data: rows, error } = await supa
+    .from('property_cleaners')
+    .select('cleaners ( phone, sms_opt_out_at, name )')
+    .eq('property_id', turn.property_id);
+
+  if (error || !rows?.length) return;
+
+  const link = `${SITE_ORIGIN}/turns/${turn.id}/capture`;
+  const body = `A manager requested fixes on your recent turn. Open: ${link} (Reply STOP to opt out)`;
+
+  const targets = rows
+    .map(r => r?.cleaners)
+    .filter(c => c?.phone && !c?.sms_opt_out_at);
+
+  await Promise.all(
+    targets.map(c =>
+      client.messages.create({
+        to: c.phone,
+        ...(msid ? { messagingServiceSid: msid } : { from }),
+        body
+      }).catch(() => null)
+    )
+  );
 }
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
-    res.setHeader('Allow', 'POST');
-    return res.status(405).json({ error: 'Method Not Allowed' });
+    res.setHeader('Allow', ['POST']);
+    return res.status(405).json({ error: 'Method not allowed' });
   }
 
   try {
-    const { turn_id, new_status, manager_note } = (req.body || {});
-    if (!turn_id) return res.status(400).json({ error: 'turn_id is required' });
+    const { turn_id, new_status, manager_note } = req.body || {};
+    if (!turn_id || !new_status) {
+      return res.status(400).json({ error: 'turn_id and new_status are required' });
+    }
 
+    // Only allow specific transitions
     const allowed = new Set(['needs_fix', 'approved']);
     if (!allowed.has(new_status)) {
       return res.status(400).json({ error: 'new_status must be needs_fix or approved' });
     }
 
-    const patch = {
-      status: new_status,
-      manager_notes: (manager_note ?? '').trim() || null,
-    };
-    if (new_status === 'approved') {
-      patch.approved_at = new Date().toISOString();
-    } else if (new_status === 'needs_fix') {
-      patch.approved_at = null; // clear approval timestamp if sending back for fixes
-    }
+    // Load the turn (we need property_id for notifications)
+    const { data: turn, error: tErr } = await supa
+      .from('turns')
+      .select('id, property_id, status')
+      .eq('id', turn_id)
+      .maybeSingle();
+    if (tErr) throw tErr;
+    if (!turn) return res.status(404).json({ error: 'Turn not found' });
 
-    // 1) Persist first — never let SMS failures block DB state
-    const { data: updated, error } = await supabaseAdmin
+    // Update turn status + timestamps
+    const patch = { status: new_status };
+    if (new_status === 'needs_fix') patch.needs_fix_at = nowIso();
+    if (new_status === 'approved') patch.approved_at = nowIso();
+
+    const { error: upErr } = await supa
       .from('turns')
       .update(patch)
-      .eq('id', turn_id)
-      .select('id, status, manager_notes, cleaner_id')
-      .single();
+      .eq('id', turn_id);
+    if (upErr) throw upErr;
 
-    if (error) throw error;
-    if (!updated) return res.status(404).json({ error: 'Turn not found' });
-
-    // 2) Try to notify cleaner via SMS (best effort)
-    let sms = 'skipped';
-    try {
-      const client = getTwilioClient();
-      if (client && updated.cleaner_id) {
-        const { data: cleaner, error: cErr } = await supabaseAdmin
-          .from('cleaners')
-          .select('phone, sms_consent, name')
-          .eq('id', updated.cleaner_id)
-          .single();
-
-        if (!cErr && cleaner?.sms_consent && cleaner?.phone) {
-          const to = normalizePhone(cleaner.phone);
-
-          const footer = ' Reply STOP to opt out, HELP for help.';
-          let body = '';
-          if (new_status === 'approved') {
-            body = `TurnQA: Your turn was approved ✅.${footer}`;
-          } else {
-            const note = (patch.manager_notes ? ` Note: ${patch.manager_notes}` : '');
-            body = `TurnQA: Manager requested fixes 🛠️.${note}${footer}`;
-          }
-
-          const useSvc = !!process.env.TWILIO_MESSAGING_SERVICE_SID;
-          await client.messages.create({
-            to,
-            ...(useSvc
-              ? { messagingServiceSid: process.env.TWILIO_MESSAGING_SERVICE_SID }
-              : { from: process.env.TWILIO_FROM_NUMBER }),
-            body,
-          });
-          sms = 'sent';
-        }
-      }
-    } catch (e) {
-      // Don’t fail the request if SMS has issues
-      console.error('update-turn-status: SMS send failed:', e?.message || e);
-      sms = 'failed';
+    // Optional: record manager note
+    if (manager_note) {
+      await supa.from('turn_notes').insert({
+        turn_id,
+        who: 'manager',
+        note: String(manager_note).slice(0, 2000),
+        created_at: nowIso()
+      }).catch(() => null);
     }
 
-    return res.status(200).json({
-      ok: true,
-      status: updated.status,
-      manager_notes: updated.manager_notes,
-      sms,
-    });
+    // 🔔 If needs_fix → notify assigned cleaners with a deep link
+    if (new_status === 'needs_fix') {
+      notifyCleanersNeedsFix({ id: turn_id, property_id: turn.property_id }).catch(() => {});
+    }
+
+    return res.status(200).json({ ok: true });
   } catch (e) {
-    console.error('update-turn-status error:', e);
-    return res.status(500).json({ error: e.message || 'unexpected error' });
+    return res.status(500).json({ error: e.message || 'update-turn-status failed' });
   }
 }
