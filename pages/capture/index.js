@@ -8,12 +8,11 @@ function e164(s='') {
   const d = String(s||'').replace(/[^\d+]/g,'');
   if (!d) return '';
   if (d.startsWith('+')) return d;
-  if (/^\d{10}$/.test(d)) return `+1${d}`; // naive US default
+  if (/^\d{10}$/.test(d)) return `+1${d}`;
   return `+${d}`;
 }
 
 export default function Capture() {
-  // phase: checking → verify (OTP) OR start (property picker)
   const [phase, setPhase] = useState('checking');
   const [msg, setMsg] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -27,28 +26,20 @@ export default function Capture() {
   const [properties, setProperties] = useState([]);
   const [propertyId, setPropertyId] = useState('');
 
-  // ------------------------------------------------------------------
-  // 1) Check if the cleaner session cookie exists
-  // ------------------------------------------------------------------
   useEffect(() => {
     (async () => {
       try {
         const r = await fetch('/api/me/cleaner');
-        if (r.status === 401) {
-          setPhase('verify');
-          return;
-        }
+        if (r.status === 401) { setPhase('verify'); return; }
         const j = await r.json();
-        if (!j?.cleaner?.phone) {
-          setPhase('verify');
-          return;
-        }
-        // we have a session → load properties for this phone
+        if (!j?.cleaner?.phone) { setPhase('verify'); return; }
+
         const p = await fetch('/api/cleaner/properties', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ phone: j.cleaner.phone }),
         }).then(x => x.json());
+
         setProperties(p.properties || []);
         if ((p.properties || []).length) setPropertyId(p.properties[0].id);
         setPhase('start');
@@ -58,12 +49,8 @@ export default function Capture() {
     })();
   }, []);
 
-  // ------------------------------------------------------------------
-  // 2) Verify: send code
-  // ------------------------------------------------------------------
   async function sendCode() {
-    setMsg(null);
-    setLoading(true);
+    setMsg(null); setLoading(true);
     try {
       const r = await fetch('/api/otp/send', {
         method: 'POST',
@@ -75,17 +62,11 @@ export default function Capture() {
       setMsg('Code sent! Check your texts.');
     } catch (e) {
       setMsg(e.message || 'Send failed');
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   }
 
-  // ------------------------------------------------------------------
-  // 3) Verify: submit code (sets cookie server-side), then reload
-  // ------------------------------------------------------------------
   async function verifyCode() {
-    setMsg(null);
-    setLoading(true);
+    setMsg(null); setLoading(true);
     try {
       const r = await fetch('/api/otp/verify', {
         method: 'POST',
@@ -94,28 +75,20 @@ export default function Capture() {
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || 'Verify failed');
-
-      // server set the cleaner cookie → reload so phase becomes "start"
       window.location.href = '/capture';
     } catch (e) {
       setMsg(e.message || 'Verify failed');
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   }
 
-  // ------------------------------------------------------------------
-  // 4) Start turn for selected property
-  // ------------------------------------------------------------------
   async function startTurn() {
     if (!propertyId) return;
-    setPropsLoading(true);
-    setMsg(null);
+    setPropsLoading(true); setMsg(null);
     try {
       const r = await fetch('/api/cleaner/start-turn', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ property_id: propertyId, cleaner_id: 'me' /* not used server side */ }),
+        body: JSON.stringify({ property_id: propertyId, cleaner_id: 'me' }),
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || 'start failed');
@@ -123,22 +96,33 @@ export default function Capture() {
       window.location.href = `/turns/${j.turn_id}/capture`;
     } catch (e) {
       setMsg(e.message || 'Start failed');
-    } finally {
-      setPropsLoading(false);
-    }
+    } finally { setPropsLoading(false); }
   }
 
-  // ------------------------------------------------------------------
-  // UI
-  // ------------------------------------------------------------------
+  // Shared “card” wrapper with responsive width + nice spacing
   const card = (children) => (
-    <div style={{ ...ui.card, maxWidth: 680, margin: '0 auto' }}>{children}</div>
+    <div
+      style={{
+        ...ui.card,
+        width: 'min(520px, 92vw)',   // <- responsive phone-ish width
+        margin: '24px auto 0',       // a bit of breathing room under the header
+      }}
+    >
+      {children}
+    </div>
   );
+
+  // Center the card within the section
+  const sectionStyle = {
+    ...ui.sectionGrid,
+    justifyContent: 'center',
+    alignItems: 'flex-start',
+  };
 
   if (phase === 'checking') {
     return (
       <ChromeDark title="Capture">
-        <section style={ui.sectionGrid}>{card('Loading…')}</section>
+        <section style={sectionStyle}>{card('Loading…')}</section>
       </ChromeDark>
     );
   }
@@ -146,10 +130,11 @@ export default function Capture() {
   if (phase === 'verify') {
     return (
       <ChromeDark title="Capture">
-        <section style={ui.sectionGrid}>
+        <section style={sectionStyle}>
           {card(
             <>
               <h2 style={{ marginTop: 0 }}>Verify your phone</h2>
+
               <label style={ui.label}>Phone</label>
               <input
                 style={ui.input}
@@ -157,6 +142,7 @@ export default function Capture() {
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
               />
+
               <div style={{ display: 'flex', gap: 10, marginTop: 10 }}>
                 <button style={ui.btnPrimary} onClick={sendCode} disabled={loading}>
                   {loading ? 'Sending…' : 'Text me a code'}
@@ -176,6 +162,7 @@ export default function Capture() {
                 inputMode="numeric"
                 pattern="\d*"
               />
+
               <div style={{ display: 'flex', gap: 10, marginTop: 10 }}>
                 <button style={ui.btnSecondary} onClick={verifyCode} disabled={loading}>
                   {loading ? 'Verifying…' : 'Verify'}
@@ -193,14 +180,12 @@ export default function Capture() {
   // phase === 'start'
   return (
     <ChromeDark title="Capture">
-      <section style={ui.sectionGrid}>
+      <section style={sectionStyle}>
         {card(
           <>
             <h2 style={{ marginTop: 0 }}>Start turn</h2>
 
             <label style={ui.label}>Choose a property</label>
-
-            {/* Wrap the select so we can place the chevron absolutely. */}
             <div style={{ position: 'relative' }}>
               <select
                 value={propertyId}
@@ -208,7 +193,7 @@ export default function Capture() {
                 style={{
                   ...ui.input,
                   appearance: 'none',
-                  paddingRight: 40,        // leave space for chevron
+                  paddingRight: 40,
                   lineHeight: '1.3',
                 }}
               >
@@ -216,8 +201,6 @@ export default function Capture() {
                   <option key={p.id} value={p.id}>{p.name}</option>
                 ))}
               </select>
-
-              {/* Chevron — no negative margins; won’t overlap the button */}
               <div
                 aria-hidden="true"
                 style={{
