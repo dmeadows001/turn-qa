@@ -4,8 +4,8 @@ import ChromeDark from '@/components/ChromeDark';
 import ResendOtpButton from '@/components/ResendOtpButton';
 import { ui } from '@/lib/theme';
 
-function e164(s = '') {
-  const d = String(s || '').replace(/[^\d+]/g, '');
+function e164(s='') {
+  const d = String(s||'').replace(/[^\d+]/g,'');
   if (!d) return '';
   if (d.startsWith('+')) return d;
   if (/^\d{10}$/.test(d)) return `+1${d}`; // naive US default
@@ -13,48 +13,39 @@ function e164(s = '') {
 }
 
 export default function Capture() {
-  // phase: 'checking' | 'verify' | 'start'
+  // phase: checking → verify (OTP) OR start (property picker)
   const [phase, setPhase] = useState('checking');
   const [msg, setMsg] = useState(null);
   const [loading, setLoading] = useState(false);
 
   // verify form
   const [phone, setPhone] = useState('');
-  const [code, setCode] = useState('');
+  const [code, setCode]   = useState('');
 
   // start-turn form
   const [propsLoading, setPropsLoading] = useState(false);
   const [properties, setProperties] = useState([]);
   const [propertyId, setPropertyId] = useState('');
 
-  // --------------------------------------------------------------------------------
-  // 1) Check if we already have a cleaner session
-  // --------------------------------------------------------------------------------
+  // --------------------------------------------------------------
+  // 1) Check existing cleaner session
+  // --------------------------------------------------------------
   useEffect(() => {
     (async () => {
       try {
         const r = await fetch('/api/me/cleaner');
-        if (r.status === 401) {
-          setPhase('verify');
-          return;
-        }
+        if (r.status === 401) { setPhase('verify'); return; }
         const j = await r.json();
-        const phoneFromSession = j?.cleaner?.phone;
-        if (!phoneFromSession) {
-          setPhase('verify');
-          return;
-        }
+        if (!j?.cleaner?.phone) { setPhase('verify'); return; }
 
         // Load properties for this phone
         const p = await fetch('/api/cleaner/properties', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ phone: phoneFromSession }),
-        }).then((x) => x.json());
-
-        const props = p.properties || [];
-        setProperties(props);
-        if (props.length) setPropertyId(props[0].id);
+          body: JSON.stringify({ phone: j.cleaner.phone }),
+        }).then(x => x.json());
+        setProperties(p.properties || []);
+        if ((p.properties || []).length) setPropertyId(p.properties[0].id);
         setPhase('start');
       } catch {
         setPhase('verify');
@@ -62,9 +53,9 @@ export default function Capture() {
     })();
   }, []);
 
-  // --------------------------------------------------------------------------------
-  // 2) Verify: send code
-  // --------------------------------------------------------------------------------
+  // --------------------------------------------------------------
+  // 2) Send OTP
+  // --------------------------------------------------------------
   async function sendCode() {
     setMsg(null);
     setLoading(true);
@@ -84,9 +75,9 @@ export default function Capture() {
     }
   }
 
-  // --------------------------------------------------------------------------------
-  // 3) Verify: submit code (sets cookie server-side), then reload into "start" phase
-  // --------------------------------------------------------------------------------
+  // --------------------------------------------------------------
+  // 3) Verify OTP → cookie set server side → reload
+  // --------------------------------------------------------------
   async function verifyCode() {
     setMsg(null);
     setLoading(true);
@@ -98,9 +89,7 @@ export default function Capture() {
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || 'Verify failed');
-
-      // Cookie set by server → reload so /api/me/cleaner succeeds
-      window.location.href = '/capture';
+      window.location.href = '/capture'; // pick up session on reload
     } catch (e) {
       setMsg(e.message || 'Verify failed');
     } finally {
@@ -108,9 +97,9 @@ export default function Capture() {
     }
   }
 
-  // --------------------------------------------------------------------------------
-  // 4) Start turn for selected property
-  // --------------------------------------------------------------------------------
+  // --------------------------------------------------------------
+  // 4) Start turn
+  // --------------------------------------------------------------
   async function startTurn() {
     if (!propertyId) return;
     setPropsLoading(true);
@@ -119,7 +108,7 @@ export default function Capture() {
       const r = await fetch('/api/cleaner/start-turn', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ property_id: propertyId }),
+        body: JSON.stringify({ property_id: propertyId }), // cleaner is read from session server-side
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || 'start failed');
@@ -132,16 +121,60 @@ export default function Capture() {
     }
   }
 
-  // --------------------------------------------------------------------------------
-  // UI
-  // --------------------------------------------------------------------------------
+  // --------------------------------------------------------------
+  // UI helpers (phone-friendly layout)
+  // --------------------------------------------------------------
   const card = (children) => (
-    <div style={{ ...ui.card, maxWidth: 420, margin: '0 auto' }}>{children}</div>
+    <div
+      style={{
+        ...ui.card,
+        maxWidth: 420,
+        width: '100%',
+        margin: '0 auto'
+      }}
+    >
+      {children}
+    </div>
   );
 
+  const SelectWithChevron = ({ value, onChange, children }) => (
+    <div style={{ position: 'relative' }}>
+      <select
+        value={value}
+        onChange={onChange}
+        style={{
+          ...ui.input,
+          appearance: 'none',
+          paddingRight: 36,
+        }}
+      >
+        {children}
+      </select>
+      {/* chevron */}
+      <div
+        aria-hidden
+        style={{
+          position: 'absolute',
+          right: 12,
+          top: '50%',
+          transform: 'translateY(-50%)',
+          width: 0,
+          height: 0,
+          borderLeft: '6px solid transparent',
+          borderRight: '6px solid transparent',
+          borderTop: '8px solid #94a3b8',
+          pointerEvents: 'none',
+        }}
+      />
+    </div>
+  );
+
+  // --------------------------------------------------------------
+  // Render
+  // --------------------------------------------------------------
   if (phase === 'checking') {
     return (
-      <ChromeDark title="Capture">
+      <ChromeDark title="Capture" max={520}>
         <section style={ui.sectionGrid}>{card('Loading…')}</section>
       </ChromeDark>
     );
@@ -149,7 +182,7 @@ export default function Capture() {
 
   if (phase === 'verify') {
     return (
-      <ChromeDark title="Capture">
+      <ChromeDark title="Capture" max={520}>
         <section style={ui.sectionGrid}>
           {card(
             <>
@@ -162,14 +195,14 @@ export default function Capture() {
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
               />
-              <div style={{ display: 'flex', gap: 10, marginTop: 10 }}>
+              <div style={{ display: 'flex', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
                 <button style={ui.btnPrimary} onClick={sendCode} disabled={loading}>
                   {loading ? 'Sending…' : 'Text me a code'}
                 </button>
                 {!!phone && <ResendOtpButton phone={e164(phone)} role="cleaner" />}
               </div>
 
-              <div style={{ height: 10 }} />
+              <div style={{ height: 12 }} />
 
               <label style={ui.label}>Enter 6-digit code</label>
               <input
@@ -197,44 +230,25 @@ export default function Capture() {
 
   // phase === 'start'
   return (
-    <ChromeDark title="Capture">
+    <ChromeDark title="Capture" max={520}>
       <section style={ui.sectionGrid}>
         {card(
           <>
             <h2 style={{ marginTop: 0 }}>Start turn</h2>
 
             <label style={ui.label}>Choose a property</label>
-            <div style={{ position: 'relative' }}>
-              <select
-                value={propertyId}
-                onChange={(e) => setPropertyId(e.target.value)}
-                style={{ ...ui.input, appearance: 'none', paddingRight: 34 }}
-              >
-                {properties.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-              {/* chevron */}
-              <div
-                style={{
-                  position: 'absolute',
-                  right: 12,
-                  top: '50%',
-                  transform: 'translateY(-50%)',
-                  width: 0,
-                  height: 0,
-                  borderLeft: '6px solid transparent',
-                  borderRight: '6px solid transparent',
-                  borderTop: '8px solid #94a3b8',
-                  pointerEvents: 'none',
-                }}
-              />
-            </div>
+            <SelectWithChevron value={propertyId} onChange={(e) => setPropertyId(e.target.value)}>
+              {properties.map((p) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </SelectWithChevron>
 
             <div style={{ marginTop: 12 }}>
-              <button style={ui.btnPrimary} onClick={startTurn} disabled={propsLoading || !propertyId}>
+              <button
+                style={ui.btnPrimary}
+                onClick={startTurn}
+                disabled={propsLoading || !propertyId}
+              >
                 {propsLoading ? 'Starting…' : 'Start turn'}
               </button>
             </div>
