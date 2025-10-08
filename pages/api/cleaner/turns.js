@@ -33,9 +33,9 @@ export default async function handler(req, res) {
   }
 
   try {
-    // ---- identify cleaner from session cookie
+    // ---- identify cleaner from session cookie (normalize all known shapes)
     const sess = tryParseCleaner(req);
-    const cleaner_id = sess?.cleaner_id || sess?.id || null;
+    const cleaner_id = sess?.cleaner_id || sess?.sub || sess?.id || null;
     if (!cleaner_id) {
       return res.status(401).json({ error: 'not_authenticated', rows: [] });
     }
@@ -51,10 +51,8 @@ export default async function handler(req, res) {
     const wanted = statuses.length ? statuses : ['needs_fix', 'in_progress', 'submitted'];
 
     // ---- primary shape: turns has cleaner_id and we can join the property name
-    // We try a couple of column spellings for the property name join.
     let rows = [];
     {
-      // Attempt with a relation (properties table named 'properties' with column 'name')
       const select1 =
         'id, status, property_id, approved_at, needs_fix_at, submitted_at, created_at, properties(name)';
       let q = supa
@@ -77,21 +75,17 @@ export default async function handler(req, res) {
           submitted_at: r.submitted_at || null,
           created_at: r.created_at || null,
         }));
-      } else {
-        // Fall through to the legacy join if the select failed (missing relation/column)
-        if (error) {
-          // eslint-disable-next-line no-console
-          console.warn('[cleaner/turns] primary select failed -> trying fallback', error.message);
-        }
+      } else if (error) {
+        // eslint-disable-next-line no-console
+        console.warn('[cleaner/turns] primary select failed -> trying fallback', error.message);
       }
     }
 
-    // ---- fallback: if no rows and schema is different (e.g., no cleaner_id on turns)
+    // ---- fallback: join via property_cleaners if turns lacks cleaner_id
     if (rows.length === 0) {
-      // Join turns -> property_cleaners by property_id + cleaner_id
       const select2 =
         'turns!inner(id, status, property_id, approved_at, needs_fix_at, submitted_at, created_at), properties(name)';
-      let q2 = supa
+      const { data: d2, error: e2 } = await supa
         .from('property_cleaners')
         .select(select2)
         .eq('cleaner_id', cleaner_id)
@@ -99,13 +93,12 @@ export default async function handler(req, res) {
         .order('turns.created_at', { ascending: false })
         .limit(50);
 
-      const { data: d2, error: e2 } = await q2;
       if (e2) {
         // eslint-disable-next-line no-console
         console.error('[cleaner/turns] fallback select failed', e2.message);
-        // Return a friendly error to the client (avoid 500 in UI)
         return res.status(200).json({ rows: [], error: 'no_results' });
       }
+
       rows = (d2 || []).map(r => {
         const t = r.turns || {};
         return {
@@ -125,7 +118,6 @@ export default async function handler(req, res) {
   } catch (e) {
     // eslint-disable-next-line no-console
     console.error('[cleaner/turns] unexpected', e);
-    // Avoid surfacing as 500 in the UI—return empty with a friendly message
     return res.status(200).json({ rows: [], error: 'unexpected' });
   }
 }
