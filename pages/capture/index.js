@@ -14,6 +14,14 @@ function e164(s = '') {
   return `+${d}`;
 }
 
+// Normalize URL tab -> our internal keys
+function normalizeTabParam(v = '') {
+  const t = String(v || '').toLowerCase();
+  if (t === 'needs-fix' || t === 'needs_fix' || t === 'fix') return 'fix';
+  if (t === 'start') return 'start';
+  return '';
+}
+
 export default function Capture() {
   // phase: checking → verify | start
   const [phase, setPhase] = useState('checking');
@@ -31,11 +39,18 @@ export default function Capture() {
 
   // needs-fix
   const [fixTurns, setFixTurns] = useState([]);
-  const urlTab = useMemo(() => {
-    if (typeof window === 'undefined') return '';
-    return new URLSearchParams(window.location.search).get('tab') || '';
+
+  // Read deep-link params once on mount (no SSR)
+  const { tabParam, turnParam } = useMemo(() => {
+    if (typeof window === 'undefined') return { tabParam: '', turnParam: '' };
+    const qs = new URLSearchParams(window.location.search);
+    return {
+      tabParam: normalizeTabParam(qs.get('tab') || ''),
+      turnParam: (qs.get('turn') || '').trim(),
+    };
   }, []);
-  const [activeTab, setActiveTab] = useState(urlTab || 'fix'); // default to fix if any exist
+
+  const [activeTab, setActiveTab] = useState(tabParam || 'fix'); // default to fix
 
   // ------------------------------------------------------------------
   // 1) Check cookie; if logged in as cleaner, preload properties + needs_fix
@@ -58,29 +73,37 @@ export default function Capture() {
         const p = await fetch('/api/cleaner/properties', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ phone: j.cleaner.phone })
-        }).then(x => x.json());
+          body: JSON.stringify({ phone: j.cleaner.phone }),
+        }).then((x) => x.json());
         const props = p.properties || [];
         setProperties(props);
         if (props.length) setPropertyId(props[0].id);
 
         // Load turns needing attention
         const fx = await fetch('/api/cleaner/turns?status=needs_fix')
-          .then(r => r.json())
+          .then((r) => r.json())
           .catch(() => ({ rows: [] }));
-        setFixTurns(Array.isArray(fx?.rows) ? fx.rows : []);
+        const rows = Array.isArray(fx?.rows) ? fx.rows : [];
+        setFixTurns(rows);
 
-        // Tab choice
-        if (urlTab) setActiveTab(urlTab);
-        else if ((fx?.rows || []).length) setActiveTab('fix');
-        else setActiveTab('start');
+        // Decide initial tab:
+        // - If deep link explicitly says needs-fix, force 'fix'
+        // - Else if deep link says start, use 'start'
+        // - Else if there are items to fix, show 'fix', otherwise 'start'
+        if (tabParam) {
+          setActiveTab(tabParam); // already normalized
+        } else if (rows.length) {
+          setActiveTab('fix');
+        } else {
+          setActiveTab('start');
+        }
 
         setPhase('start');
       } catch {
         setPhase('verify');
       }
     })();
-  }, [urlTab]);
+  }, [tabParam]);
 
   // ------------------------------------------------------------------
   // 2) Verify: send + verify code
@@ -92,7 +115,7 @@ export default function Capture() {
       const r = await fetch('/api/otp/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ role: 'cleaner', phone: e164(phone), consent: true })
+        body: JSON.stringify({ role: 'cleaner', phone: e164(phone), consent: true }),
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || 'Could not send code');
@@ -111,7 +134,7 @@ export default function Capture() {
       const r = await fetch('/api/otp/verify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ role: 'cleaner', phone: e164(phone), code })
+        body: JSON.stringify({ role: 'cleaner', phone: e164(phone), code }),
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || 'Verify failed');
@@ -134,7 +157,7 @@ export default function Capture() {
       const r = await fetch('/api/cleaner/start-turn', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ property_id: propertyId })
+        body: JSON.stringify({ property_id: propertyId }),
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || 'start failed');
@@ -148,21 +171,22 @@ export default function Capture() {
   }
 
   // ------------------------------------------------------------------
-  // UI Helpers
+  // UI Helpers (keep tabs + card perfectly aligned)
   // ------------------------------------------------------------------
-  const Card = ({ children, max = SHELL_MAX }) => (
-    <div style={{ ...ui.card, maxWidth: max, margin: '0 auto' }}>{children}</div>
+  const shell = { maxWidth: SHELL_MAX, margin: '0 auto' };
+  const Card = ({ children }) => (
+    <div style={{ ...ui.card, width: '100%' /* match tabs width */ }}>{children}</div>
   );
 
   const Tabs = () => (
     <div
       style={{
         ...ui.tabs,
-        maxWidth: SHELL_MAX,
-        margin: '0 auto 12px',
+        width: '100%',
         display: 'grid',
         gridTemplateColumns: '1fr 1fr',
-        gap: 8
+        gap: 8,
+        marginBottom: 12,
       }}
     >
       <div style={ui.tab(activeTab === 'fix')} onClick={() => setActiveTab('fix')}>
@@ -180,7 +204,7 @@ export default function Capture() {
   if (phase === 'checking') {
     return (
       <ChromeDark title="Capture">
-        <section style={{ ...ui.sectionGrid, maxWidth: SHELL_MAX, margin: '0 auto' }}>
+        <section style={{ ...ui.sectionGrid, ...shell }}>
           <Card>Loading…</Card>
         </section>
       </ChromeDark>
@@ -190,8 +214,8 @@ export default function Capture() {
   if (phase === 'verify') {
     return (
       <ChromeDark title="Capture">
-        <section style={{ ...ui.sectionGrid, maxWidth: SHELL_MAX, margin: '0 auto' }}>
-          <Card max={SHELL_MAX}>
+        <section style={{ ...ui.sectionGrid, ...shell }}>
+          <Card>
             <h2 style={{ marginTop: 0 }}>Verify your phone</h2>
 
             <label style={ui.label}>Phone</label>
@@ -236,7 +260,8 @@ export default function Capture() {
   // phase === 'start'
   return (
     <ChromeDark title="Capture">
-      <section style={{ ...ui.sectionGrid, maxWidth: SHELL_MAX, margin: '0 auto' }}>
+      <section style={{ ...ui.sectionGrid, ...shell }}>
+        {/* Tabs + Card share the SAME wrapper width */}
         <Tabs />
 
         {/* Needs fix panel */}
@@ -258,7 +283,7 @@ export default function Capture() {
                       display: 'grid',
                       gridTemplateColumns: '1fr auto',
                       alignItems: 'center',
-                      gap: 12
+                      gap: 12,
                     }}
                   >
                     <div>
@@ -269,7 +294,10 @@ export default function Capture() {
                         Turn <code>{t.id.slice(0, 8)}</code> &middot; status: {t.status}
                       </div>
                     </div>
-                    <a href={`/turns/${t.id}/capture`} style={{ ...ui.btnPrimary, display: 'inline-block' }}>
+                    <a
+                      href={`/turns/${t.id}/capture`}
+                      style={{ ...ui.btnPrimary, display: 'inline-block' }}
+                    >
                       Resume
                     </a>
                   </div>
@@ -309,7 +337,7 @@ export default function Capture() {
                   borderLeft: '6px solid transparent',
                   borderRight: '6px solid transparent',
                   borderTop: '8px solid #94a3b8',
-                  pointerEvents: 'none'
+                  pointerEvents: 'none',
                 }}
               />
             </div>
