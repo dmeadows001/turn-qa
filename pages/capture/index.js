@@ -130,7 +130,7 @@ export default function Capture() {
   // ------------------------------------------------------------------
   // UI Helpers
   // ------------------------------------------------------------------
-  const Card = ({ children, max=560 }) => (
+  const Card = ({ children, max=420 }) => (
     <div style={{ ...ui.card, maxWidth: max, margin: '0 auto' }}>{children}</div>
   );
 
@@ -201,7 +201,7 @@ export default function Capture() {
   // phase === 'start'
   return (
     <ChromeDark title="Capture">
-      <section style={{ ...ui.sectionGrid, maxWidth: 520, margin:'0 auto' }}>
+      <section style={{ ...ui.sectionGrid, maxWidth: 420, margin:'0 auto' }}>
         <Tabs />
 
         {/* Needs fix panel */}
