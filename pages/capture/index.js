@@ -131,23 +131,22 @@ export default function Capture() {
   // ------------------------------------------------------------------
   // UI
   // ------------------------------------------------------------------
-  const sectionStyle = { ...ui.sectionGrid, maxWidth: 720, margin: '0 auto' };
   const card = (children) => (
-    <div style={{ ...ui.card, width: '100%' }}>{children}</div>
+    <div style={{ ...ui.card, maxWidth: 680, margin: '0 auto' }}>{children}</div>
   );
 
   if (phase === 'checking') {
     return (
-      <ChromeDark title="Capture" max={760}>
-        <section style={sectionStyle}>{card('Loading…')}</section>
+      <ChromeDark title="Capture">
+        <section style={ui.sectionGrid}>{card('Loading…')}</section>
       </ChromeDark>
     );
   }
 
   if (phase === 'verify') {
     return (
-      <ChromeDark title="Capture" max={760}>
-        <section style={sectionStyle}>
+      <ChromeDark title="Capture">
+        <section style={ui.sectionGrid}>
           {card(
             <>
               <h2 style={{ marginTop: 0 }}>Verify your phone</h2>
@@ -193,33 +192,55 @@ export default function Capture() {
 
   // phase === 'start'
   return (
-    <ChromeDark title="Capture" max={760}>
-      <section style={sectionStyle}>
+    <ChromeDark title="Capture">
+      <section style={ui.sectionGrid}>
         {card(
           <>
             <h2 style={{ marginTop: 0 }}>Start turn</h2>
 
             <label style={ui.label}>Choose a property</label>
-            <select
-              value={propertyId}
-              onChange={(e) => setPropertyId(e.target.value)}
-              style={{ ...ui.input, appearance: 'none', paddingRight: 34, position: 'relative' }}
-            >
-              {properties.map(p => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
-            {/* simple chevron so it’s visible on dark bg */}
-            <div style={{
-              position: 'relative', marginTop: -36, height: 0,
-              display: 'flex', justifyContent: 'flex-end', pointerEvents: 'none'
-            }}>
-              <div style={{ width: 0, height: 0, borderLeft: '6px solid transparent',
-                borderRight: '6px solid transparent', borderTop: '8px solid #94a3b8', marginRight: 12 }} />
+
+            {/* Wrap the select so we can place the chevron absolutely. */}
+            <div style={{ position: 'relative' }}>
+              <select
+                value={propertyId}
+                onChange={(e) => setPropertyId(e.target.value)}
+                style={{
+                  ...ui.input,
+                  appearance: 'none',
+                  paddingRight: 40,        // leave space for chevron
+                  lineHeight: '1.3',
+                }}
+              >
+                {properties.map(p => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+
+              {/* Chevron — no negative margins; won’t overlap the button */}
+              <div
+                aria-hidden="true"
+                style={{
+                  position: 'absolute',
+                  right: 12,
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  width: 0,
+                  height: 0,
+                  borderLeft: '6px solid transparent',
+                  borderRight: '6px solid transparent',
+                  borderTop: '8px solid #94a3b8',
+                  pointerEvents: 'none',
+                }}
+              />
             </div>
 
-            <div style={{ marginTop: 12 }}>
-              <button style={ui.btnPrimary} onClick={startTurn} disabled={propsLoading || !propertyId}>
+            <div style={{ marginTop: 14 }}>
+              <button
+                style={ui.btnPrimary}
+                onClick={startTurn}
+                disabled={propsLoading || !propertyId}
+              >
                 {propsLoading ? 'Starting…' : 'Start turn'}
               </button>
             </div>
