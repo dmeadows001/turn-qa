@@ -65,39 +65,27 @@ export default function Capture() {
     } finally { setLoading(false); }
   }
 
-  async function verifyCode() {
-    setMsg(null); setLoading(true);
-    try {
-      const r = await fetch('/api/otp/verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ role: 'cleaner', phone: e164(phone), code }),
-      });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.error || 'Verify failed');
-      window.location.href = '/capture';
-    } catch (e) {
-      setMsg(e.message || 'Verify failed');
-    } finally { setLoading(false); }
-  }
-
   async function startTurn() {
-    if (!propertyId) return;
-    setPropsLoading(true); setMsg(null);
-    try {
-      const r = await fetch('/api/cleaner/start-turn', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ property_id: propertyId, cleaner_id: 'me' }),
-      });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.error || 'start failed');
-      if (!j.turn_id) throw new Error('No turn id returned');
-      window.location.href = `/turns/${j.turn_id}/capture`;
-    } catch (e) {
-      setMsg(e.message || 'Start failed');
-    } finally { setPropsLoading(false); }
+  if (!propertyId) return;
+  setPropsLoading(true);
+  setMsg(null);
+  try {
+    const r = await fetch('/api/cleaner/start-turn', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      // ⬇️ don't send cleaner_id anymore; server reads it from the session cookie
+      body: JSON.stringify({ property_id: propertyId }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'start failed');
+    if (!j.turn_id) throw new Error('No turn id returned');
+    window.location.href = `/turns/${j.turn_id}/capture`;
+  } catch (e) {
+    setMsg(e.message || 'Start failed');
+  } finally {
+    setPropsLoading(false);
   }
+}
 
   // Shared “card” wrapper with responsive width + nice spacing
   const card = (children) => (
