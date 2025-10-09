@@ -598,6 +598,29 @@ useEffect(() => {
             );
           })}
 
+{/* Unmatched legacy photos bucket */}
+{Array.isArray(uploadsByShot._misc) && uploadsByShot._misc.length > 0 && (
+  <div style={{ border:'1px solid #334155', borderRadius:12, padding:12, margin:'12px 0', background:'#0f172a' }}>
+    <div style={{ fontWeight:700, marginBottom:6 }}>Other uploads</div>
+    <div style={{ fontSize:12, color:'#94a3b8', marginBottom:8 }}>
+      These photos were attached to the turn but didn’t match any current shot.
+    </div>
+    <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(260px,1fr))', gap:16 }}>
+      {uploadsByShot._misc.map(f => (
+        <div key={f.url} style={{ border:'1px solid #334155', borderRadius:10, padding:10, background:'#0b1220' }}>
+          <div style={{ fontSize:13, marginBottom:6, color:'#e5e7eb' }}>
+            <b title={f.name}>{f.name}</b><br/>
+            {f.width && f.height ? `${f.width}×${f.height}` : null}
+          </div>
+          <ThemedButton kind="secondary" onClick={() => viewPhoto(f.url)} ariaLabel={`View ${f.name}`}>
+            👁️ View
+          </ThemedButton>
+        </div>
+      ))}
+    </div>
+  </div>
+)}
+
           {/* AI findings summary */}
           <div style={{ border:'1px dashed #334155', borderRadius:12, padding:12, marginTop:16, background: ui.card.background }}>
             <div style={{ fontWeight:600, marginBottom:8 }}>AI Findings</div>
