@@ -128,33 +128,45 @@ export default function Capture() {
     document.body.appendChild(a); a.click(); a.remove();
   }
 
-  // ---- EXISTING PHOTO ATTACHMENT HELPERS ----
+// ---- EXISTING PHOTO ATTACHMENT HELPERS (robust matching) ----
+function norm(s) {
+  return String(s || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
 function groupExistingByShot(items = [], shots = []) {
-  // Index shots by shot_id and by area_key so we can match either shape
-  const byShotId = new Map();
-  const byArea = new Map();
+  // Build lookup maps
+  const byShotId = new Map();   // normalized shot_id  -> shot_id
+  const byArea   = new Map();   // normalized area_key -> shot_id
+  const byLabel  = new Map();   // normalized label    -> shot_id
+
   shots.forEach(s => {
-    if (s.shot_id) byShotId.set(String(s.shot_id), s.shot_id);
-    if (s.area_key) byArea.set(String(s.area_key), s.shot_id);
+    if (s.shot_id) byShotId.set(norm(s.shot_id), s.shot_id);
+    if (s.area_key) byArea.set(norm(s.area_key), s.shot_id);
+    if (s.label) byLabel.set(norm(s.label), s.shot_id);
   });
 
-  const grouped = {};   // { [shotId]: [files] }
-  const misc = [];      // unmatched legacy photos
+  const grouped = {}; // { [shotId]: [files] }
+  const misc = [];
 
   for (const it of items) {
     const file = {
       name: it.filename || (it.path?.split('/').pop() || 'photo.jpg'),
       shotId: null,
-      url: it.path,             // storage path (we sign when viewing)
+      url: it.path,                  // storage path (viewer will sign it)
       width: it.width || null,
       height: it.height || null,
-      preview: null,            // we don't have a local blob
+      preview: null,
     };
 
-    let target =
-      (it.shot_id && byShotId.get(String(it.shot_id))) ||
-      (it.area_key && byArea.get(String(it.area_key))) ||
-      null;
+    // Try in order: exact shot_id, area_key, label (all normalized)
+    const tryShot  = byShotId.get(norm(it.shot_id));
+    const tryArea  = byArea.get(norm(it.area_key));
+    const tryLabel = byLabel.get(norm(it.label)); // in case your API ever returns label
+
+    const target = tryShot || tryArea || tryLabel || null;
 
     if (target) {
       file.shotId = target;
@@ -205,19 +217,20 @@ useEffect(() => {
   let cancelled = false;
 
   async function loadExisting() {
-    // Need both the turnId and the list of shots to map legacy rows
     if (!turnId || !Array.isArray(shots) || shots.length === 0) return;
 
     try {
       const r = await fetch(`/api/turns/${turnId}/photos`);
       const j = await r.json().catch(() => ({ items: [] }));
       const items = Array.isArray(j.items) ? j.items : [];
+
+      console.debug('[resume] loaded items for turn', turnId, items); // 👈 helpful
+
       if (items.length === 0) return;
 
       const { grouped, misc } = groupExistingByShot(items, shots);
       if (cancelled) return;
 
-      // Merge into current state (avoid duplicates by path/url)
       setUploadsByShot(prev => {
         const next = { ...prev };
         Object.entries(grouped).forEach(([shotId, files]) => {
@@ -231,7 +244,6 @@ useEffect(() => {
         return next;
       });
     } catch (e) {
-      // Non-fatal; user can still add new photos
       console.warn('loadExisting photos failed', e);
     }
   }
