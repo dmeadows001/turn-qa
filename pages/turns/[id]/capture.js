@@ -128,6 +128,46 @@ export default function Capture() {
     document.body.appendChild(a); a.click(); a.remove();
   }
 
+  // ---- EXISTING PHOTO ATTACHMENT HELPERS ----
+function groupExistingByShot(items = [], shots = []) {
+  // Index shots by shot_id and by area_key so we can match either shape
+  const byShotId = new Map();
+  const byArea = new Map();
+  shots.forEach(s => {
+    if (s.shot_id) byShotId.set(String(s.shot_id), s.shot_id);
+    if (s.area_key) byArea.set(String(s.area_key), s.shot_id);
+  });
+
+  const grouped = {};   // { [shotId]: [files] }
+  const misc = [];      // unmatched legacy photos
+
+  for (const it of items) {
+    const file = {
+      name: it.filename || (it.path?.split('/').pop() || 'photo.jpg'),
+      shotId: null,
+      url: it.path,             // storage path (we sign when viewing)
+      width: it.width || null,
+      height: it.height || null,
+      preview: null,            // we don't have a local blob
+    };
+
+    let target =
+      (it.shot_id && byShotId.get(String(it.shot_id))) ||
+      (it.area_key && byArea.get(String(it.area_key))) ||
+      null;
+
+    if (target) {
+      file.shotId = target;
+      if (!grouped[target]) grouped[target] = [];
+      grouped[target].push(file);
+    } else {
+      misc.push(file);
+    }
+  }
+
+  return { grouped, misc };
+}
+
   function openPicker(shotId) {
     const el = inputRefs.current[shotId];
     if (el) el.click();
@@ -160,48 +200,45 @@ export default function Capture() {
     loadTemplate();
   }, [turnId]);
 
-// --- NEW: when resuming a turn, load existing photos and show them ---
+// --- When resuming a turn, load existing photos *after* shots are known ---
 useEffect(() => {
+  let cancelled = false;
+
   async function loadExisting() {
-    if (!turnId) return;
+    // Need both the turnId and the list of shots to map legacy rows
+    if (!turnId || !Array.isArray(shots) || shots.length === 0) return;
 
     try {
       const r = await fetch(`/api/turns/${turnId}/photos`);
-      const j = await r.json();
+      const j = await r.json().catch(() => ({ items: [] }));
       const items = Array.isArray(j.items) ? j.items : [];
       if (items.length === 0) return;
 
-      // Group by shotId (fallback to area_key or a generic bucket)
-      const byShot = {};
-      items.forEach(p => {
-        const shotId = p.shot_id || p.area_key || 'existing';
-        byShot[shotId] = byShot[shotId] || [];
-        byShot[shotId].push({
-          name: p.filename || 'photo.jpg',
-          shotId,                     // keep our UI contract
-          url: p.path,                // storage path; viewer will sign it
-          width: p.width || undefined,
-          height: p.height || undefined,
-          preview: null,              // no local preview (already uploaded)
-        });
-      });
+      const { grouped, misc } = groupExistingByShot(items, shots);
+      if (cancelled) return;
 
-      // Merge into current state (avoid dupes by path)
+      // Merge into current state (avoid duplicates by path/url)
       setUploadsByShot(prev => {
         const next = { ...prev };
-        Object.entries(byShot).forEach(([key, arr]) => {
-          const existing = new Set((next[key] || []).map(f => f.url));
-          const merged = (next[key] || []).concat(arr.filter(f => !existing.has(f.url)));
-          next[key] = merged;
+        Object.entries(grouped).forEach(([shotId, files]) => {
+          const existing = new Set((next[shotId] || []).map(f => f.url));
+          next[shotId] = [ ...(next[shotId] || []), ...files.filter(f => !existing.has(f.url)) ];
         });
+        if (misc.length) {
+          const existingMisc = new Set((next._misc || []).map(f => f.url));
+          next._misc = [ ...(next._misc || []), ...misc.filter(f => !existingMisc.has(f.url)) ];
+        }
         return next;
       });
-    } catch {
-      // ignore — showing empty is okay
+    } catch (e) {
+      // Non-fatal; user can still add new photos
+      console.warn('loadExisting photos failed', e);
     }
   }
+
   loadExisting();
-}, [turnId]); // runs when the resume page mounts
+  return () => { cancelled = true; };
+}, [turnId, shots]);
 
   // -------- Add files (quality + upload to Storage) --------
   async function addFiles(shotId, fileList) {
