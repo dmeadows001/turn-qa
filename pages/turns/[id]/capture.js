@@ -160,7 +160,7 @@ export default function Capture() {
     loadTemplate();
   }, [turnId]);
 
-  // --- NEW: when resuming a turn, load existing photos and show them ---
+// --- NEW: when resuming a turn, load existing photos and show them ---
 useEffect(() => {
   async function loadExisting() {
     if (!turnId) return;
