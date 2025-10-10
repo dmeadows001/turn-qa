@@ -14,6 +14,23 @@ const DEFAULT_SHOTS = [
   { shot_id: 'fallback-bedroom',        area_key: 'bedroom_overall',     label: 'Bedroom - Overall',         min_count: 1 }
 ];
 
+// ---- helper used by thumbnails (defined once, not inside a loop) ----
+function ensureThumb(path, setThumbByPath, requestedThumbsRef, signPath) {
+  if (!path) return;
+  if (requestedThumbsRef.current.has(path)) return;
+  requestedThumbsRef.current.add(path);
+  signPath(path)
+    .then((url) => {
+      if (!url) return;
+      // don't overwrite if another signer already set it
+      setThumbByPath((prev) => (prev[path] ? prev : { ...prev, [path]: url }));
+    })
+    .catch(() => {
+      // allow retry if signing failed
+      requestedThumbsRef.current.delete(path);
+    });
+}
+
 // Re-usable button variants that honor theme.js
 function ThemedButton({ children, onClick, disabled=false, loading=false, kind='primary', full=false, ariaLabel }) {
   const base = {
@@ -45,74 +62,6 @@ function ThemedButton({ children, onClick, disabled=false, loading=false, kind='
       {loading ? 'Working…' : children}
     </button>
   );
-}
-
-// ---------- helpers shared across component ----------
-
-function norm(s) {
-  return String(s || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '_')
-    .replace(/^_+|_+$/g, '');
-}
-
-// Group existing items to shot buckets using several possible keys
-function groupExistingByShot(items = [], shots = []) {
-  const byShotId = new Map();
-  const byArea   = new Map();
-  const byLabel  = new Map();
-
-  shots.forEach(s => {
-    if (s.shot_id) byShotId.set(norm(s.shot_id), s.shot_id);
-    if (s.area_key) byArea.set(norm(s.area_key), s.shot_id);
-    if (s.label) byLabel.set(norm(s.label), s.shot_id);
-  });
-
-  const grouped = {};
-  const misc = [];
-
-  for (const it of items) {
-    const file = {
-      name: it.filename || (it.path?.split('/').pop() || 'photo.jpg'),
-      shotId: null,
-      url: it.path,         // storage path (viewer will sign it)
-      width: it.width || null,
-      height: it.height || null,
-      preview: null,
-    };
-
-    const tryShot  = byShotId.get(norm(it.shot_id));
-    const tryArea  = byArea.get(norm(it.area_key));
-    const tryLabel = byLabel.get(norm(it.label));
-
-    const target = tryShot || tryArea || tryLabel || null;
-
-    if (target) {
-      file.shotId = target;
-      if (!grouped[target]) grouped[target] = [];
-      grouped[target].push(file);
-    } else {
-      misc.push(file);
-    }
-  }
-
-  return { grouped, misc };
-}
-
-// Per-card signer: guarantees a thumb for any rendered file
-function ensureThumb(path, setThumbByPath, requestedThumbsRef, signPath) {
-  if (!path) return;
-  if (requestedThumbsRef.current.has(path)) return;
-  requestedThumbsRef.current.add(path);
-  signPath(path)
-    .then((url) => {
-      if (!url) return;
-      setThumbByPath((prev) => (prev[path] ? prev : { ...prev, [path]: url }));
-    })
-    .catch(() => {
-      // allow retry later
-      requestedThumbsRef.current.delete(path);
-    });
 }
 
 export default function Capture() {
@@ -200,6 +149,58 @@ export default function Capture() {
     document.body.appendChild(a); a.click(); a.remove();
   }
 
+  // ---- EXISTING PHOTO ATTACHMENT HELPERS (robust matching) ----
+  function norm(s) {
+    return String(s || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '');
+  }
+
+  function groupExistingByShot(items = [], shots = []) {
+    // Build lookup maps
+    const byShotId = new Map();   // normalized shot_id  -> shot_id
+    const byArea   = new Map();   // normalized area_key -> shot_id
+    const byLabel  = new Map();   // normalized label    -> shot_id
+
+    shots.forEach(s => {
+      if (s.shot_id) byShotId.set(norm(s.shot_id), s.shot_id);
+      if (s.area_key) byArea.set(norm(s.area_key), s.shot_id);
+      if (s.label) byLabel.set(norm(s.label), s.shot_id);
+    });
+
+    const grouped = {}; // { [shotId]: [files] }
+    const misc = [];
+
+    for (const it of items) {
+      const file = {
+        name: it.filename || (it.path?.split('/').pop() || 'photo.jpg'),
+        shotId: null,
+        url: it.path,                  // storage path (viewer will sign it)
+        width: it.width || null,
+        height: it.height || null,
+        preview: null,
+      };
+
+      // Try in order: exact shot_id, area_key, label (all normalized)
+      const tryShot  = byShotId.get(norm(it.shot_id));
+      const tryArea  = byArea.get(norm(it.area_key));
+      const tryLabel = byLabel.get(norm(it.label));
+
+      const target = tryShot || tryArea || tryLabel || null;
+
+      if (target) {
+        file.shotId = target;
+        if (!grouped[target]) grouped[target] = [];
+        grouped[target].push(file);
+      } else {
+        misc.push(file);
+      }
+    }
+
+    return { grouped, misc };
+  }
+
   function openPicker(shotId) {
     const el = inputRefs.current[shotId];
     if (el) el.click();
@@ -279,8 +280,9 @@ export default function Capture() {
     loadExisting();
   }, [turnId, shots]);
 
-  // --- Bulk-sign storage paths for thumbnails (best-effort/perf) ---
+  // --- Sign storage paths to show thumbnails for existing uploads ---
   useEffect(() => {
+    // Collect any file paths that don't have a signed thumbnail yet
     const pending = [];
     Object.values(uploadsByShot).forEach(arr => {
       (arr || []).forEach(f => {
@@ -603,59 +605,34 @@ export default function Capture() {
 
                 {/* File cards + placeholders */}
                 <div style={{ marginTop:10, display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(260px,1fr))', gap:16 }}>
-                  {/* Existing uploads */}
+                  {/* Existing + newly uploaded files */}
                   {files.map(f => {
-                    // on-demand signer to guarantee thumbnails
+                    // trigger signing if needed
                     if (!f.preview && !thumbByPath[f.url]) {
                       ensureThumb(f.url, setThumbByPath, requestedThumbsRef, signPath);
                     }
-
                     const thumb = f.preview || thumbByPath[f.url] || null;
 
                     return (
-                      <div
-  key={f.url}
-  style={{
-    border: f.needs_fix ? '2px solid #ef4444' : ui.card.border,
-    borderRadius: 10,
-    padding: 10,
-    background: '#0b1220'
-  }}
->
-  {/* ... your thumbnail block ... */}
-
-  {/* filename + actions ... */}
-
-  {/* Manager note / Needs-fix badge */}
-  {(f.needs_fix || f.manager_notes) && (
-    <div style={{ marginTop: 8 }}>
-      {f.needs_fix && (
-        <span style={{
-          display:'inline-block',
-          fontSize:12,
-          background:'#3f1a1a',
-          color:'#fecaca',
-          border:'1px solid rgba(239,68,68,.5)',
-          borderRadius:6,
-          padding:'2px 6px',
-          marginRight:8
-        }}>
-          Needs fix
-        </span>
-      )}
-      {f.manager_notes && (
-        <div style={{
-          marginTop:6, fontSize:13, lineHeight:1.35,
-          color:'#e5e7eb', background:'#111827',
-          border:'1px solid #374151', borderRadius:8, padding:'8px 10px'
-        }}>
-          {f.manager_notes}
-        </div>
-      )}
-    </div>
-  )}
-</div>
-
+                      <div key={f.url} style={{ border: ui.card.border, borderRadius:10, padding:10, background: '#0b1220' }}>
+                        <div style={{ marginBottom:8, height:160 }}>
+                          {thumb ? (
+                            <img
+                              src={thumb}
+                              alt={f.name}
+                              style={{ width:'100%', height:160, objectFit:'cover', borderRadius:8 }}
+                              draggable={false}
+                            />
+                          ) : (
+                            <div
+                              style={{
+                                width:'100%', height:160, borderRadius:8,
+                                background:'linear-gradient(90deg,#0f172a,#111827,#0f172a)',
+                                backgroundSize:'200% 100%'
+                              }}
+                            />
+                          )}
+                        </div>
 
                         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:6 }}>
                           <div style={{ fontSize:13, maxWidth:'70%' }}>
@@ -730,7 +707,6 @@ export default function Capture() {
                     ensureThumb(f.url, setThumbByPath, requestedThumbsRef, signPath);
                   }
                   const thumb = thumbByPath[f.url] || null;
-
                   return (
                     <div key={f.url} style={{ border:'1px solid #334155', borderRadius:10, padding:10, background:'#0b1220' }}>
                       <div style={{ marginBottom:8, height:160 }}>
