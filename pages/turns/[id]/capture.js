@@ -613,25 +613,49 @@ export default function Capture() {
                     const thumb = f.preview || thumbByPath[f.url] || null;
 
                     return (
-                      <div key={f.url} style={{ border: ui.card.border, borderRadius:10, padding:10, background: '#0b1220' }}>
-                        <div style={{ marginBottom:8, height:160 }}>
-                          {thumb ? (
-                            <img
-                              src={thumb}
-                              alt={f.name}
-                              style={{ width:'100%', height:160, objectFit:'cover', borderRadius:8 }}
-                              draggable={false}
-                            />
-                          ) : (
-                            <div
-                              style={{
-                                width:'100%', height:160, borderRadius:8,
-                                background:'linear-gradient(90deg,#0f172a,#111827,#0f172a)',
-                                backgroundSize:'200% 100%'
-                              }}
-                            />
-                          )}
-                        </div>
+                      <div
+  key={f.url}
+  style={{
+    border: f.needs_fix ? '2px solid #ef4444' : ui.card.border,
+    borderRadius: 10,
+    padding: 10,
+    background: '#0b1220'
+  }}
+>
+  {/* ... your thumbnail block ... */}
+
+  {/* filename + actions ... */}
+
+  {/* Manager note / Needs-fix badge */}
+  {(f.needs_fix || f.manager_notes) && (
+    <div style={{ marginTop: 8 }}>
+      {f.needs_fix && (
+        <span style={{
+          display:'inline-block',
+          fontSize:12,
+          background:'#3f1a1a',
+          color:'#fecaca',
+          border:'1px solid rgba(239,68,68,.5)',
+          borderRadius:6,
+          padding:'2px 6px',
+          marginRight:8
+        }}>
+          Needs fix
+        </span>
+      )}
+      {f.manager_notes && (
+        <div style={{
+          marginTop:6, fontSize:13, lineHeight:1.35,
+          color:'#e5e7eb', background:'#111827',
+          border:'1px solid #374151', borderRadius:8, padding:'8px 10px'
+        }}>
+          {f.manager_notes}
+        </div>
+      )}
+    </div>
+  )}
+</div>
+
 
                         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:6 }}>
                           <div style={{ fontSize:13, maxWidth:'70%' }}>
