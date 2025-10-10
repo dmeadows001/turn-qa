@@ -62,6 +62,10 @@ export default function Capture() {
   const [scannedPaths, setScannedPaths] = useState(new Set());
   const [scanProgress, setScanProgress] = useState({ done: 0, total: 0 });
 
+  // Signed thumbnail cache for existing photos
+  const [thumbByPath, setThumbByPath] = useState({});      // { [storagePath]: signedUrl }
+  const requestedThumbsRef = useRef(new Set());            // to avoid duplicate signing
+
   // Lightbox
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [lightboxUrl, setLightboxUrl] = useState(null);
@@ -128,57 +132,57 @@ export default function Capture() {
     document.body.appendChild(a); a.click(); a.remove();
   }
 
-// ---- EXISTING PHOTO ATTACHMENT HELPERS (robust matching) ----
-function norm(s) {
-  return String(s || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '_')
-    .replace(/^_+|_+$/g, '');
-}
-
-function groupExistingByShot(items = [], shots = []) {
-  // Build lookup maps
-  const byShotId = new Map();   // normalized shot_id  -> shot_id
-  const byArea   = new Map();   // normalized area_key -> shot_id
-  const byLabel  = new Map();   // normalized label    -> shot_id
-
-  shots.forEach(s => {
-    if (s.shot_id) byShotId.set(norm(s.shot_id), s.shot_id);
-    if (s.area_key) byArea.set(norm(s.area_key), s.shot_id);
-    if (s.label) byLabel.set(norm(s.label), s.shot_id);
-  });
-
-  const grouped = {}; // { [shotId]: [files] }
-  const misc = [];
-
-  for (const it of items) {
-    const file = {
-      name: it.filename || (it.path?.split('/').pop() || 'photo.jpg'),
-      shotId: null,
-      url: it.path,                  // storage path (viewer will sign it)
-      width: it.width || null,
-      height: it.height || null,
-      preview: null,
-    };
-
-    // Try in order: exact shot_id, area_key, label (all normalized)
-    const tryShot  = byShotId.get(norm(it.shot_id));
-    const tryArea  = byArea.get(norm(it.area_key));
-    const tryLabel = byLabel.get(norm(it.label)); // in case your API ever returns label
-
-    const target = tryShot || tryArea || tryLabel || null;
-
-    if (target) {
-      file.shotId = target;
-      if (!grouped[target]) grouped[target] = [];
-      grouped[target].push(file);
-    } else {
-      misc.push(file);
-    }
+  // ---- EXISTING PHOTO ATTACHMENT HELPERS (robust matching) ----
+  function norm(s) {
+    return String(s || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '');
   }
 
-  return { grouped, misc };
-}
+  function groupExistingByShot(items = [], shots = []) {
+    // Build lookup maps
+    const byShotId = new Map();   // normalized shot_id  -> shot_id
+    const byArea   = new Map();   // normalized area_key -> shot_id
+    const byLabel  = new Map();   // normalized label    -> shot_id
+
+    shots.forEach(s => {
+      if (s.shot_id) byShotId.set(norm(s.shot_id), s.shot_id);
+      if (s.area_key) byArea.set(norm(s.area_key), s.shot_id);
+      if (s.label) byLabel.set(norm(s.label), s.shot_id);
+    });
+
+    const grouped = {}; // { [shotId]: [files] }
+    const misc = [];
+
+    for (const it of items) {
+      const file = {
+        name: it.filename || (it.path?.split('/').pop() || 'photo.jpg'),
+        shotId: null,
+        url: it.path,                  // storage path (viewer will sign it)
+        width: it.width || null,
+        height: it.height || null,
+        preview: null,
+      };
+
+      // Try in order: exact shot_id, area_key, label (all normalized)
+      const tryShot  = byShotId.get(norm(it.shot_id));
+      const tryArea  = byArea.get(norm(it.area_key));
+      const tryLabel = byLabel.get(norm(it.label));
+
+      const target = tryShot || tryArea || tryLabel || null;
+
+      if (target) {
+        file.shotId = target;
+        if (!grouped[target]) grouped[target] = [];
+        grouped[target].push(file);
+      } else {
+        misc.push(file);
+      }
+    }
+
+    return { grouped, misc };
+  }
 
   function openPicker(shotId) {
     const el = inputRefs.current[shotId];
@@ -212,73 +216,93 @@ function groupExistingByShot(items = [], shots = []) {
     loadTemplate();
   }, [turnId]);
 
-// --- Load existing photos AFTER shots are known, and make sure we show them even if the shot_id doesn't match ---
-useEffect(() => {
-  async function loadExisting() {
-    if (!turnId || !Array.isArray(shots)) return;
+  // --- Load existing photos AFTER shots are known ---
+  useEffect(() => {
+    async function loadExisting() {
+      if (!turnId || !Array.isArray(shots)) return;
 
-    try {
-      const r = await fetch(`/api/turns/${turnId}/photos`);
-      const j = await r.json();
-      const items = Array.isArray(j.items) ? j.items : [];
-      if (items.length === 0) return;
+      try {
+        const r = await fetch(`/api/turns/${turnId}/photos`);
+        const j = await r.json();
+        const items = Array.isArray(j.items) ? j.items : [];
+        if (items.length === 0) return;
 
-      const validShotIds = new Set(shots.map(s => s.shot_id));
-      const byShot = {};
-      const extras = [];
+        // Robust grouping (accept area_key/label fallbacks)
+        const { grouped, misc } = groupExistingByShot(items, shots);
 
-      items.forEach(p => {
-        const shotId = p.shot_id || p.area_key || null;
-        const fileObj = {
-          name: p.filename || 'photo.jpg',
-          shotId: shotId || '__extras__',
-          url: p.path,                // storage path; viewer signs it on demand
-          width: p.width || undefined,
-          height: p.height || undefined,
-          preview: null,              // already uploaded; no local preview
-        };
-
-        if (shotId && validShotIds.has(shotId)) {
-          byShot[shotId] = byShot[shotId] || [];
-          byShot[shotId].push(fileObj);
-        } else {
-          extras.push(fileObj);
+        // Add a pseudo-shot for unmatched photos
+        if (misc.length > 0 && !shots.some(s => s.shot_id === '__extras__')) {
+          setShots(prev => [
+            ...(prev || []),
+            {
+              shot_id: '__extras__',
+              area_key: 'existing_uploads',
+              label: 'Additional uploads',
+              min_count: 0,
+              notes: 'Uploaded previously; not tied to a required shot',
+              rules_text: '',
+            },
+          ]);
+          grouped['__extras__'] = misc;
         }
-      });
 
-      // If we have extras that don't match any current shot, append a pseudo-shot so they render.
-      if (extras.length > 0 && !shots.some(s => s.shot_id === '__extras__')) {
-        setShots(prev => [
-          ...(prev || []),
-          {
-            shot_id: '__extras__',
-            area_key: 'existing_uploads',
-            label: 'Additional uploads',
-            min_count: 0,
-            notes: 'Uploaded previously; not tied to a required shot',
-            rules_text: '',
-          },
-        ]);
-        byShot['__extras__'] = extras;
-      }
-
-      // Merge byShot into current state (avoid dupes by path)
-      setUploadsByShot(prev => {
-        const next = { ...prev };
-        Object.entries(byShot).forEach(([key, arr]) => {
-          const existing = new Set((next[key] || []).map(f => f.url));
-          const merged = (next[key] || []).concat(arr.filter(f => !existing.has(f.url)));
-          next[key] = merged;
+        // Merge into state (avoid dupes by path)
+        setUploadsByShot(prev => {
+          const next = { ...prev };
+          Object.entries(grouped).forEach(([key, arr]) => {
+            const existing = new Set((next[key] || []).map(f => f.url));
+            const merged = (next[key] || []).concat(arr.filter(f => !existing.has(f.url)));
+            next[key] = merged;
+          });
+          return next;
         });
-        return next;
-      });
-    } catch {
-      // ignore; showing empty is fine
+      } catch {
+        // ignore
+      }
     }
-  }
-  loadExisting();
-}, [turnId, shots]); // <-- important: wait for shots
+    loadExisting();
+  }, [turnId, shots]);
 
+  // --- Sign storage paths to show thumbnails for existing uploads ---
+  useEffect(() => {
+    // Collect any file paths that don't have a signed thumbnail yet
+    const pending = [];
+    Object.values(uploadsByShot).forEach(arr => {
+      (arr || []).forEach(f => {
+        const path = f.url;
+        if (!path) return;
+        if (thumbByPath[path]) return;
+        if (requestedThumbsRef.current.has(path)) return;
+        requestedThumbsRef.current.add(path);
+        pending.push(path);
+      });
+    });
+
+    if (pending.length === 0) return;
+
+    let cancelled = false;
+
+    async function worker(paths) {
+      for (const p of paths) {
+        try {
+          const url = await signPath(p);
+          if (!cancelled && url) {
+            setThumbByPath(prev => (prev[p] ? prev : { ...prev, [p]: url }));
+          }
+        } catch {
+          // ignore one-off signing failures
+        }
+      }
+    }
+
+    const PARALLEL = 3;
+    const chunks = Array.from({ length: PARALLEL }, (_, i) =>
+      pending.filter((_, idx) => idx % PARALLEL === i)
+    );
+    chunks.forEach(c => worker(c));
+
+    return () => { cancelled = true; };
+  }, [uploadsByShot, thumbByPath]);
 
   // -------- Add files (quality + upload to Storage) --------
   async function addFiles(shotId, fileList) {
@@ -567,17 +591,28 @@ useEffect(() => {
                   {/* Existing uploads */}
                   {files.map(f => (
                     <div key={f.url} style={{ border: ui.card.border, borderRadius:10, padding:10, background: '#0b1220' }}>
-                      {/* Thumbnail preview */}
-                      {f.preview && (
-                        <div style={{ marginBottom:8 }}>
-                          <img
-                            src={f.preview}
-                            alt={f.name}
-                            style={{ width: '100%', height: 160, objectFit: 'cover', borderRadius: 8 }}
-                            draggable={false}
-                          />
-                        </div>
-                      )}
+                      {/* Thumbnail (preview for new files; signed URL for existing) */}
+                      <div style={{ marginBottom:8, height:160 }}>
+                        {(() => {
+                          const thumb = f.preview || thumbByPath[f.url] || null;
+                          return thumb ? (
+                            <img
+                              src={thumb}
+                              alt={f.name}
+                              style={{ width:'100%', height:160, objectFit:'cover', borderRadius:8 }}
+                              draggable={false}
+                            />
+                          ) : (
+                            <div
+                              style={{
+                                width:'100%', height:160, borderRadius:8,
+                                background:'linear-gradient(90deg,#0f172a,#111827,#0f172a)',
+                                backgroundSize:'200% 100%'
+                              }}
+                            />
+                          );
+                        })()}
+                      </div>
 
                       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:6 }}>
                         <div style={{ fontSize:13, maxWidth:'70%' }}>
@@ -638,28 +673,49 @@ useEffect(() => {
             );
           })}
 
-{/* Unmatched legacy photos bucket */}
-{Array.isArray(uploadsByShot._misc) && uploadsByShot._misc.length > 0 && (
-  <div style={{ border:'1px solid #334155', borderRadius:12, padding:12, margin:'12px 0', background:'#0f172a' }}>
-    <div style={{ fontWeight:700, marginBottom:6 }}>Other uploads</div>
-    <div style={{ fontSize:12, color:'#94a3b8', marginBottom:8 }}>
-      These photos were attached to the turn but didn’t match any current shot.
-    </div>
-    <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(260px,1fr))', gap:16 }}>
-      {uploadsByShot._misc.map(f => (
-        <div key={f.url} style={{ border:'1px solid #334155', borderRadius:10, padding:10, background:'#0b1220' }}>
-          <div style={{ fontSize:13, marginBottom:6, color:'#e5e7eb' }}>
-            <b title={f.name}>{f.name}</b><br/>
-            {f.width && f.height ? `${f.width}×${f.height}` : null}
-          </div>
-          <ThemedButton kind="secondary" onClick={() => viewPhoto(f.url)} ariaLabel={`View ${f.name}`}>
-            👁️ View
-          </ThemedButton>
-        </div>
-      ))}
-    </div>
-  </div>
-)}
+          {/* Unmatched legacy photos bucket */}
+          {Array.isArray(uploadsByShot._misc) && uploadsByShot._misc.length > 0 && (
+            <div style={{ border:'1px solid #334155', borderRadius:12, padding:12, margin:'12px 0', background:'#0f172a' }}>
+              <div style={{ fontWeight:700, marginBottom:6 }}>Other uploads</div>
+              <div style={{ fontSize:12, color:'#94a3b8', marginBottom:8 }}>
+                These photos were attached to the turn but didn’t match any current shot.
+              </div>
+              <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(260px,1fr))', gap:16 }}>
+                {uploadsByShot._misc.map(f => (
+                  <div key={f.url} style={{ border:'1px solid #334155', borderRadius:10, padding:10, background:'#0b1220' }}>
+                    <div style={{ marginBottom:8, height:160 }}>
+                      {(() => {
+                        const thumb = thumbByPath[f.url] || null;
+                        return thumb ? (
+                          <img
+                            src={thumb}
+                            alt={f.name}
+                            style={{ width:'100%', height:160, objectFit:'cover', borderRadius:8 }}
+                            draggable={false}
+                          />
+                        ) : (
+                          <div
+                            style={{
+                              width:'100%', height:160, borderRadius:8,
+                              background:'linear-gradient(90deg,#0f172a,#111827,#0f172a)',
+                              backgroundSize:'200% 100%'
+                            }}
+                          />
+                        );
+                      })()}
+                    </div>
+                    <div style={{ fontSize:13, marginBottom:6, color:'#e5e7eb' }}>
+                      <b title={f.name}>{f.name}</b><br/>
+                      {f.width && f.height ? `${f.width}×${f.height}` : null}
+                    </div>
+                    <ThemedButton kind="secondary" onClick={() => viewPhoto(f.url)} ariaLabel={`View ${f.name}`}>
+                      👁️ View
+                    </ThemedButton>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* AI findings summary */}
           <div style={{ border:'1px dashed #334155', borderRadius:12, padding:12, marginTop:16, background: ui.card.background }}>
