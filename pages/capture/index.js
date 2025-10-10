@@ -22,6 +22,11 @@ function normalizeTabParam(v = '') {
   return '';
 }
 
+// Reusable card at file scope so VerifyForm can use it
+function Card({ children }) {
+  return <div style={{ ...ui.card, width: '100%' }}>{children}</div>;
+}
+
 export default function Capture() {
   // phase: checking → verify | start
   const [phase, setPhase] = useState('checking');
@@ -86,10 +91,7 @@ export default function Capture() {
         const rows = Array.isArray(fx?.rows) ? fx.rows : [];
         setFixTurns(rows);
 
-        // Decide initial tab:
-        // - If deep link explicitly says needs-fix, force 'fix'
-        // - Else if deep link says start, use 'start'
-        // - Else if there are items to fix, show 'fix', otherwise 'start'
+        // Decide initial tab
         if (tabParam) {
           setActiveTab(tabParam); // already normalized
         } else if (rows.length) {
@@ -174,9 +176,6 @@ export default function Capture() {
   // UI Helpers (keep tabs + card perfectly aligned)
   // ------------------------------------------------------------------
   const shell = { maxWidth: SHELL_MAX, margin: '0 auto' };
-  const Card = ({ children }) => (
-    <div style={{ ...ui.card, width: '100%' /* match tabs width */ }}>{children}</div>
-  );
 
   const Tabs = () => (
     <div
@@ -215,43 +214,16 @@ export default function Capture() {
     return (
       <ChromeDark title="Capture">
         <section style={{ ...ui.sectionGrid, ...shell }}>
-          <Card>
-            <h2 style={{ marginTop: 0 }}>Verify your phone</h2>
-
-            <label style={ui.label}>Phone</label>
-            <input
-              style={ui.input}
-              placeholder="+1 555 123 4567"
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-            />
-            <div style={{ display: 'flex', gap: 10, marginTop: 10 }}>
-              <button style={ui.btnPrimary} onClick={sendCode} disabled={loading}>
-                {loading ? 'Sending…' : 'Text me a code'}
-              </button>
-              {!!phone && <ResendOtpButton phone={e164(phone)} role="cleaner" />}
-            </div>
-
-            <div style={{ height: 10 }} />
-
-            <label style={ui.label}>Enter 6-digit code</label>
-            <input
-              style={ui.input}
-              placeholder="123456"
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              maxLength={6}
-              inputMode="numeric"
-              pattern="\d*"
-            />
-            <div style={{ display: 'flex', gap: 10, marginTop: 10 }}>
-              <button style={ui.btnSecondary} onClick={verifyCode} disabled={loading}>
-                {loading ? 'Verifying…' : 'Verify'}
-              </button>
-            </div>
-
-            {msg && <div style={{ marginTop: 10 }}>{msg}</div>}
-          </Card>
+          <VerifyForm
+            phone={phone}
+            code={code}
+            loading={loading}
+            msg={msg}
+            onChangePhone={setPhone}
+            onChangeCode={setCode}
+            onSend={sendCode}
+            onVerify={verifyCode}
+          />
         </section>
       </ChromeDark>
     );
@@ -353,5 +325,72 @@ export default function Capture() {
         )}
       </section>
     </ChromeDark>
+  );
+}
+
+/* ---------- Stable Verify form (prevents remounts/blur on each keystroke) ---------- */
+function VerifyForm({ phone, code, loading, msg, onChangePhone, onChangeCode, onSend, onVerify }) {
+  function noSubmit(e) {
+    e.preventDefault(); // avoid implicit submit that can blur inputs
+  }
+
+  // Keep the Resend button mounted; just toggle visibility/disabled
+  const showResend = !!phone && phone.replace(/[^\d]/g, '').length >= 7;
+
+  return (
+    <Card>
+      <form onSubmit={noSubmit}>
+        <h2 style={{ marginTop: 0 }}>Verify your phone</h2>
+
+        <label style={ui.label} htmlFor="phone">Phone</label>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <input
+            id="phone"
+            type="tel"
+            inputMode="tel"
+            autoComplete="tel"
+            style={{ ...ui.input, flex: 1 }}
+            placeholder="+1 555 123 4567"
+            value={phone}
+            onChange={(e) => onChangePhone(e.target.value)}
+          />
+          <div style={{ alignSelf: 'stretch', display: 'flex', alignItems: 'center' }}>
+            <div style={{ visibility: showResend ? 'visible' : 'hidden' }}>
+              <ResendOtpButton phone={e164(phone)} role="cleaner" />
+            </div>
+          </div>
+        </div>
+
+        <div style={{ height: 10 }} />
+
+        <label style={ui.label} htmlFor="code">Enter 6-digit code</label>
+        <input
+          id="code"
+          type="text"
+          inputMode="numeric"
+          autoComplete="one-time-code"
+          style={ui.input}
+          placeholder="123456"
+          value={code}
+          onChange={(e) => onChangeCode(e.target.value.replace(/[^\d]/g, '').slice(0, 6))}
+        />
+
+        <div style={{ display: 'flex', gap: 10, marginTop: 10 }}>
+          <button type="button" style={ui.btnPrimary} onClick={onSend} disabled={loading}>
+            {loading ? 'Sending…' : 'Text me a code'}
+          </button>
+          <button
+            type="button"
+            style={ui.btnSecondary}
+            onClick={onVerify}
+            disabled={loading || code.length < 6}
+          >
+            {loading ? 'Verifying…' : 'Verify'}
+          </button>
+        </div>
+
+        {msg && <div style={{ marginTop: 10 }}>{msg}</div>}
+      </form>
+    </Card>
   );
 }
