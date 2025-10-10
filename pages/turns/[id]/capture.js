@@ -212,45 +212,73 @@ function groupExistingByShot(items = [], shots = []) {
     loadTemplate();
   }, [turnId]);
 
-// --- When resuming a turn, load existing photos *after* shots are known ---
+// --- Load existing photos AFTER shots are known, and make sure we show them even if the shot_id doesn't match ---
 useEffect(() => {
-  let cancelled = false;
-
   async function loadExisting() {
-    if (!turnId || !Array.isArray(shots) || shots.length === 0) return;
+    if (!turnId || !Array.isArray(shots)) return;
 
     try {
       const r = await fetch(`/api/turns/${turnId}/photos`);
-      const j = await r.json().catch(() => ({ items: [] }));
+      const j = await r.json();
       const items = Array.isArray(j.items) ? j.items : [];
-
-      console.debug('[resume] loaded items for turn', turnId, items); // 👈 helpful
-
       if (items.length === 0) return;
 
-      const { grouped, misc } = groupExistingByShot(items, shots);
-      if (cancelled) return;
+      const validShotIds = new Set(shots.map(s => s.shot_id));
+      const byShot = {};
+      const extras = [];
 
+      items.forEach(p => {
+        const shotId = p.shot_id || p.area_key || null;
+        const fileObj = {
+          name: p.filename || 'photo.jpg',
+          shotId: shotId || '__extras__',
+          url: p.path,                // storage path; viewer signs it on demand
+          width: p.width || undefined,
+          height: p.height || undefined,
+          preview: null,              // already uploaded; no local preview
+        };
+
+        if (shotId && validShotIds.has(shotId)) {
+          byShot[shotId] = byShot[shotId] || [];
+          byShot[shotId].push(fileObj);
+        } else {
+          extras.push(fileObj);
+        }
+      });
+
+      // If we have extras that don't match any current shot, append a pseudo-shot so they render.
+      if (extras.length > 0 && !shots.some(s => s.shot_id === '__extras__')) {
+        setShots(prev => [
+          ...(prev || []),
+          {
+            shot_id: '__extras__',
+            area_key: 'existing_uploads',
+            label: 'Additional uploads',
+            min_count: 0,
+            notes: 'Uploaded previously; not tied to a required shot',
+            rules_text: '',
+          },
+        ]);
+        byShot['__extras__'] = extras;
+      }
+
+      // Merge byShot into current state (avoid dupes by path)
       setUploadsByShot(prev => {
         const next = { ...prev };
-        Object.entries(grouped).forEach(([shotId, files]) => {
-          const existing = new Set((next[shotId] || []).map(f => f.url));
-          next[shotId] = [ ...(next[shotId] || []), ...files.filter(f => !existing.has(f.url)) ];
+        Object.entries(byShot).forEach(([key, arr]) => {
+          const existing = new Set((next[key] || []).map(f => f.url));
+          const merged = (next[key] || []).concat(arr.filter(f => !existing.has(f.url)));
+          next[key] = merged;
         });
-        if (misc.length) {
-          const existingMisc = new Set((next._misc || []).map(f => f.url));
-          next._misc = [ ...(next._misc || []), ...misc.filter(f => !existingMisc.has(f.url)) ];
-        }
         return next;
       });
-    } catch (e) {
-      console.warn('loadExisting photos failed', e);
+    } catch {
+      // ignore; showing empty is fine
     }
   }
-
   loadExisting();
-  return () => { cancelled = true; };
-}, [turnId, shots]);
+}, [turnId, shots]); // <-- important: wait for shots
+
 
   // -------- Add files (quality + upload to Storage) --------
   async function addFiles(shotId, fileList) {
