@@ -83,6 +83,14 @@ export default function Capture() {
   const [thumbByPath, setThumbByPath] = useState({});      // { [storagePath]: signedUrl }
   const requestedThumbsRef = useRef(new Set());            // to avoid duplicate signing
 
+  // Needs-fix notes (from manager)
+  const [fixNotes, setFixNotes] = useState({
+    byPath: {},            // { [storagePath]: note }
+    overall: '',           // overall note text
+    count: 0,              // number of flagged photos
+  });
+  const [hideFixBanner, setHideFixBanner] = useState(false);
+
   // Lightbox
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [lightboxUrl, setLightboxUrl] = useState(null);
@@ -279,6 +287,56 @@ export default function Capture() {
     }
     loadExisting();
   }, [turnId, shots]);
+
+  // --- Fetch needs-fix notes (overall + per-photo) ---
+  useEffect(() => {
+    if (!turnId) return;
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const r = await fetch(`/api/turns/${turnId}/notes`);
+        if (!r.ok) return; // endpoint may not exist yet; silently ignore
+        const j = await r.json().catch(() => ({}));
+
+        // Accept several shapes
+        // A) { overall_note, items:[{path, note}] }
+        // B) { notes:{overall, items:[{path, note}]}}
+        // C) { photos:[{path, note}], overall?:string }
+        const overall =
+          j.overall_note ||
+          j?.notes?.overall ||
+          j.overall ||
+          '';
+
+        const list =
+          (Array.isArray(j.items) ? j.items :
+          Array.isArray(j?.notes?.items) ? j.notes.items :
+          Array.isArray(j.photos) ? j.photos :
+          []);
+
+        const byPath = {};
+        list.forEach(it => {
+          if (it?.path && (it.note || it.notes)) {
+            byPath[it.path] = it.note || it.notes;
+          }
+        });
+
+        if (!cancelled) {
+          setFixNotes({
+            byPath,
+            overall: String(overall || ''),
+            count: Object.keys(byPath).length
+          });
+        }
+      } catch {
+        // ignore
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [turnId]);
 
   // --- Sign storage paths to show thumbnails for existing uploads ---
   useEffect(() => {
@@ -531,6 +589,8 @@ export default function Capture() {
     ? Math.round((scanProgress.done / scanProgress.total) * 100)
     : null;
 
+  const hasFixes = fixNotes.count > 0;
+
   return (
     <ChromeDark title="Start Taking Photos">
       <section style={ui.sectionGrid}>
@@ -539,6 +599,36 @@ export default function Capture() {
           <h2 style={{ textAlign:'center', margin:'0 0 4px', color: ui.title?.color || '#fff', fontWeight:700 }}>
             {templateRules?.property || ''}
           </h2>
+
+          {/* Needs-fix banner (if any) */}
+          {hasFixes && !hideFixBanner && (
+            <div
+              style={{
+                marginTop: 10,
+                padding: '10px 12px',
+                border: '1px solid #d97706',
+                background: '#4a2f04',
+                color: '#fcd34d',
+                borderRadius: 10,
+              }}
+            >
+              <div style={{ fontWeight: 700, marginBottom: 4 }}>
+                {fixNotes.count} {fixNotes.count === 1 ? 'photo needs' : 'photos need'} fixes
+              </div>
+              {fixNotes.overall ? (
+                <div style={{ fontSize: 13, lineHeight: 1.35 }}>{fixNotes.overall}</div>
+              ) : null}
+              <div style={{ marginTop: 8 }}>
+                <button
+                  type="button"
+                  onClick={() => setHideFixBanner(true)}
+                  style={{ ...ui.btnSecondary, padding: '6px 10px' }}
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Tips */}
           <div style={{ ...ui.subtle, color:'#e5e7eb', marginTop: 12 }}>
@@ -612,10 +702,22 @@ export default function Capture() {
                       ensureThumb(f.url, setThumbByPath, requestedThumbsRef, signPath);
                     }
                     const thumb = f.preview || thumbByPath[f.url] || null;
+                    const note = fixNotes.byPath[f.url];
+                    const flagged = !!note;
 
                     return (
-                      <div key={f.url} style={{ border: ui.card.border, borderRadius:10, padding:10, background: '#0b1220' }}>
-                        <div style={{ marginBottom:8, height:160 }}>
+                      <div
+                        key={f.url}
+                        data-path={f.url}
+                        style={{
+                          border: flagged ? '1px solid #d97706' : ui.card.border,
+                          borderRadius:10,
+                          padding:10,
+                          background: '#0b1220',
+                          boxShadow: flagged ? '0 0 0 3px rgba(217,119,6,0.15)' : 'none'
+                        }}
+                      >
+                        <div style={{ position:'relative', marginBottom:8, height:160 }}>
                           {thumb ? (
                             <img
                               src={thumb}
@@ -632,6 +734,24 @@ export default function Capture() {
                               }}
                             />
                           )}
+
+                          {flagged && (
+                            <span
+                              style={{
+                                position:'absolute',
+                                top:8, left:8,
+                                background:'#4a2f04',
+                                color:'#fcd34d',
+                                border:'1px solid #d97706',
+                                borderRadius:999,
+                                fontSize:12,
+                                fontWeight:700,
+                                padding:'2px 8px'
+                              }}
+                            >
+                              Needs fix
+                            </span>
+                          )}
                         </div>
 
                         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:6 }}>
@@ -644,9 +764,27 @@ export default function Capture() {
                           </ThemedButton>
                         </div>
 
+                        {/* Per-photo manager note (if flagged) */}
+                        {flagged && (
+                          <div
+                            style={{
+                              marginTop:6,
+                              padding:'8px 10px',
+                              border:'1px dashed #d97706',
+                              background:'#3a2b10',
+                              color:'#fde68a',
+                              borderRadius:8,
+                              fontSize:13,
+                              whiteSpace:'pre-wrap'
+                            }}
+                          >
+                            {note}
+                          </div>
+                        )}
+
                         {/* AI flags under each photo */}
                         {Array.isArray(aiByPath[f.url]) && aiByPath[f.url].length > 0 && (
-                          <div>
+                          <div style={{ marginTop: flagged ? 8 : 0 }}>
                             {aiByPath[f.url].map((iss, idx) => (
                               <div key={idx} style={{ marginBottom:4 }}>
                                 <span style={sevPill(iss.severity)}>{(iss.severity || 'info').toUpperCase()}</span>
@@ -707,9 +845,21 @@ export default function Capture() {
                     ensureThumb(f.url, setThumbByPath, requestedThumbsRef, signPath);
                   }
                   const thumb = thumbByPath[f.url] || null;
+                  const note = fixNotes.byPath[f.url];
+                  const flagged = !!note;
+
                   return (
-                    <div key={f.url} style={{ border:'1px solid #334155', borderRadius:10, padding:10, background:'#0b1220' }}>
-                      <div style={{ marginBottom:8, height:160 }}>
+                    <div
+                      key={f.url}
+                      style={{
+                        border: flagged ? '1px solid #d97706' : '1px solid #334155',
+                        borderRadius:10,
+                        padding:10,
+                        background:'#0b1220',
+                        boxShadow: flagged ? '0 0 0 3px rgba(217,119,6,0.15)' : 'none'
+                      }}
+                    >
+                      <div style={{ position:'relative', marginBottom:8, height:160 }}>
                         {thumb ? (
                           <img
                             src={thumb}
@@ -726,14 +876,49 @@ export default function Capture() {
                             }}
                           />
                         )}
+                        {flagged && (
+                          <span
+                            style={{
+                              position:'absolute',
+                              top:8, left:8,
+                              background:'#4a2f04',
+                              color:'#fcd34d',
+                              border:'1px solid #d97706',
+                              borderRadius:999,
+                              fontSize:12,
+                              fontWeight:700,
+                              padding:'2px 8px'
+                            }}
+                          >
+                            Needs fix
+                          </span>
+                        )}
                       </div>
                       <div style={{ fontSize:13, marginBottom:6, color:'#e5e7eb' }}>
                         <b title={f.name}>{f.name}</b><br/>
                         {f.width && f.height ? `${f.width}×${f.height}` : null}
                       </div>
-                      <ThemedButton kind="secondary" onClick={() => viewPhoto(f.url)} ariaLabel={`View ${f.name}`}>
-                        👁️ View
-                      </ThemedButton>
+                      {flagged && (
+                        <div
+                          style={{
+                            marginTop:6,
+                            padding:'8px 10px',
+                            border:'1px dashed #d97706',
+                            background:'#3a2b10',
+                            color:'#fde68a',
+                            borderRadius:8,
+                            fontSize:13,
+                            whiteSpace:'pre-wrap'
+                          }}
+                        >
+                          {note}
+                        </div>
+                      )}
+                      <div style={{ marginTop:8 }}>
+                        <ThemedButton kind="secondary" onClick={() => viewPhoto(f.url)} ariaLabel={`View ${f.name}`}>
+                          👁️ View
+                        </ThemedButton>
+                      </div>
                     </div>
                   );
                 })}
