@@ -25,12 +25,11 @@ async function fetchPhotos(turnId) {
 }
 
 function badgeStyle(status) {
-  // Dark-theme friendly badges
   const map = {
-    approved:   { bg:'#064e3b', fg:'#86efac', bd:'#065f46' },  // green
-    submitted:  { bg:'#0b3b72', fg:'#93c5fd', bd:'#1d4ed8' },  // blue
-    needs_fix:  { bg:'#4a2f04', fg:'#fcd34d', bd:'#d97706' },  // amber
-    in_progress:{ bg:'#1f2937', fg:'#cbd5e1', bd:'#334155' }   // slate
+    approved:    { bg:'#064e3b', fg:'#86efac', bd:'#065f46' },  // green
+    submitted:   { bg:'#0b3b72', fg:'#93c5fd', bd:'#1d4ed8' },  // blue
+    needs_fix:   { bg:'#4a2f04', fg:'#fcd34d', bd:'#d97706' },  // amber
+    in_progress: { bg:'#1f2937', fg:'#cbd5e1', bd:'#334155' }   // slate
   };
   const c = map[status] || { bg:'#1f2937', fg:'#cbd5e1', bd:'#334155' };
   return {
@@ -59,8 +58,12 @@ export default function Review() {
   const [photos, setPhotos] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadErr, setLoadErr] = useState('');
+
+  // Manager notes (top-level summary) + per-photo selections/notes
   const [managerNote, setManagerNote] = useState('');
   const [acting, setActing] = useState(false);
+  const [notesByPath, setNotesByPath] = useState({});   // { [path]: string }
+  const [selectedPaths, setSelectedPaths] = useState(new Set()); // Set<string>
 
   // Cleaner “fix & resubmit” state
   const [cleanerReply, setCleanerReply] = useState('');
@@ -99,21 +102,83 @@ export default function Review() {
     return Array.from(set);
   }, [photos]);
 
-  async function mark(newStatus) {
+  // --- Helpers to toggle/check per-photo selection ---
+  function togglePath(path) {
+    setSelectedPaths(prev => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  }
+  function setNote(path, text) {
+    setNotesByPath(prev => ({ ...prev, [path]: text }));
+  }
+
+  // --- Old status update for Approve only (needs-fix uses the new per-photo route) ---
+  async function markApproved() {
     if (!turnId) return;
     setActing(true);
     try {
+      const ok = window.confirm('Approve this turn?');
+      if (!ok) return;
       const r = await fetch('/api/update-turn-status', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ turn_id: turnId, new_status: newStatus, manager_note: managerNote || '' })
+        body: JSON.stringify({ turn_id: turnId, new_status: 'approved', manager_note: managerNote || '' })
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error || 'update failed');
-      setStatus(newStatus);
-      alert(newStatus === 'approved' ? 'Turn approved ✅' : 'Marked Needs Fix. Cleaners will see this.');
+      setStatus('approved');
+      alert('Turn approved ✅');
     } catch (e) {
       alert(e.message || 'Could not update status.');
+    } finally {
+      setActing(false);
+    }
+  }
+
+  // --- New: send “needs fix” with per-photo notes + summary (also triggers SMS) ---
+  async function sendNeedsFix() {
+    if (!turnId) return;
+    setActing(true);
+    try {
+      // Build notes array:
+      // - include everything selected
+      // - also include any photo that has a non-empty note even if not selected
+      const selected = new Set(selectedPaths);
+      const payloadNotes = [];
+
+      photos.forEach(p => {
+        const path = p.path || '';
+        const note = (notesByPath[path] || '').trim();
+        if (selected.has(path) || note.length > 0) {
+          payloadNotes.push({ path, note });
+        }
+      });
+
+      if (payloadNotes.length === 0 && !managerNote.trim()) {
+        alert('Select at least one photo or add a summary note before sending “Needs fix”.');
+        setActing(false);
+        return;
+      }
+
+      const r = await fetch(`/api/turns/${turnId}/needs-fix`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          notes: payloadNotes,                 // [{ path, note }]
+          summary: managerNote?.trim() || null,
+          send_sms: true
+        })
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || 'Needs-fix failed');
+
+      setStatus('needs_fix');
+      alert('Marked Needs Fix. Cleaner notified via SMS.');
+    } catch (e) {
+      alert(e.message || 'Could not send needs-fix.');
     } finally {
       setActing(false);
     }
@@ -197,7 +262,7 @@ export default function Review() {
       setCleanerReply('');
       const ph = await fetchPhotos(turnId);
       setPhotos(ph);
-      setStatus('submitted'); // server sets it; mirror in UI immediately
+      setStatus('submitted'); // mirror server change
       alert('Submitted fixes for review ✅');
     } catch (e) {
       alert(e.message || 'Could not resubmit fixes.');
@@ -265,13 +330,13 @@ export default function Review() {
 
               <div style={{ marginTop:10 }}>
                 <div style={{ fontSize:12, fontWeight:700, color:'#9ca3af', marginBottom:6 }}>
-                  Optional note to cleaner (why needs fix / approval notes)
+                  Optional overall note to cleaner (summary)
                 </div>
                 <textarea
                   value={managerNote}
                   onChange={e=>setManagerNote(e.target.value)}
                   rows={3}
-                  placeholder="Short note the cleaner can see…"
+                  placeholder="Short summary the cleaner can see…"
                   style={{
                     ...ui.input,
                     width:'100%',
@@ -284,7 +349,7 @@ export default function Review() {
 
               <div style={{ display:'flex', gap:10, marginTop:12, flexWrap:'wrap' }}>
                 <button
-                  onClick={() => mark('needs_fix')}
+                  onClick={sendNeedsFix}
                   disabled={acting || !turnId}
                   style={{
                     ...ui.btnSecondary,
@@ -293,11 +358,11 @@ export default function Review() {
                     color:'#fcd34d'
                   }}
                 >
-                  {acting ? '…' : '🛠️ Needs Fix'}
+                  {acting ? '…' : '🛠️ Send Needs Fix (with notes)'}
                 </button>
 
                 <button
-                  onClick={() => { const ok = window.confirm('Approve this turn?'); if (ok) mark('approved'); }}
+                  onClick={markApproved}
                   disabled={acting || !turnId}
                   style={ui.btnPrimary}
                 >
@@ -320,27 +385,58 @@ export default function Review() {
             <div style={ui.muted}>No photos yet.</div>
           ) : (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px,1fr))', gap: 12, marginTop: 4 }}>
-              {photos.map(p => (
-                <div key={p.id} style={{ border: '1px solid #334155', borderRadius: 12, overflow: 'hidden', background:'#0b1220' }}>
-                  <a href={p.url} target="_blank" rel="noreferrer">
-                    <img
-                      src={p.url}
-                      alt={p.area_key || 'photo'}
-                      style={{ width: '100%', display: 'block', aspectRatio: '4/3', objectFit: 'cover' }}
-                    />
-                  </a>
-                  <div style={{ padding: 10, fontSize: 12 }}>
-                    <div><b>{p.area_key || '—'}</b></div>
-                    <div style={{ color: '#9ca3af' }}>{new Date(p.created_at).toLocaleString()}</div>
-                    <div style={{ color: '#64748b', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{p.path}</div>
+              {photos.map(p => {
+                const path = p.path || '';
+                const selected = selectedPaths.has(path);
+                const noteVal = notesByPath[path] || '';
+                return (
+                  <div key={p.id} style={{ border: '1px solid #334155', borderRadius: 12, overflow: 'hidden', background:'#0b1220' }}>
+                    <a href={p.url} target="_blank" rel="noreferrer">
+                      <img
+                        src={p.url}
+                        alt={p.area_key || 'photo'}
+                        style={{ width: '100%', display: 'block', aspectRatio: '4/3', objectFit: 'cover' }}
+                      />
+                    </a>
+                    <div style={{ padding: 10, fontSize: 12 }}>
+                      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:8 }}>
+                        <div><b>{p.area_key || '—'}</b></div>
+                        {isManagerMode && (
+                          <label style={{ display:'flex', alignItems:'center', gap:6, cursor:'pointer', userSelect:'none' }}>
+                            <input
+                              type="checkbox"
+                              checked={selected}
+                              onChange={() => togglePath(path)}
+                              style={{ transform:'scale(1.1)' }}
+                            />
+                            <span>Needs fix</span>
+                          </label>
+                        )}
+                      </div>
+                      <div style={{ color: '#9ca3af' }}>{new Date(p.created_at).toLocaleString()}</div>
+                      <div style={{ color: '#64748b', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{p.path}</div>
+
+                      {/* Per-photo note (manager only) */}
+                      {isManagerMode && (
+                        <div style={{ marginTop:8 }}>
+                          <textarea
+                            value={noteVal}
+                            onChange={e => setNote(path, e.target.value)}
+                            rows={2}
+                            placeholder="Note for this photo (optional)…"
+                            style={{ ...ui.input, width:'100%', padding:'8px 10px', resize:'vertical', background:'#0b1220' }}
+                          />
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
 
-        {/* Cleaner Fix & Resubmit (shown for cleaners when needs_fix OR anytime you want to let them add) */}
+        {/* Cleaner Fix & Resubmit */}
         {!isManagerMode && (
           <div style={ui.card}>
             <h3 style={{ marginTop:0 }}>Fix & resubmit</h3>
@@ -403,7 +499,6 @@ export default function Review() {
           </div>
         )}
 
-        {/* (Optional) Area quick filter in future */}
         {uniqueAreas.length > 1 && (
           <div style={{ ...ui.subtle }}>
             Areas in this turn: {uniqueAreas.join(' • ')}
