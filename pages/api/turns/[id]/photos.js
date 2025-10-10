@@ -1,9 +1,6 @@
 // pages/api/turns/[id]/photos.js
-// GET /api/turns/:id/photos  -> returns existing photos for a turn
-//
-// Normalized shape:
-// { items: [{ path, shot_id, area_key, width, height, filename }] }
-// Adds ?debug=1 to include meta about what paths were tried.
+// GET /api/turns/:id/photos[?debug=1]
+// Normalized shape: { items: [{ path, shot_id, area_key, width, height, filename }] }
 
 import { supabaseAdmin as _admin } from '@/lib/supabaseAdmin';
 
@@ -20,148 +17,120 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const debug = String(req.query.debug || '') === '1';
+  const debug = req.query.debug != null;
+  const meta = {
+    turn_id: null,
+    tried: [],
+    errors: [],
+    turn_photos_count: 0,
+    photos_count: 0,
+    sample_turn_photos_ids: [],
+    sample_photos_ids: [],
+    storage_bucket: null,
+    storage_hits: 0,
+    storage_like_pattern: null,
+  };
 
   try {
+    // --- normalize UUID from the dynamic route
     const id = (req.query.id || '').toString().trim();
     if (!id) return res.status(400).json({ error: 'missing id' });
+    meta.turn_id = id;
 
     const items = [];
-    const meta = {
-      turn_id: id,
-      tried: [],
-      turn_photos_count: 0,
-      photos_count: 0,
-      sample_turn_photos_ids: [],
-      sample_photos_ids: [],
-      storage_bucket: null,
-      storage_hits: 0,
-      storage_like_pattern: null,
-    };
 
-    // --- 1) Try the "turn_photos" table (newer)
+    // --- 1) turn_photos (defensive)
     meta.tried.push('turn_photos');
-    {
-      const { data, error } = await supa
-        .from('turn_photos')
-        .select('id, shot_id, area_key, storage_path, path, photo_path, url, width, height, created_at')
-        .eq('turn_id', id)
-        .order('created_at', { ascending: true });
+    try {
+      // First try * to avoid column-missing errors
+      let q = supa.from('turn_photos').select('*').eq('turn_id', id).order('created_at', { ascending: true });
+      let { data, error } = await q;
+      if (error) throw error;
 
-      if (!error && Array.isArray(data) && data.length) {
-        meta.turn_photos_count = data.length;
-        meta.sample_turn_photos_ids = data.slice(0, 3).map(r => r.id);
+      meta.turn_photos_count = (data || []).length;
+      meta.sample_turn_photos_ids = (data || []).slice(0, 3).map(r => r?.id);
+
+      if (Array.isArray(data) && data.length) {
         data.forEach(r => {
-          const path = pickPath(r);
-          if (!path) return;
+          const p = pickPath(r);
+          if (!p) return;
           items.push({
-            path,
+            path: p,
             shot_id: r.shot_id || null,
             area_key: r.area_key || null,
             width: r.width || null,
             height: r.height || null,
-            filename: (path.split('/').pop() || 'photo.jpg')
+            filename: (p.split('/').pop() || 'photo.jpg'),
           });
         });
       }
+    } catch (e) {
+      meta.errors.push({ where: 'turn_photos', message: e?.message || String(e) });
     }
 
-    // --- 2) If nothing found, try legacy "photos" table
+    // --- 2) legacy photos (only if still empty)
     if (items.length === 0) {
       meta.tried.push('photos');
-      const { data, error } = await supa
-        .from('photos')
-        .select('id, area_key, storage_path, path, photo_path, url, width, height, created_at')
-        .eq('turn_id', id)
-        .order('created_at', { ascending: true });
+      try {
+        let { data, error } = await supa
+          .from('photos')
+          .select('*')
+          .eq('turn_id', id)
+          .order('created_at', { ascending: true });
 
-      if (!error && Array.isArray(data) && data.length) {
-        meta.photos_count = data.length;
-        meta.sample_photos_ids = data.slice(0, 3).map(r => r.id);
-        data.forEach(r => {
-          const path = pickPath(r);
-          if (!path) return;
-          items.push({
-            path,
-            shot_id: null,
-            area_key: r.area_key || null,
-            width: r.width || null,
-            height: r.height || null,
-            filename: (path.split('/').pop() || 'photo.jpg')
+        if (error) throw error;
+
+        meta.photos_count = (data || []).length;
+        meta.sample_photos_ids = (data || []).slice(0, 3).map(r => r?.id);
+
+        if (Array.isArray(data) && data.length) {
+          data.forEach(r => {
+            const p = pickPath(r);
+            if (!p) return;
+            items.push({
+              path: p,
+              shot_id: r.shot_id || null, // legacy may not have a shot_id
+              area_key: r.area_key || null,
+              width: r.width || null,
+              height: r.height || null,
+              filename: (p.split('/').pop() || 'photo.jpg'),
+            });
           });
-        });
-      }
-    }
-
-    // --- 3) Storage fallback: query storage.objects when DB is empty
-    if (items.length === 0) {
-      meta.tried.push('storage.objects');
-
-      // Try likely bucket names. You can set NEXT_PUBLIC_SUPABASE_BUCKET to override.
-      const candidates = [
-        process.env.NEXT_PUBLIC_SUPABASE_BUCKET,
-        'photos',
-        'public',
-        'images',
-        'turns'
-      ].filter(Boolean);
-
-      // Two LIKE patterns: strict folder and lenient "contains id"
-      const likePatterns = [
-        `turns/${id}/%`, // common folder structure
-        `%${id}%`,       // fallback: anywhere in name
-      ];
-
-      let found = [];
-      let chosenBucket = null;
-      let chosenPattern = null;
-
-      for (const bucket of candidates) {
-        for (const patt of likePatterns) {
-          // Query storage.objects directly (service role can read it)
-          const { data, error } = await supa
-            .from('storage.objects')
-            .select('name, bucket_id, metadata, created_at')
-            .eq('bucket_id', bucket)
-            .like('name', patt)
-            .order('created_at', { ascending: true })
-            .limit(500);
-
-          if (!error && Array.isArray(data) && data.length) {
-            found = data;
-            chosenBucket = bucket;
-            chosenPattern = patt;
-            break;
-          }
         }
-        if (found.length) break;
-      }
-
-      meta.storage_bucket = chosenBucket;
-      meta.storage_like_pattern = chosenPattern;
-      meta.storage_hits = found.length;
-
-      if (found.length) {
-        found.forEach(obj => {
-          const path = obj.name; // e.g., "turns/<turnId>/.../filename.jpg"
-          items.push({
-            path,
-            shot_id: null,          // storage catalog doesn’t know this
-            area_key: null,
-            width: null,
-            height: null,
-            filename: (path.split('/').pop() || 'photo.jpg'),
-          });
-        });
+      } catch (e) {
+        meta.errors.push({ where: 'photos', message: e?.message || String(e) });
       }
     }
 
-    // Done
-    if (debug) {
-      return res.json({ items, meta });
+    // --- 3) Storage prefix probe (only when still empty + debug)
+    if (items.length === 0 && debug) {
+      try {
+        meta.tried.push('storage.objects');
+        // If you’re using a non-default bucket, set it in env; otherwise default
+        const bucket = process.env.NEXT_PUBLIC_TURNQA_BUCKET || 'turnqa';
+        meta.storage_bucket = bucket;
+
+        // Guess a common prefix
+        const prefix = `turns/${id}/`;
+        meta.storage_like_pattern = prefix + '%';
+
+        const { data: objs, error: sErr } = await supa.storage.from(bucket).list(`turns/${id}`, { limit: 100 });
+        if (!sErr && Array.isArray(objs)) {
+          meta.storage_hits = objs.length;
+          // NOTE: listing returns object names only; we still return empty items because
+          // we don’t know exact column mapping back to DB. This is just a sanity probe.
+        }
+      } catch (e) {
+        meta.errors.push({ where: 'storage', message: e?.message || String(e) });
+      }
     }
+
+    // Final response
+    if (debug) return res.json({ items, meta });
     return res.json({ items });
   } catch (e) {
-    return res.status(500).json({ error: e.message || 'failed to load turn photos' });
+    const payload = { error: e.message || 'failed to load turn photos' };
+    if (debug) payload.meta = meta;
+    return res.status(500).json(payload);
   }
 }
