@@ -165,6 +165,21 @@ export default function Capture() {
         preview: null,
       };
 
+      function ensureThumb(path, setThumbByPath, requestedThumbsRef, signPath) {
+  if (!path) return;
+  if (requestedThumbsRef.current.has(path)) return;
+  requestedThumbsRef.current.add(path);
+  signPath(path)
+    .then((url) => {
+      if (!url) return;
+      setThumbByPath((prev) => (prev[path] ? prev : { ...prev, [path]: url }));
+    })
+    .catch(() => {
+      // allow retry on next render if it failed
+      requestedThumbsRef.current.delete(path);
+    });
+}
+
       // Try in order: exact shot_id, area_key, label (all normalized)
       const tryShot  = byShotId.get(norm(it.shot_id));
       const tryArea  = byArea.get(norm(it.area_key));
@@ -589,30 +604,40 @@ export default function Capture() {
                 {/* File cards + placeholders */}
                 <div style={{ marginTop:10, display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(260px,1fr))', gap:16 }}>
                   {/* Existing uploads */}
-                  {files.map(f => (
-                    <div key={f.url} style={{ border: ui.card.border, borderRadius:10, padding:10, background: '#0b1220' }}>
-                      {/* Thumbnail (preview for new files; signed URL for existing) */}
-                      <div style={{ marginBottom:8, height:160 }}>
-                        {(() => {
-                          const thumb = f.preview || thumbByPath[f.url] || null;
-                          return thumb ? (
-                            <img
-                              src={thumb}
-                              alt={f.name}
-                              style={{ width:'100%', height:160, objectFit:'cover', borderRadius:8 }}
-                              draggable={false}
-                            />
-                          ) : (
-                            <div
-                              style={{
-                                width:'100%', height:160, borderRadius:8,
-                                background:'linear-gradient(90deg,#0f172a,#111827,#0f172a)',
-                                backgroundSize:'200% 100%'
-                              }}
-                            />
-                          );
-                        })()}
-                      </div>
+                  {files.map(f => {
+  // Kick off on-demand signing for any storage path that doesn't have a preview or cached signed URL yet
+  if (!f.preview && !thumbByPath[f.url]) {
+    ensureThumb(f.url, setThumbByPath, requestedThumbsRef, signPath);
+  }
+
+  return (
+    <div key={f.url} style={{ border: ui.card.border, borderRadius:10, padding:10, background: '#0b1220' }}>
+      <div style={{ marginBottom:8, height:160 }}>
+        {(() => {
+          const thumb = f.preview || thumbByPath[f.url] || null;
+          return thumb ? (
+            <img
+              src={thumb}
+              alt={f.name}
+              style={{ width:'100%', height:160, objectFit:'cover', borderRadius:8 }}
+              draggable={false}
+            />
+          ) : (
+            <div
+              style={{
+                width:'100%', height:160, borderRadius:8,
+                background:'linear-gradient(90deg,#0f172a,#111827,#0f172a)',
+                backgroundSize:'200% 100%'
+              }}
+            />
+          );
+        })()}
+      </div>
+      ...
+    </div>
+  );
+})}
+
 
                       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:6 }}>
                         <div style={{ fontSize:13, maxWidth:'70%' }}>
