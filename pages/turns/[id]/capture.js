@@ -318,15 +318,25 @@ useEffect(() => {
         []);
 
       const byPath = {};
-      list.forEach(it => {
-        const path =
-          it?.path || it?.storage_path || it?.photo_path || it?.url || null;
-        if (!path) return;
-        byPath[path] = {
-          note: it.note || it.notes || '',
-          needs_fix: !!(it.needs_fix ?? it.flagged ?? it.fix_needed),
-        };
-      });
+const byBase = {};
+list.forEach(it => {
+  const p = it?.path;
+  const n = it?.note || it?.notes || '';
+  if (!p || !n) return;
+  byPath[p] = n;
+  const base = p.split('/').pop()?.toLowerCase();
+  if (base) byBase[base] = n;
+});
+
+if (!cancelled) {
+  setFixNotes({
+    byPath,
+    byBase,               // NEW
+    overall: String(overall || ''),
+    count: Object.keys(byPath).length || Object.keys(byBase).length,
+  });
+}
+
 
       const count = Object.values(byPath).filter(v => v.needs_fix || v.note).length;
 
@@ -856,7 +866,9 @@ useEffect(() => {
                   const thumb = thumbByPath[f.url] || null;
                   const fx = fixNotes.byPath[f.url] || {};
                   const flagged = !!(fx.needs_fix || fx.note);
-                  const note = fx.note || '';
+                  const note = fixNotes.byPath[f.url];
+                  const flagged = !!note;
+
 
 
                   return (
