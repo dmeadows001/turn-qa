@@ -3,96 +3,171 @@ import { supabaseAdmin as _admin } from '@/lib/supabaseAdmin';
 
 const supa = typeof _admin === 'function' ? _admin() : _admin;
 
-// normalize any row from either table into a single item shape
-function toItem(row) {
-  const path =
-    row.path ||
-    row.storage_path ||
-    row.photo_path ||
-    row.url ||
-    row.file ||
-    null;
-
-  const filename =
-    row.filename ||
-    (typeof path === 'string' ? path.split('/').pop() : null) ||
-    null;
-
-  return {
-    id: row.id,
-    shot_id: row.shot_id || row.template_shot_id || null,
-    area_key: row.area_key || row.area || null,
-    path,
-    filename,
-    width: row.width || null,
-    height: row.height || null,
-    created_at: row.created_at || null,
-  };
+function filenameFromPath(p = '') {
+  const s = String(p || '');
+  return s.split('/').pop() || s;
 }
 
 export default async function handler(req, res) {
-  if (req.method !== 'GET') {
-    res.setHeader('Allow', ['GET']);
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
-
   try {
     const turnId = String(req.query.id || '').trim();
-    const debug = req.query.debug === '1' || req.query.debug === 'true';
-
+    const debug = String(req.query.debug || '') === '1';
     if (!turnId) return res.status(400).json({ error: 'missing id' });
 
-    // Try new table first
-    const items = [];
-    const tried = [];
+    const meta = { turn_id: turnId, tried: [], count: 0, debug };
 
-    tried.push('turn_photos');
-    const t1 = await supa
-      .from('turn_photos')
-      .select(
-        'id, turn_id, shot_id, area_key, storage_path, path, filename, width, height, created_at'
-      )
-      .eq('turn_id', turnId);
+    // ---------- 1) try turn_photos (new table) ----------
+    {
+      meta.tried.push('turn_photos');
+      const { data, error } = await supa
+        .from('turn_photos')
+        .select(
+          `
+          id,
+          turn_id,
+          shot_id,
+          area_key,
+          width,
+          height,
+          bytes,
+          filename,
+          path,
+          storage_path,
+          created_at
+        `
+        )
+        .eq('turn_id', turnId)
+        .order('created_at', { ascending: true });
 
-    if (!t1.error && Array.isArray(t1.data)) {
-      for (const row of t1.data) {
-        const it = toItem(row);
-        if (it.path) items.push(it);
+      if (error && debug) meta.error_turn_photos = error.message;
+
+      if (Array.isArray(data) && data.length) {
+        const items = data.map((r) => {
+          const path = r.path || r.storage_path || '';
+          return {
+            id: r.id,
+            shot_id: r.shot_id || null,
+            area_key: r.area_key || null,
+            width: r.width || null,
+            height: r.height || null,
+            bytes: r.bytes || null,
+            path,
+            filename: r.filename || filenameFromPath(path),
+            created_at: r.created_at,
+          };
+        });
+        meta.count = items.length;
+        return res.json({ items, meta });
       }
     }
 
-    // Fall back to legacy table if nothing found
-    if (items.length === 0) {
-      tried.push('photos');
-      const t2 = await supa
+    // ---------- 2) try photos (legacy table) ----------
+    {
+      meta.tried.push('photos');
+      const { data, error } = await supa
         .from('photos')
         .select(
-          'id, turn_id, shot_id, area_key, path, filename, width, height, created_at, url, file, photo_path, storage_path'
+          `
+          id,
+          turn_id,
+          shot_id,
+          area_key,
+          width,
+          height,
+          bytes,
+          filename,
+          path,
+          storage_path,
+          created_at
+        `
         )
-        .eq('turn_id', turnId);
+        .eq('turn_id', turnId)
+        .order('created_at', { ascending: true });
 
-      if (!t2.error && Array.isArray(t2.data)) {
-        for (const row of t2.data) {
-          const it = toItem(row);
-          if (it.path) items.push(it);
-        }
+      if (error && debug) meta.error_photos = error.message;
+
+      if (Array.isArray(data) && data.length) {
+        const items = data.map((r) => {
+          const path = r.path || r.storage_path || '';
+          return {
+            id: r.id,
+            shot_id: r.shot_id || null,
+            area_key: r.area_key || null,
+            width: r.width || null,
+            height: r.height || null,
+            bytes: r.bytes || null,
+            path,
+            filename: r.filename || filenameFromPath(path),
+            created_at: r.created_at,
+          };
+        });
+        meta.count = items.length;
+        return res.json({ items, meta });
       }
     }
 
-    // We *could* consider listing storage directly when DB is empty,
-    // but most flows insert DB rows on upload, so keep this simple/fast.
+    // ---------- 3) FINAL FALLBACK: list Supabase Storage ----------
+    // Looks inside bucket "turns" under "turns/<turnId>/*"
+    meta.tried.push('storage.objects');
+    const bucket = 'turns';
 
-    return res.json({
-      items,
-      meta: {
-        turn_id: turnId,
-        tried,
-        count: items.length,
-        debug,
-      },
+    // First list the immediate children of the turn folder (could be files or subfolders like shot ids)
+    const root = await supa.storage.from(bucket).list(`turns/${turnId}`, {
+      limit: 1000,
+      sortBy: { column: 'name', order: 'asc' },
     });
+
+    if (!root.error) {
+      const items = [];
+
+      // Helper to push file entries with full path
+      const pushFiles = (entries, prefix) => {
+        (entries || []).forEach((e) => {
+          if (e && e.name && e.id && !e.metadata?.isDirectory) {
+            const path = `${prefix}/${e.name}`;
+            items.push({
+              id: e.id,
+              shot_id: null,
+              area_key: null,
+              width: null,
+              height: null,
+              bytes: e.metadata?.size || null,
+              path,
+              filename: filenameFromPath(path),
+              created_at: e.created_at || null,
+            });
+          }
+        });
+      };
+
+      // Files directly under /turns/<turnId>
+      pushFiles(root.data?.filter((x) => x?.metadata && !x.metadata.isDirectory), `turns/${turnId}`);
+
+      // Recurse into any folders (shot_id folders)
+      const folders = (root.data || []).filter((x) => x && x.metadata?.isDirectory);
+      for (const fold of folders) {
+        const sub = await supa.storage.from(bucket).list(`turns/${turnId}/${fold.name}`, {
+          limit: 1000,
+          sortBy: { column: 'name', order: 'asc' },
+        });
+        if (!sub.error) {
+          pushFiles(sub.data, `turns/${turnId}/${fold.name}`);
+        }
+      }
+
+      if (items.length) {
+        meta.storage_bucket = bucket;
+        meta.storage_hits = items.length;
+        meta.count = items.length;
+        return res.json({ items, meta });
+      }
+    } else if (debug) {
+      meta.error_storage = root.error.message;
+    }
+
+    // Nothing found anywhere
+    return res.json({ items: [], meta });
   } catch (e) {
-    console.error('[api/turns/[id]/photos] error', e);
     return res.status(500).json({ error: e.message || 'list failed' });
   }
 }
