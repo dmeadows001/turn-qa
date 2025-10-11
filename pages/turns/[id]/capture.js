@@ -85,9 +85,10 @@ export default function Capture() {
 
   // Needs-fix notes (from manager)
   const [fixNotes, setFixNotes] = useState({
-    byPath: {},            // { [storagePath]: note }
-    overall: '',           // overall note text
-    count: 0,              // number of flagged photos
+  byPath: {},   // { [storagePath]: note }
+  byBase: {},   // { [basename]: note }  <-- NEW
+  overall: '',
+  count: 0,
   });
   const [hideFixBanner, setHideFixBanner] = useState(false);
 
