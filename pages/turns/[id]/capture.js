@@ -288,55 +288,61 @@ export default function Capture() {
     loadExisting();
   }, [turnId, shots]);
 
-  // --- Fetch needs-fix notes (overall + per-photo) ---
-  useEffect(() => {
-    if (!turnId) return;
+ // --- Fetch needs-fix notes (overall + per-photo) ---
+useEffect(() => {
+  if (!turnId) return;
 
-    let cancelled = false;
+  let cancelled = false;
 
-    (async () => {
-      try {
-        const r = await fetch(`/api/turns/${turnId}/notes`);
-        if (!r.ok) return; // endpoint may not exist yet; silently ignore
-        const j = await r.json().catch(() => ({}));
+  (async () => {
+    try {
+      const r = await fetch(`/api/turns/${turnId}/notes`);
+      if (!r.ok) return; // endpoint may not exist yet; silently ignore
+      const j = await r.json().catch(() => ({}));
 
-        // Accept several shapes
-        // A) { overall_note, items:[{path, note}] }
-        // B) { notes:{overall, items:[{path, note}]}}
-        // C) { photos:[{path, note}], overall?:string }
-        const overall =
-          j.overall_note ||
-          j?.notes?.overall ||
-          j.overall ||
-          '';
+      // Accept several shapes
+      // A) { overall_note, items:[{path, note, needs_fix}] }
+      // B) { notes:{overall, items:[{path, note, needs_fix}]}}
+      // C) { photos:[{path, note, needs_fix}], overall?:string }
+      const overall =
+        j.overall_note ||
+        j?.notes?.overall ||
+        j.overall ||
+        '';
 
-        const list =
-          (Array.isArray(j.items) ? j.items :
-          Array.isArray(j?.notes?.items) ? j.notes.items :
-          Array.isArray(j.photos) ? j.photos :
-          []);
+      const list =
+        (Array.isArray(j.items) ? j.items :
+        Array.isArray(j?.notes?.items) ? j.notes.items :
+        Array.isArray(j.photos) ? j.photos :
+        []);
 
-        const byPath = {};
-        list.forEach(it => {
-          if (it?.path && (it.note || it.notes)) {
-            byPath[it.path] = it.note || it.notes;
-          }
+      const byPath = {};
+      list.forEach(it => {
+        const path =
+          it?.path || it?.storage_path || it?.photo_path || it?.url || null;
+        if (!path) return;
+        byPath[path] = {
+          note: it.note || it.notes || '',
+          needs_fix: !!(it.needs_fix ?? it.flagged ?? it.fix_needed),
+        };
+      });
+
+      const count = Object.values(byPath).filter(v => v.needs_fix || v.note).length;
+
+      if (!cancelled) {
+        setFixNotes({
+          byPath,
+          overall: String(overall || ''),
+          count
         });
-
-        if (!cancelled) {
-          setFixNotes({
-            byPath,
-            overall: String(overall || ''),
-            count: Object.keys(byPath).length
-          });
-        }
-      } catch {
-        // ignore
       }
-    })();
+    } catch {
+      // ignore
+    }
+  })();
 
-    return () => { cancelled = true; };
-  }, [turnId]);
+  return () => { cancelled = true; };
+}, [turnId]);
 
   // --- Sign storage paths to show thumbnails for existing uploads ---
   useEffect(() => {
@@ -702,8 +708,10 @@ export default function Capture() {
                       ensureThumb(f.url, setThumbByPath, requestedThumbsRef, signPath);
                     }
                     const thumb = f.preview || thumbByPath[f.url] || null;
-                    const note = fixNotes.byPath[f.url];
-                    const flagged = !!note;
+                    const fx = fixNotes.byPath[f.url] || {};
+                    const flagged = !!(fx.needs_fix || fx.note);
+                    const note = fx.note || '';
+
 
                     return (
                       <div
@@ -845,8 +853,10 @@ export default function Capture() {
                     ensureThumb(f.url, setThumbByPath, requestedThumbsRef, signPath);
                   }
                   const thumb = thumbByPath[f.url] || null;
-                  const note = fixNotes.byPath[f.url];
-                  const flagged = !!note;
+                  const fx = fixNotes.byPath[f.url] || {};
+                  const flagged = !!(fx.needs_fix || fx.note);
+                  const note = fx.note || '';
+
 
                   return (
                     <div
