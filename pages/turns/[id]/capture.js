@@ -318,15 +318,15 @@ useEffect(() => {
         []);
 
       const byPath = {};
-const byBase = {};
-list.forEach(it => {
-  const p = it?.path;
-  const n = it?.note || it?.notes || '';
-  if (!p || !n) return;
-  byPath[p] = n;
-  const base = p.split('/').pop()?.toLowerCase();
-  if (base) byBase[base] = n;
-});
+      const byBase = {};
+      list.forEach(it => {
+        const p = it?.path;
+        const n = it?.note || it?.notes || '';
+        if (!p || !n) return;
+        byPath[p] = n;
+        const base = p.split('/').pop()?.toLowerCase();
+        if (base) byBase[base] = n;
+      });
 
 if (!cancelled) {
   setFixNotes({
@@ -719,9 +719,9 @@ if (!cancelled) {
                       ensureThumb(f.url, setThumbByPath, requestedThumbsRef, signPath);
                     }
                     const thumb = f.preview || thumbByPath[f.url] || null;
-                    const fx = fixNotes.byPath[f.url] || {};
-                    const flagged = !!(fx.needs_fix || fx.note);
-                    const note = fx.note || '';
+                    const base = (f.url || '').split('/').pop()?.toLowerCase();
+                    const note = fixNotes.byPath[f.url] || (base ? fixNotes.byBase[base] : undefined);
+                    const flagged = !!note;
 
 
                     return (
@@ -864,10 +864,10 @@ if (!cancelled) {
                     ensureThumb(f.url, setThumbByPath, requestedThumbsRef, signPath);
                   }
                   const thumb = thumbByPath[f.url] || null;
-                  const fx = fixNotes.byPath[f.url] || {};
-                  const flagged = !!(fx.needs_fix || fx.note);
-                  const note = fixNotes.byPath[f.url];
+                  const base = (f.url || '').split('/').pop()?.toLowerCase();
+                  const note = fixNotes.byPath[f.url] || (base ? fixNotes.byBase[base] : undefined);
                   const flagged = !!note;
+
 
 
 
