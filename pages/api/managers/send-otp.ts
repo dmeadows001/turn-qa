@@ -1,3 +1,4 @@
+// pages/api/managers/send-otp.ts
 import type { NextApiRequest, NextApiResponse } from 'next';
 import twilio from 'twilio';
 import { createClient } from '@supabase/supabase-js';
@@ -17,14 +18,14 @@ const isE164 = (p: string) => /^\+?[1-9]\d{6,14}$/.test(p);
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   console.log('[send-otp] hit', req.method, req.url);
 
-  // Allow preflight or stray GETs for debugging
   if (req.method === 'OPTIONS') {
-    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS, GET');
     res.setHeader('Access-Control-Allow-Headers', 'content-type');
     return res.status(200).json({ ok: true, method: 'OPTIONS' });
   }
   if (req.method === 'GET') {
-    return res.status(200).json({ ok: true, method: 'GET', ping: true });
+    // Debug ping so we can confirm the route is wired correctly in production
+    return res.status(200).json({ ok: true, ping: true, method: 'GET' });
   }
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method Not Allowed' });
@@ -33,8 +34,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     const { user_id, phone } = req.body as { user_id?: string; phone?: string };
     if (!user_id || !phone) return res.status(400).json({ error: 'user_id and phone required' });
-    if (!isE164(phone)) return res.status(400).json({ error: 'Invalid phone (use E.164, e.g. +16025551234)' });
+    if (!isE164(phone)) return res.status(400).json({ error: 'Invalid phone (use E.164)' });
 
+    // Rate-limit: 60s between sends
     const { data: last } = await supabase
       .from('manager_phone_verifications')
       .select('*')
