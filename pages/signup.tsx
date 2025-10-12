@@ -22,28 +22,32 @@ export default function Signup() {
     const supabase = supabaseBrowser();
 
     try {
-      // 1) create user
+      // 1) Create user
       const { data: signUpData, error: signUpErr } = await supabase.auth.signUp({ email, password });
       if (signUpErr) throw signUpErr;
+      const uid = signUpData?.user?.id;
 
-      // 2) If email confirmation is OFF, this will succeed immediately.
-      //    If it's ON, this may fail until the user confirms—either way we still redirect;
-      //    the verify page can hydrate client-side if SSR doesn't see the session yet.
+      // 2) Try to sign in (OK if this fails when email confirmation is ON)
       const { error: signInErr } = await supabase.auth.signInWithPassword({ email, password });
       if (signInErr) {
-        // Non-fatal for our flow; user may still have a session soon or after confirming email.
+        // Non-fatal: we'll still pass uid in the URL so onboarding can proceed
         console.warn('signInWithPassword error:', signInErr.message);
       }
 
-      // 2b) Nudge the session to be present before the next SSR hop
+      // 2b) Nudge session (helps when email confirmation is OFF)
       await supabase.auth.getSession();
       await new Promise((r) => setTimeout(r, 150));
 
-      // 3) seed / refresh 30-day trial profile (your existing endpoint)
+      // 3) Seed / refresh 30-day trial profile (your existing endpoint)
       try { await fetch('/api/ensure-profile', { method: 'POST' }); } catch {}
 
-      // 4) Route to phone verification step
-      window.location.href = '/onboard/manager/phone';
+      // 4) Route to phone verification, carrying uid explicitly
+      if (uid) {
+        window.location.href = `/onboard/manager/phone?uid=${encodeURIComponent(uid)}`;
+      } else {
+        // Fallback if uid somehow missing
+        window.location.href = '/onboard/manager/phone';
+      }
     } catch (e: any) {
       setMsg(e?.message || 'Sign-up failed');
     } finally {
