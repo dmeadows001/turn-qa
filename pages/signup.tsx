@@ -26,14 +26,23 @@ export default function Signup() {
       const { data: signUpData, error: signUpErr } = await supabase.auth.signUp({ email, password });
       if (signUpErr) throw signUpErr;
 
-      // 2) if email confirmation is OFF, signInWithPassword to ensure we have a session
+      // 2) If email confirmation is OFF, this will succeed immediately.
+      //    If it's ON, this may fail until the user confirms—either way we still redirect;
+      //    the verify page can hydrate client-side if SSR doesn't see the session yet.
       const { error: signInErr } = await supabase.auth.signInWithPassword({ email, password });
-      if (signInErr) throw signInErr;
+      if (signInErr) {
+        // Non-fatal for our flow; user may still have a session soon or after confirming email.
+        console.warn('signInWithPassword error:', signInErr.message);
+      }
+
+      // 2b) Nudge the session to be present before the next SSR hop
+      await supabase.auth.getSession();
+      await new Promise((r) => setTimeout(r, 150));
 
       // 3) seed / refresh 30-day trial profile (your existing endpoint)
       try { await fetch('/api/ensure-profile', { method: 'POST' }); } catch {}
 
-      // 4) NEW: go to post-signup phone verification (so managers can get SMS alerts)
+      // 4) Route to phone verification step
       window.location.href = '/onboard/manager/phone';
     } catch (e: any) {
       setMsg(e?.message || 'Sign-up failed');
