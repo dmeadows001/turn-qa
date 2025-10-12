@@ -1,30 +1,26 @@
 // pages/onboard/manager/phone.tsx
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import type { FormEvent } from 'react';
 import Header from '@/components/layout/Header';
 import Card from '@/components/ui/Card';
 import Input from '@/components/ui/Input';
 import { PrimaryButton } from '@/components/ui/Button';
-import { supabaseBrowser } from '@/lib/supabaseBrowser';
 
-type Phase = 'collect' | 'verify';
+import { createServerSupabaseClient } from '@supabase/auth-helpers-nextjs';
+import type { GetServerSidePropsContext, GetServerSidePropsResult } from 'next';
 
-export default function ManagerPhoneOnboard() {
-  const [phase, setPhase] = useState<Phase>('collect');
+type Props = {
+  userId: string;
+  alreadyVerified: boolean;
+};
+
+export default function ManagerPhoneOnboard({ userId, alreadyVerified }: Props) {
+  const [phase, setPhase] = useState<'collect' | 'verify'>('collect');
   const [phone, setPhone] = useState('');
   const [code, setCode] = useState('');
   const [consent, setConsent] = useState(true);
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [userId, setUserId] = useState<string | null>(null);
-
-  useEffect(() => {
-    const supabase = supabaseBrowser();
-    supabase.auth.getUser().then(({ data }) => {
-      const u = data?.user ?? null;
-      setUserId(u?.id ?? null);
-    });
-  }, []);
 
   async function sendCode(e?: FormEvent) {
     e?.preventDefault();
@@ -109,17 +105,9 @@ export default function ManagerPhoneOnboard() {
                   />
                   I agree to receive SMS alerts (STOP to opt out, HELP for help).
                 </label>
-
-                {/* changed: make this a submit button and disable until userId is ready */}
-                {!userId && (
-                  <p className="hint" style={{ fontSize: 12 }}>
-                    Loading your session…
-                  </p>
-                )}
                 <PrimaryButton type="submit" disabled={busy || !userId}>
                   {busy ? 'Sending…' : 'Send code'}
                 </PrimaryButton>
-
                 {msg && <p style={{ color: '#fda4af', fontSize: 14 }}>{msg}</p>}
               </form>
             )}
@@ -136,7 +124,6 @@ export default function ManagerPhoneOnboard() {
                   required
                 />
                 <div style={{ display: 'flex', gap: 12 }}>
-                  {/* changed: submit button and disabled until userId is ready */}
                   <PrimaryButton type="submit" disabled={busy || !userId}>
                     {busy ? 'Verifying…' : 'Verify & continue'}
                   </PrimaryButton>
@@ -157,4 +144,33 @@ export default function ManagerPhoneOnboard() {
       </main>
     </>
   );
+}
+
+/** Server-side: require auth and pass userId, optionally bounce verified users */
+export async function getServerSideProps(
+  ctx: GetServerSidePropsContext
+): Promise<GetServerSidePropsResult<Props>> {
+  const supabase = createServerSupabaseClient(ctx);
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return { redirect: { destination: '/login', permanent: false } };
+  }
+
+  // If manager already verified + consented, skip this page
+  const { data: mgr, error } = await supabase
+    .from('managers')
+    .select('phone, sms_consent, phone_verified_at')
+    .eq('user_id', user.id)
+    .single();
+
+  const alreadyVerified = !!(mgr?.phone && mgr?.sms_consent && mgr?.phone_verified_at);
+
+  if (alreadyVerified) {
+    return { redirect: { destination: '/dashboard', permanent: false } };
+  }
+
+  return { props: { userId: user.id, alreadyVerified } };
 }
