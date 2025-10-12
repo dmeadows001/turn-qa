@@ -26,14 +26,15 @@ export default function Signup() {
       const { data: signUpData, error: signUpErr } = await supabase.auth.signUp({ email, password });
       if (signUpErr) throw signUpErr;
 
-      // 2) if email confirmation is OFF, signInWithPassword to be sure we have a session
+      // 2) if email confirmation is OFF, signInWithPassword to ensure we have a session
       const { error: signInErr } = await supabase.auth.signInWithPassword({ email, password });
       if (signInErr) throw signInErr;
 
-      // 3) seed / refresh 30-day trial profile
+      // 3) seed / refresh 30-day trial profile (your existing endpoint)
       try { await fetch('/api/ensure-profile', { method: 'POST' }); } catch {}
 
-      window.location.href = '/dashboard';
+      // 4) NEW: go to post-signup phone verification (so managers can get SMS alerts)
+      window.location.href = '/onboard/manager/phone';
     } catch (e: any) {
       setMsg(e?.message || 'Sign-up failed');
     } finally {
