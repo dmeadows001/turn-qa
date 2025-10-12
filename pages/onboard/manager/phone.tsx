@@ -109,7 +109,17 @@ export default function ManagerPhoneOnboard() {
                   />
                   I agree to receive SMS alerts (STOP to opt out, HELP for help).
                 </label>
-                <PrimaryButton disabled={busy}>{busy ? 'Sending…' : 'Send code'}</PrimaryButton>
+
+                {/* changed: make this a submit button and disable until userId is ready */}
+                {!userId && (
+                  <p className="hint" style={{ fontSize: 12 }}>
+                    Loading your session…
+                  </p>
+                )}
+                <PrimaryButton type="submit" disabled={busy || !userId}>
+                  {busy ? 'Sending…' : 'Send code'}
+                </PrimaryButton>
+
                 {msg && <p style={{ color: '#fda4af', fontSize: 14 }}>{msg}</p>}
               </form>
             )}
@@ -126,13 +136,14 @@ export default function ManagerPhoneOnboard() {
                   required
                 />
                 <div style={{ display: 'flex', gap: 12 }}>
-                  <PrimaryButton disabled={busy}>
+                  {/* changed: submit button and disabled until userId is ready */}
+                  <PrimaryButton type="submit" disabled={busy || !userId}>
                     {busy ? 'Verifying…' : 'Verify & continue'}
                   </PrimaryButton>
                   <button
                     type="button"
                     onClick={() => sendCode()}
-                    disabled={busy}
+                    disabled={busy || !userId}
                     style={{ textDecoration: 'underline' }}
                   >
                     Resend code
