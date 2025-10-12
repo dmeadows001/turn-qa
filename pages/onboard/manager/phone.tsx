@@ -33,7 +33,7 @@ export default function ManagerPhoneOnboard() {
     setMsg(null);
 
     try {
-      const r = await fetch('/api/manager/send-otp', {
+      const r = await fetch('/api/managers/send-otp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ user_id: userId, phone }),
@@ -56,7 +56,7 @@ export default function ManagerPhoneOnboard() {
     setMsg(null);
 
     try {
-      const r = await fetch('/api/manager/verify-otp', {
+      const r = await fetch('/api/managers/verify-otp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ user_id: userId, code, consent }),
