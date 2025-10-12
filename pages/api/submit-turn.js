@@ -5,21 +5,25 @@ import { supabaseAdmin as _admin } from '@/lib/supabaseAdmin';
 const supa = typeof _admin === 'function' ? _admin() : _admin;
 
 function nowIso() { return new Date().toISOString(); }
+const E164 = /^\+?[1-9]\d{6,14}$/;
 
 // ---------- SMS helpers ----------
 function canSendSMS(rec) {
   if (!rec) return { ok: false, reason: 'no_recipient' };
-  if (!rec.phone) return { ok: false, reason: 'no_phone' };
+  if (!rec.phone || !E164.test(String(rec.phone))) return { ok: false, reason: 'invalid_phone' };
   if (rec.sms_consent !== true) return { ok: false, reason: 'no_consent' };
+  if (!rec.phone_verified_at) return { ok: false, reason: 'not_verified' };
   if (rec.sms_opt_out_at) return { ok: false, reason: 'opted_out' };
   return { ok: true };
 }
 
 async function twilioSend({ to, body }) {
+  if (process.env.DISABLE_SMS === '1') return { ok: true, sid: 'test-mode', testMode: true };
+
   const sid  = (process.env.TWILIO_ACCOUNT_SID || '').trim();
   const tok  = (process.env.TWILIO_AUTH_TOKEN || '').trim();
   const msid = (process.env.TWILIO_MESSAGING_SERVICE_SID || '').trim();
-  const from = (process.env.TWILIO_FROM_NUMBER || '').trim();
+  const from = (process.env.TWILIO_FROM || process.env.TWILIO_FROM_NUMBER || '').trim();
   if (!sid || !tok || (!msid && !from)) return { ok: false, reason: 'twilio_not_configured' };
 
   const { default: twilio } = await import('twilio');
@@ -49,10 +53,9 @@ function buildRows(turnId, photos) {
       if (!storagePath) return null;
       return {
         turn_id: turnId,
-        // We'll map this to whichever column your table actually has
         _path_value: storagePath,
         shot_id: p.shotId || p.shot_id || null,
-        area_key: p.area_key || '',  // optional
+        area_key: p.area_key || '',
         created_at: nowIso(),
       };
     })
@@ -65,17 +68,13 @@ async function tolerantInsertTurnPhotos(rows) {
   if (!rows.length) return { ok: true, tried: 0 };
 
   const shapes = [
-    // Most common in your schema (NOT NULL storage_path)
     r => ({ turn_id: r.turn_id, storage_path: r._path_value, shot_id: r.shot_id, area_key: r.area_key, created_at: r.created_at }),
-    // Our newer code path
     r => ({ turn_id: r.turn_id, path:          r._path_value, shot_id: r.shot_id, area_key: r.area_key, created_at: r.created_at }),
-    // Other common variations
     r => ({ turn_id: r.turn_id, photo_path:    r._path_value, shot_id: r.shot_id, area_key: r.area_key, created_at: r.created_at }),
     r => ({ turn_id: r.turn_id, url:           r._path_value, shot_id: r.shot_id, area_key: r.area_key, created_at: r.created_at }),
     r => ({ turn_id: r.turn_id, file:          r._path_value, shot_id: r.shot_id, area_key: r.area_key, created_at: r.created_at }),
-    // Minimal shape (if area/shot cols don't exist yet)
-    r => ({ turn_id: r.turn_id, storage_path: r._path_value }),
-    r => ({ turn_id: r.turn_id, path:         r._path_value }),
+    r => ({ turn_id: r.turn_id, storage_path:  r._path_value }),
+    r => ({ turn_id: r.turn_id, path:          r._path_value }),
   ];
 
   let lastErr = null;
@@ -86,7 +85,6 @@ async function tolerantInsertTurnPhotos(rows) {
     const payload = rows.map(make);
     const { error } = await supa.from('turn_photos').insert(payload, { returning: 'minimal' });
     if (!error) return { ok: true, tried };
-    // Only keep looping on column/constraint issues; otherwise bubble up
     const msg = (error.message || '').toLowerCase();
     if (!/column|does not exist|null value|constraint|invalid input|duplicate/i.test(msg)) {
       lastErr = error; break;
@@ -159,39 +157,44 @@ export default async function handler(req, res) {
             id,
             property_id,
             cleaner_id,
-            properties:property_id ( name, manager_id ),
-            cleaners:cleaner_id ( name, phone )
+            properties:property_id ( name, unit, manager_id, org_id ),
+            cleaners:cleaner_id ( full_name, phone )
           `)
           .eq('id', turnId)
           .maybeSingle();
 
-        const propertyName = info?.properties?.name || 'a property';
+        const propertyName = [info?.properties?.name, info?.properties?.unit].filter(Boolean).join(' · ') || 'a property';
         const cleanerPhone = info?.cleaners?.phone || '';
-        const cleanerName  = info?.cleaners?.name || '';
+        const cleanerName  = info?.cleaners?.full_name || '';
         const who = cleanerName || cleanerPhone || 'Cleaner';
 
-        // Find manager + consent flags
+        // Find property manager + consent flags
         const managerId = info?.properties?.manager_id;
         if (!managerId) return;
 
         const { data: mgr } = await supa
           .from('managers')
-          .select('id, name, phone, sms_consent, sms_opt_out_at')
+          .select('id, name, phone, sms_consent, sms_opt_out_at, phone_verified_at')
           .eq('id', managerId)
           .maybeSingle();
 
         const guard = canSendSMS(mgr);
         if (!guard.ok) return;
 
-        // Optional review link
+        // Review link for managers
         const base =
           process.env.APP_BASE_URL ||
           process.env.NEXT_PUBLIC_APP_BASE_URL ||
           process.env.NEXT_PUBLIC_SITE_URL ||
           'https://www.turnqa.com';
-        const link = `${base.replace(/\/+$/, '')}/turns/${turnId}`;
+        const link = `${base.replace(/\/+$/, '')}/manager/turns/${turnId}`;
 
-        const body = `TurnQA: ${who} submitted photos for "${propertyName}". Review: ${link}`;
+        const body =
+`Turn submitted: ${propertyName}
+${who} just finished a turn.
+Review: ${link}
+Reply STOP to opt out, HELP for help.`;
+
         await twilioSend({ to: mgr.phone, body });
       } catch (e) {
         console.warn('[submit-turn] notify manager failed', e);
