@@ -1,26 +1,37 @@
 // pages/onboard/manager/phone.tsx
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import Header from '@/components/layout/Header';
 import Card from '@/components/ui/Card';
 import Input from '@/components/ui/Input';
 import { PrimaryButton } from '@/components/ui/Button';
+import { supabaseBrowser } from '@/lib/supabaseBrowser';
 
 import { createServerSupabaseClient } from '@supabase/auth-helpers-nextjs';
 import type { GetServerSidePropsContext, GetServerSidePropsResult } from 'next';
 
 type Props = {
-  userId: string;
+  userId: string | null;         // can be null on first SSR after signup
   alreadyVerified: boolean;
 };
 
-export default function ManagerPhoneOnboard({ userId, alreadyVerified }: Props) {
+export default function ManagerPhoneOnboard({ userId: ssrUserId }: Props) {
   const [phase, setPhase] = useState<'collect' | 'verify'>('collect');
   const [phone, setPhone] = useState('');
   const [code, setCode] = useState('');
   const [consent, setConsent] = useState(true);
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [userId, setUserId] = useState<string | null>(ssrUserId ?? null);
+
+  // If SSR didn't have a session yet, pick it up on the client
+  useEffect(() => {
+    if (ssrUserId) return;
+    const supabase = supabaseBrowser();
+    supabase.auth.getUser().then(({ data }) => {
+      setUserId(data?.user?.id ?? null);
+    });
+  }, [ssrUserId]);
 
   async function sendCode(e?: FormEvent) {
     e?.preventDefault();
@@ -105,6 +116,11 @@ export default function ManagerPhoneOnboard({ userId, alreadyVerified }: Props) 
                   />
                   I agree to receive SMS alerts (STOP to opt out, HELP for help).
                 </label>
+                {!userId && (
+                  <p className="hint" style={{ fontSize: 12 }}>
+                    Loading your session…
+                  </p>
+                )}
                 <PrimaryButton type="submit" disabled={busy || !userId}>
                   {busy ? 'Sending…' : 'Send code'}
                 </PrimaryButton>
@@ -146,31 +162,29 @@ export default function ManagerPhoneOnboard({ userId, alreadyVerified }: Props) 
   );
 }
 
-/** Server-side: require auth and pass userId, optionally bounce verified users */
+/** Server-side: be tolerant—don't force /login if SSR can't see the session yet */
 export async function getServerSideProps(
   ctx: GetServerSidePropsContext
 ): Promise<GetServerSidePropsResult<Props>> {
   const supabase = createServerSupabaseClient(ctx);
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const { data: { user } } = await supabase.auth.getUser();
 
-  if (!user) {
-    return { redirect: { destination: '/login', permanent: false } };
+  if (user) {
+    // If already verified, skip this page
+    const { data: mgr } = await supabase
+      .from('managers')
+      .select('phone, sms_consent, phone_verified_at')
+      .eq('user_id', user.id)
+      .single();
+
+    const alreadyVerified = !!(mgr?.phone && mgr?.sms_consent && mgr?.phone_verified_at);
+    if (alreadyVerified) {
+      return { redirect: { destination: '/dashboard', permanent: false } };
+    }
+    // Have server-side session, proceed with userId
+    return { props: { userId: user.id, alreadyVerified: false } };
   }
 
-  // If manager already verified + consented, skip this page
-  const { data: mgr, error } = await supabase
-    .from('managers')
-    .select('phone, sms_consent, phone_verified_at')
-    .eq('user_id', user.id)
-    .single();
-
-  const alreadyVerified = !!(mgr?.phone && mgr?.sms_consent && mgr?.phone_verified_at);
-
-  if (alreadyVerified) {
-    return { redirect: { destination: '/dashboard', permanent: false } };
-  }
-
-  return { props: { userId: user.id, alreadyVerified } };
+  // No SSR session yet → render page; client will hydrate userId
+  return { props: { userId: null, alreadyVerified: false } };
 }
