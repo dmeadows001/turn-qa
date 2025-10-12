@@ -2,6 +2,8 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import twilio from 'twilio';
 import { createClient } from '@supabase/supabase-js';
 
+export const config = { api: { bodyParser: true } };
+
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_KEY! // service role
@@ -14,18 +16,25 @@ const client = twilio(
 
 const isE164 = (p: string) => /^\+?[1-9]\d{6,14}$/.test(p);
 
-// Always respond JSON so the client doesn't choke
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  try {
-    if (req.method !== 'POST') {
-      return res.status(405).json({ error: 'Method Not Allowed' });
-    }
+  // --- DEBUG: confirm we’re hitting THIS file in Vercel logs
+  console.log('[send-otp] hit', req.method, req.url);
 
+  if (req.method === 'GET') {
+    // TEMPORARY: ping endpoint to verify route is wired correctly
+    return res.status(200).json({ ok: true, ping: true, method: 'GET' });
+  }
+
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method Not Allowed' });
+  }
+
+  try {
     const { user_id, phone } = req.body as { user_id?: string; phone?: string };
     if (!user_id || !phone) return res.status(400).json({ error: 'user_id and phone required' });
     if (!isE164(phone)) return res.status(400).json({ error: 'Invalid phone (use E.164)' });
 
-    // Simple rate limit: minimum 60s between sends
+    // Simple rate limit: 60s between sends
     const { data: last } = await supabase
       .from('manager_phone_verifications')
       .select('*')
@@ -50,14 +59,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
     if (insErr) return res.status(500).json({ error: insErr.message });
 
-    const text = [
+    const body = [
       `TurnQA code: ${code}`,
       `Use within 10 minutes to verify your phone.`,
       `You’ll get texts when cleaners submit turns.`,
       `Reply STOP to opt out, HELP for help.`
     ].join('\n');
 
-    const payload: any = { to: phone, body: text };
+    const payload: any = { to: phone, body };
     if (process.env.TWILIO_MESSAGING_SERVICE_SID) payload.messagingServiceSid = process.env.TWILIO_MESSAGING_SERVICE_SID;
     else if (process.env.TWILIO_FROM) payload.from = process.env.TWILIO_FROM;
     else return res.status(500).json({ error: 'Twilio FROM or MESSAGING_SERVICE_SID is required' });
@@ -66,7 +75,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     return res.status(200).json({ ok: true });
   } catch (err: any) {
-    console.error('send-otp error', err);
+    console.error('[send-otp] error', err);
     return res.status(500).json({ error: 'Internal error' });
   }
 }
