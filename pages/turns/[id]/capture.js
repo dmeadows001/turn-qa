@@ -83,12 +83,11 @@ export default function Capture() {
   const [thumbByPath, setThumbByPath] = useState({});      // { [storagePath]: signedUrl }
   const requestedThumbsRef = useRef(new Set());            // to avoid duplicate signing
 
-  // Needs-fix notes (from manager)
+  // Needs-fix notes (from manager) — ALWAYS keep this shape
   const [fixNotes, setFixNotes] = useState({
-  byPath: {},   // { [storagePath]: note }
-  byBase: {},   // { [basename]: note }  <-- NEW
-  overall: '',
-  count: 0,
+    byPath: {},            // { [storagePath]: note }
+    overall: '',           // overall note text
+    count: 0,              // number of flagged photos
   });
   const [hideFixBanner, setHideFixBanner] = useState(false);
 
@@ -289,71 +288,55 @@ export default function Capture() {
     loadExisting();
   }, [turnId, shots]);
 
- // --- Fetch needs-fix notes (overall + per-photo) ---
-useEffect(() => {
-  if (!turnId) return;
+  // --- Fetch needs-fix notes (overall + per-photo) --- (DEFENSIVE)
+  useEffect(() => {
+    if (!turnId) return;
 
-  let cancelled = false;
+    let cancelled = false;
 
-  (async () => {
-    try {
-      const r = await fetch(`/api/turns/${turnId}/notes`);
-      if (!r.ok) return; // endpoint may not exist yet; silently ignore
-      const j = await r.json().catch(() => ({}));
+    (async () => {
+      try {
+        const r = await fetch(`/api/turns/${turnId}/notes`);
+        if (!r.ok) return; // endpoint may not exist yet; silently ignore
+        const j = await r.json().catch(() => ({}));
 
-      // Accept several shapes
-      // A) { overall_note, items:[{path, note, needs_fix}] }
-      // B) { notes:{overall, items:[{path, note, needs_fix}]}}
-      // C) { photos:[{path, note, needs_fix}], overall?:string }
-      const overall =
-        j.overall_note ||
-        j?.notes?.overall ||
-        j.overall ||
-        '';
+        // Accept several shapes
+        // A) { overall_note, items:[{path, note}] }
+        // B) { notes:{overall, items:[{path, note}]} }
+        // C) { photos:[{path, note}], overall?:string }
+        const overall =
+          j.overall_note ||
+          j?.notes?.overall ||
+          j.overall ||
+          '';
 
-      const list =
-        (Array.isArray(j.items) ? j.items :
-        Array.isArray(j?.notes?.items) ? j.notes.items :
-        Array.isArray(j.photos) ? j.photos :
-        []);
+        const list =
+          (Array.isArray(j.items) ? j.items :
+          Array.isArray(j?.notes?.items) ? j.notes.items :
+          Array.isArray(j.photos) ? j.photos :
+          []);
 
-      const byPath = {};
-      const byBase = {};
-      list.forEach(it => {
-        const p = it?.path;
-        const n = it?.note || it?.notes || '';
-        if (!p || !n) return;
-        byPath[p] = n;
-        const base = p.split('/').pop()?.toLowerCase();
-        if (base) byBase[base] = n;
-      });
-
-if (!cancelled) {
-  setFixNotes({
-    byPath,
-    byBase,               // NEW
-    overall: String(overall || ''),
-    count: Object.keys(byPath).length || Object.keys(byBase).length,
-  });
-}
-
-
-      const count = Object.values(byPath).filter(v => v.needs_fix || v.note).length;
-
-      if (!cancelled) {
-        setFixNotes({
-          byPath,
-          overall: String(overall || ''),
-          count
+        const byPath = {};
+        list.forEach(it => {
+          if (it?.path && (it.note || it.notes)) {
+            byPath[it.path] = it.note || it.notes;
+          }
         });
-      }
-    } catch {
-      // ignore
-    }
-  })();
 
-  return () => { cancelled = true; };
-}, [turnId]);
+        if (!cancelled) {
+          setFixNotes({
+            byPath,
+            overall: String(overall || ''),
+            count: Object.keys(byPath).length
+          });
+        }
+      } catch {
+        // ignore
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [turnId]);
 
   // --- Sign storage paths to show thumbnails for existing uploads ---
   useEffect(() => {
@@ -606,7 +589,7 @@ if (!cancelled) {
     ? Math.round((scanProgress.done / scanProgress.total) * 100)
     : null;
 
-  const hasFixes = fixNotes.count > 0;
+  const hasFixes = (fixNotes?.count || 0) > 0;
 
   return (
     <ChromeDark title="Start Taking Photos">
@@ -718,11 +701,12 @@ if (!cancelled) {
                     if (!f.preview && !thumbByPath[f.url]) {
                       ensureThumb(f.url, setThumbByPath, requestedThumbsRef, signPath);
                     }
-                    const thumb = f.preview || thumbByPath[f.url] || null;
-                    const base = (f.url || '').split('/').pop()?.toLowerCase();
-                    const note = fixNotes.byPath[f.url] || (base ? fixNotes.byBase[base] : undefined);
-                    const flagged = !!note;
+                    const thumb  = f.preview || thumbByPath[f.url] || null;
 
+                    // DEFENSIVE: read notes safely
+                    const byPath = fixNotes?.byPath || {};
+                    const note   = byPath[f.url];
+                    const flagged = !!note;
 
                     return (
                       <div
@@ -864,12 +848,10 @@ if (!cancelled) {
                     ensureThumb(f.url, setThumbByPath, requestedThumbsRef, signPath);
                   }
                   const thumb = thumbByPath[f.url] || null;
-                  const base = (f.url || '').split('/').pop()?.toLowerCase();
-                  const note = fixNotes.byPath[f.url] || (base ? fixNotes.byBase[base] : undefined);
+
+                  const byPath = fixNotes?.byPath || {};
+                  const note   = byPath[f.url];
                   const flagged = !!note;
-
-
-
 
                   return (
                     <div
