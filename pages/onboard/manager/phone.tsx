@@ -17,19 +17,27 @@ type Props = {
 
 export default function ManagerPhoneOnboard({ userId: ssrUserId }: Props) {
   const router = useRouter();
+
   // Prefer uid from query (set by signup), then SSR, then client auth
   const uidFromQuery = useMemo(() => {
+    if (!router.isReady) return null;
     const u = router.query.uid;
     return typeof u === 'string' && u.length > 0 ? u : null;
-  }, [router.query.uid]);
+  }, [router.isReady, router.query.uid]);
 
-  const [userId, setUserId] = useState<string | null>(uidFromQuery ?? ssrUserId ?? null);
+  const [userId, setUserId] = useState<string | null>(ssrUserId ?? null);
   const [phase, setPhase] = useState<'collect' | 'verify'>('collect');
   const [phone, setPhone] = useState('');
   const [code, setCode] = useState('');
   const [consent, setConsent] = useState(true);
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // If uid appears in the query, adopt it immediately
+  useEffect(() => {
+    if (uidFromQuery && uidFromQuery !== userId) setUserId(uidFromQuery);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [uidFromQuery]);
 
   // If neither query nor SSR provided a uid, hydrate from client auth
   useEffect(() => {
@@ -51,8 +59,10 @@ export default function ManagerPhoneOnboard({ userId: ssrUserId }: Props) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ user_id: userId, phone }),
       });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.error || 'Failed to send code');
+      let j: any = null;
+      try { j = await r.json(); } catch { /* non-JSON error body */ }
+      if (!r.ok) throw new Error(j?.error || `Request failed (${r.status})`);
+
       setPhase('verify');
       setMsg('Code sent. It expires in 10 minutes.');
     } catch (err: any) {
@@ -73,8 +83,10 @@ export default function ManagerPhoneOnboard({ userId: ssrUserId }: Props) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ user_id: userId, code, consent }),
       });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.error || 'Verification failed');
+      let j: any = null;
+      try { j = await r.json(); } catch { /* non-JSON error body */ }
+      if (!r.ok) throw new Error(j?.error || `Request failed (${r.status})`);
+
       window.location.href = '/dashboard';
     } catch (err: any) {
       setMsg(err.message || 'Verification failed');
