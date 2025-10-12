@@ -1,17 +1,29 @@
 // pages/onboard/manager/phone.tsx
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
+import { useRouter } from 'next/router';
 import Header from '@/components/layout/Header';
 import Card from '@/components/ui/Card';
 import Input from '@/components/ui/Input';
 import { PrimaryButton } from '@/components/ui/Button';
+import { supabaseBrowser } from '@/lib/supabaseBrowser';
 
 import { createServerSupabaseClient } from '@supabase/auth-helpers-nextjs';
 import type { GetServerSidePropsContext, GetServerSidePropsResult } from 'next';
 
-type Props = { alreadyVerified: boolean };
+type Props = {
+  userId: string | null; // may be null on first SSR
+};
 
-export default function ManagerPhoneOnboard(_props: Props) {
+export default function ManagerPhoneOnboard({ userId: ssrUserId }: Props) {
+  const router = useRouter();
+  // Prefer uid from query (set by signup), then SSR, then client auth
+  const uidFromQuery = useMemo(() => {
+    const u = router.query.uid;
+    return typeof u === 'string' && u.length > 0 ? u : null;
+  }, [router.query.uid]);
+
+  const [userId, setUserId] = useState<string | null>(uidFromQuery ?? ssrUserId ?? null);
   const [phase, setPhase] = useState<'collect' | 'verify'>('collect');
   const [phone, setPhone] = useState('');
   const [code, setCode] = useState('');
@@ -19,15 +31,25 @@ export default function ManagerPhoneOnboard(_props: Props) {
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // If neither query nor SSR provided a uid, hydrate from client auth
+  useEffect(() => {
+    if (userId) return;
+    const supabase = supabaseBrowser();
+    supabase.auth.getUser().then(({ data }) => {
+      setUserId(data?.user?.id ?? null);
+    });
+  }, [userId]);
+
   async function sendCode(e?: FormEvent) {
     e?.preventDefault();
+    if (!userId) return;
     setBusy(true);
     setMsg(null);
     try {
       const r = await fetch('/api/managers/send-otp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone }), // no user_id needed
+        body: JSON.stringify({ user_id: userId, phone }),
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || 'Failed to send code');
@@ -42,13 +64,14 @@ export default function ManagerPhoneOnboard(_props: Props) {
 
   async function verifyCode(e: FormEvent) {
     e.preventDefault();
+    if (!userId) return;
     setBusy(true);
     setMsg(null);
     try {
       const r = await fetch('/api/managers/verify-otp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code, consent }), // no user_id needed
+        body: JSON.stringify({ user_id: userId, code, consent }),
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || 'Verification failed');
@@ -100,7 +123,12 @@ export default function ManagerPhoneOnboard(_props: Props) {
                   />
                   I agree to receive SMS alerts (STOP to opt out, HELP for help).
                 </label>
-                <PrimaryButton type="submit" disabled={busy}>
+                {!userId && (
+                  <p className="hint" style={{ fontSize: 12 }}>
+                    Loading your session…
+                  </p>
+                )}
+                <PrimaryButton type="submit" disabled={busy || !userId}>
                   {busy ? 'Sending…' : 'Send code'}
                 </PrimaryButton>
                 {msg && <p style={{ color: '#fda4af', fontSize: 14 }}>{msg}</p>}
@@ -119,13 +147,13 @@ export default function ManagerPhoneOnboard(_props: Props) {
                   required
                 />
                 <div style={{ display: 'flex', gap: 12 }}>
-                  <PrimaryButton type="submit" disabled={busy}>
+                  <PrimaryButton type="submit" disabled={busy || !userId}>
                     {busy ? 'Verifying…' : 'Verify & continue'}
                   </PrimaryButton>
                   <button
                     type="button"
                     onClick={() => sendCode()}
-                    disabled={busy}
+                    disabled={busy || !userId}
                     style={{ textDecoration: 'underline' }}
                   >
                     Resend code
@@ -141,7 +169,7 @@ export default function ManagerPhoneOnboard(_props: Props) {
   );
 }
 
-/** Server-side: if we can see a session and the manager is already verified, go to dashboard. Otherwise just render. */
+/** Server-side: tolerate missing SSR session; client or query will supply uid */
 export async function getServerSideProps(
   ctx: GetServerSidePropsContext
 ): Promise<GetServerSidePropsResult<Props>> {
@@ -149,6 +177,7 @@ export async function getServerSideProps(
   const { data: { user } } = await supabase.auth.getUser();
 
   if (user) {
+    // If already verified + consented, skip this page
     const { data: mgr } = await supabase
       .from('managers')
       .select('phone, sms_consent, phone_verified_at')
@@ -159,7 +188,9 @@ export async function getServerSideProps(
     if (alreadyVerified) {
       return { redirect: { destination: '/dashboard', permanent: false } };
     }
+    return { props: { userId: user.id } };
   }
 
-  return { props: { alreadyVerified: false } };
+  // No SSR session yet → proceed; uid will arrive via query or client
+  return { props: { userId: null } };
 }
