@@ -1,54 +1,19 @@
 // pages/dashboard.tsx
-import type { GetServerSidePropsContext, GetServerSidePropsResult } from 'next';
-import { createServerSupabaseClient } from '@supabase/auth-helpers-nextjs';
-
 import type { GetServerSideProps } from 'next';
 import { requireManagerPhoneVerified } from '@/lib/guards';
 
-type Props = Record<string, never>;
-
 export const getServerSideProps: GetServerSideProps = async (ctx) => {
   const gate = await requireManagerPhoneVerified(ctx);
-  if ('redirect' in gate) return gate;
+  if ('redirect' in gate) return gate; // bounce to phone onboarding if not verified
   return { props: {} };
 };
 
 export default function Dashboard() {
-  return <div>…</div>;
-}
-
-export default function Dashboard(_props: Props) {
-  // Your existing dashboard UI goes here
-  return <div className="p-6">Dashboard</div>;
-}
-
-export async function getServerSideProps(
-  ctx: GetServerSidePropsContext
-): Promise<GetServerSidePropsResult<Props>> {
-  const supabase = createServerSupabaseClient(ctx);
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  // Not signed in → go to login
-  if (!user) {
-    return { redirect: { destination: '/login', permanent: false } };
-  }
-
-  // Require verified + consented phone before accessing dashboard
-  const { data: mgr, error } = await supabase
-    .from('managers')
-    .select('phone, sms_consent, phone_verified_at')
-    .eq('user_id', user.id)
-    .single();
-
-  const verified = !!(mgr?.phone && mgr?.sms_consent && mgr?.phone_verified_at);
-
-  // If there’s no managers row yet or not verified, send to the verify step
-  if (error || !verified) {
-    return { redirect: { destination: '/onboard/manager/phone', permanent: false } };
-  }
-
-  return { props: {} };
+  // ...your existing dashboard UI here. Keeping a minimal placeholder:
+  return (
+    <main style={{ padding: 24 }}>
+      <h1>Dashboard</h1>
+      <p>Manager is verified ✅</p>
+    </main>
+  );
 }
