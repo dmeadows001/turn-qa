@@ -2,7 +2,20 @@
 import type { GetServerSidePropsContext, GetServerSidePropsResult } from 'next';
 import { createServerSupabaseClient } from '@supabase/auth-helpers-nextjs';
 
+import type { GetServerSideProps } from 'next';
+import { requireManagerPhoneVerified } from '@/lib/guards';
+
 type Props = Record<string, never>;
+
+export const getServerSideProps: GetServerSideProps = async (ctx) => {
+  const gate = await requireManagerPhoneVerified(ctx);
+  if ('redirect' in gate) return gate;
+  return { props: {} };
+};
+
+export default function Dashboard() {
+  return <div>…</div>;
+}
 
 export default function Dashboard(_props: Props) {
   // Your existing dashboard UI goes here
