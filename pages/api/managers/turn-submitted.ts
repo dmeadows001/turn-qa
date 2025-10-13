@@ -5,109 +5,157 @@ import { createClient } from '@supabase/supabase-js';
 
 export const config = { api: { bodyParser: true } };
 
+type ManagerRow = {
+  id: string;
+  name?: string | null;
+  phone_e164?: string | null; // e.g. +18775551212
+  sms_consent?: boolean | null;
+};
+
+type PropertyRow = {
+  id: string;
+  name?: string | null;
+  manager_id?: string | null;
+};
+
+type TurnBase = {
+  id: string;
+  property_id: string;
+  submitted_at?: string | null;
+};
+
+type TurnFromView = TurnBase & {
+  // Optional/extra fields that might exist on a view:
+  score?: number | null;
+};
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
+  const { turn_id } = (req.body || {}) as { turn_id?: string };
+  if (!turn_id) return res.status(400).json({ error: 'turn_id required' });
+
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+  const serviceKey = (process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY)!;
+
+  if (!supabaseUrl || !serviceKey) {
+    return res.status(500).json({ error: 'Supabase service role env vars missing' });
+  }
+
+  const twilioSid = process.env.TWILIO_ACCOUNT_SID;
+  const twilioAuth = process.env.TWILIO_AUTH_TOKEN;
+  const msgServiceSid = process.env.TWILIO_MESSAGING_SERVICE_SID;
+  const fromNumber = process.env.TWILIO_FROM;
+
+  if (!twilioSid || !twilioAuth || (!msgServiceSid && !fromNumber)) {
+    return res.status(500).json({ error: 'Twilio env vars missing (ACCOUNT_SID/AUTH_TOKEN and MESSAGING_SERVICE_SID or FROM)' });
+  }
+
+  const supabase = createClient(supabaseUrl, serviceKey);
+  const client = twilio(twilioSid, twilioAuth);
+
   try {
-    const { turn_id } = req.body as { turn_id?: string };
-    if (!turn_id) return res.status(400).json({ error: 'turn_id required' });
+    // 1) Try to pull the turn from a view FIRST (so we can include score if it exists).
+    let turn: TurnFromView | null = null;
 
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-    const serviceKey  = (process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY)!;
-    if (!supabaseUrl || !serviceKey) return res.status(500).json({ error: 'Supabase service env vars missing' });
+    // Attempt turns_view with nested property
+    {
+      const { data, error } = await supabase
+        .from('turns_view') // may or may not exist in some setups
+        .select('id, property_id, submitted_at, score')
+        .eq('id', turn_id)
+        .maybeSingle();
 
-    const supabase = createClient(supabaseUrl, serviceKey);
+      if (error) {
+        // If it's a 42P01-ish error (relation not found) or any error, we’ll fall back to the base table.
+        // PostgREST wraps errors differently; either way we’ll just try the base table next.
+      } else if (data) {
+        turn = data as TurnFromView;
+      }
+    }
 
-    // 1) Fetch the turn (only existing columns)
-    const { data: turn, error: turnErr } = await supabase
-      .from('turns')
-      .select('id, created_at, property_id, cleaner_id')   // ← no score here
-      .eq('id', turn_id)
-      .maybeSingle();
+    // Fallback: base table
+    if (!turn) {
+      const { data, error } = await supabase
+        .from('turns')
+        .select('id, property_id, submitted_at')
+        .eq('id', turn_id)
+        .maybeSingle();
 
-    if (turnErr) return res.status(500).json({ error: `turn query failed: ${turnErr.message}` });
-    if (!turn)  return res.status(404).json({ error: 'Turn not found' });
+      if (error) {
+        return res.status(500).json({ error: 'Error fetching turn from base table', details: error.message });
+      }
+      if (!data) return res.status(404).json({ error: 'Turn not found' });
+      turn = data as TurnFromView;
+    }
 
-    // 2) Property (manager link)
+    // 2) Fetch property -> manager
     const { data: property, error: propErr } = await supabase
       .from('properties')
-      .select('id, name, unit, manager_id, org_id')
+      .select('id, name, manager_id')
       .eq('id', turn.property_id)
       .maybeSingle();
 
-    if (propErr) return res.status(500).json({ error: `property query failed: ${propErr.message}` });
-    if (!property) return res.status(404).json({ error: 'Property not found' });
+    if (propErr) {
+      return res.status(500).json({ error: 'Error fetching property', details: propErr.message });
+    }
+    if (!property) return res.status(404).json({ error: 'Property not found for turn' });
 
-    // 3) Cleaner name (best effort)
-    let cleanerName = 'Cleaner';
-    if (turn.cleaner_id) {
-      const { data: cleaner } = await supabase
-        .from('cleaners')
-        .select('full_name')
-        .eq('id', turn.cleaner_id)
-        .maybeSingle();
-      if (cleaner?.full_name) cleanerName = cleaner.full_name;
+    if (!property.manager_id) {
+      // Your schema says properties.manager_id exists; if null, we can’t notify anyone.
+      return res.status(409).json({ error: 'Property has no manager_id; cannot send SMS' });
     }
 
-    // 4) Manager recipients
-    const { data: managers, error: mgrErr } = await supabase
+    // IMPORTANT: earlier you saw "public.property_managers" not found;
+    // most setups use a single "managers" table. Adjust the name if yours differs.
+    const { data: manager, error: mgrErr } = await supabase
       .from('managers')
-      .select('id, name, phone, sms_consent, phone_verified_at')
+      .select('id, name, phone_e164, sms_consent')
       .eq('id', property.manager_id)
-      .eq('sms_consent', true);
+      .maybeSingle();
 
-    if (mgrErr) return res.status(500).json({ error: mgrErr.message });
+    if (mgrErr) {
+      return res.status(500).json({ error: 'Error fetching manager', details: mgrErr.message });
+    }
+    if (!manager) return res.status(404).json({ error: 'Manager not found for property.manager_id' });
 
-    const recipients = (managers || [])
-      .map(m => (m?.phone_verified_at && m?.phone ? String(m.phone) : null))
-      .filter(Boolean) as string[];
-
-    if (!recipients.length) {
-      return res.status(200).json({
-        ok: true,
-        sent: 0,
-        reason: 'no eligible recipients',
-        debug: { property_manager_id: property.manager_id }
-      });
+    if (!manager.phone_e164) {
+      return res.status(409).json({ error: 'Manager has no phone number on file (phone_e164)' });
+    }
+    if (manager.sms_consent === false) {
+      // Don’t send if they opted out.
+      return res.status(200).json({ ok: true, message: 'Manager has not consented to SMS; skipping send.' });
     }
 
-    // 5) Message
-    const time = new Date(turn.created_at).toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' });
-    const propName = [property?.name, property?.unit].filter(Boolean).join(' · ');
-    const site = process.env.NEXT_PUBLIC_SITE_URL || 'https://www.turnqa.com';
-    const viewUrl = `${site}/manager/turns/${turn.id}`;
-    const body =
-`Turn submitted: ${propName}
-${cleanerName} at ${time}.
-View: ${viewUrl}
-Reply STOP to opt out, HELP for help.`;
+    // 3) Build the SMS body (score is optional)
+    const propName = (property as PropertyRow).name || 'Your property';
+    const shortId = turn.id.slice(0, 8);
+    const scorePart = typeof turn.score === 'number' ? ` — score: ${turn.score}` : '';
+    const reviewUrl = `https://turnqa.com/turns/${turn.id}/review?manager=1`;
 
-    // Test bypass
-    if (process.env.DISABLE_SMS === '1') {
-      return res.status(200).json({ ok: true, testMode: true, to: recipients, message: body });
+    const body = `Turn ${shortId} submitted for ${propName}${scorePart}. Review: ${reviewUrl}`;
+
+    // 4) Send the SMS
+    const msgPayload: twilio.Twilio.MessageListInstanceCreateOptions = {
+      to: manager.phone_e164!,
+      body,
+    };
+    if (msgServiceSid) {
+      msgPayload.messagingServiceSid = msgServiceSid;
+    } else if (fromNumber) {
+      msgPayload.from = fromNumber;
     }
 
-    // 6) Twilio send (FROM fix: use TWILIO_FROM_NUMBER)
-    const sid   = process.env.TWILIO_ACCOUNT_SID;
-    const token = process.env.TWILIO_AUTH_TOKEN;
-    const mss   = process.env.TWILIO_MESSAGING_SERVICE_SID;
-    const from  = process.env.TWILIO_FROM_NUMBER; // ← correct env name
-    if (!sid || !token || (!mss && !from)) {
-      return res.status(500).json({
-        error: 'Twilio env vars missing (ACCOUNT_SID, AUTH_TOKEN, and FROM_NUMBER or MESSAGING_SERVICE_SID)',
-        debug: { has_FROM_NUMBER: !!from, has_MSS: !!mss }
-      });
-    }
+    const twResp = await client.messages.create(msgPayload);
 
-    const client = twilio(sid, token);
-    const unique = [...new Set(recipients)];
-    await Promise.all(
-      unique.map((to) => client.messages.create(mss ? { to, body, messagingServiceSid: mss } : { to, body, from }))
-    );
-
-    return res.status(200).json({ ok: true, sent: unique.length, to: unique.length });
+    return res.status(200).json({
+      ok: true,
+      sid: twResp.sid,
+      to: manager.phone_e164,
+      used: msgServiceSid ? 'MESSAGING_SERVICE_SID' : 'FROM',
+      preview: body,
+    });
   } catch (err: any) {
-    console.error('[turn-submitted] error', err);
-    return res.status(500).json({ error: 'Internal error' });
+    return res.status(500).json({ error: 'Unhandled error in turn-submitted API', details: err?.message || String(err) });
   }
 }
