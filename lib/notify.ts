@@ -2,13 +2,19 @@
 import { createClient } from '@supabase/supabase-js';
 
 const E164 = /^\+[1-9]\d{6,14}$/;
-function canSend(rec?: { phone?: string | null; sms_consent?: boolean | null; sms_opt_out_at?: string | null; phone_verified_at?: string | null; }) {
-  if (!rec) return { ok: false, reason: 'no_rec' };
-  if (!rec.phone || !E164.test(rec.phone)) return { ok: false, reason: 'no_phone' };
-  if (rec.sms_consent !== true) return { ok: false, reason: 'no_consent' };
-  if (!rec.phone_verified_at) return { ok: false, reason: 'not_verified' };
-  if (rec.sms_opt_out_at) return { ok: false, reason: 'opted_out' };
-  return { ok: true };
+
+function canSend(rec?: {
+  phone?: string | null;
+  sms_consent?: boolean | null;
+  sms_opt_out_at?: string | null;
+  phone_verified_at?: string | null;
+}) {
+  if (!rec) return { ok: false, reason: 'no_rec' as const };
+  if (!rec.phone || !E164.test(rec.phone)) return { ok: false, reason: 'no_phone' as const };
+  if (rec.sms_consent !== true) return { ok: false, reason: 'no_consent' as const };
+  if (!rec.phone_verified_at) return { ok: false, reason: 'not_verified' as const };
+  if (rec.sms_opt_out_at) return { ok: false, reason: 'opted_out' as const };
+  return { ok: true as const };
 }
 
 async function twilioSend(to: string, body: string) {
@@ -18,7 +24,7 @@ async function twilioSend(to: string, body: string) {
   const from = (process.env.TWILIO_FROM_NUMBER || '').trim();
 
   if (process.env.DISABLE_SMS === '1') return { ok: true, testMode: true };
-  if (!sid || !tok || (!mss && !from)) return { ok: false, reason: 'twilio_not_configured' };
+  if (!sid || !tok || (!mss && !from)) return { ok: false as const, reason: 'twilio_not_configured' as const };
 
   const { default: twilio } = await import('twilio');
   const client = twilio(sid, tok);
@@ -37,17 +43,17 @@ function siteBase() {
   return (process.env.APP_BASE_URL ||
           process.env.NEXT_PUBLIC_APP_BASE_URL ||
           process.env.NEXT_PUBLIC_SITE_URL ||
-          'https://www.turnqa.com').replace(/\/+$/,'');
+          'https://www.turnqa.com').replace(/\/+$/, '');
 }
 
-/** Helper: unwrap a possible array relation into a single object */
+/** Unwraps possible array relation into single object */
 function firstOrNull<T>(x: T | T[] | null | undefined): T | null {
-  if (!x) return null as any;
-  return Array.isArray(x) ? (x[0] ?? null) : x;
+  if (!x) return null;
+  return Array.isArray(x) ? (x[0] ?? null) : (x as T);
 }
 
 /** Notify the property's manager that the turn has a new submission. */
-export async function notifyManagerForTurn(turnId: string, kind: 'initial'|'fix') {
+export async function notifyManagerForTurn(turnId: string, kind: 'initial' | 'fix') {
   const supa = supaAdmin();
 
   const { data: info, error } = await supa
@@ -60,11 +66,11 @@ export async function notifyManagerForTurn(turnId: string, kind: 'initial'|'fix'
     .eq('id', turnId)
     .maybeSingle();
 
-  if (error || !info) return { sent: 0, reason: 'turn_not_found' };
+  if (error || !info) return { sent: 0, reason: 'turn_not_found' as const };
 
   // unwrap relations that might arrive as arrays
-  const prop = firstOrNull(info as any?.properties);
-  const cleaner = firstOrNull(info as any?.cleaners);
+  const prop    = firstOrNull<any>((info as any)?.properties);
+  const cleaner = firstOrNull<any>((info as any)?.cleaners);
 
   // choose manager
   let managerId: string | null = prop?.manager_id ?? null;
@@ -80,7 +86,7 @@ export async function notifyManagerForTurn(turnId: string, kind: 'initial'|'fix'
       .maybeSingle();
     managerId = cand?.id ?? null;
   }
-  if (!managerId) return { sent: 0, reason: 'no_manager' };
+  if (!managerId) return { sent: 0, reason: 'no_manager' as const };
 
   const { data: mgr } = await supa
     .from('managers')
@@ -100,8 +106,8 @@ export async function notifyManagerForTurn(turnId: string, kind: 'initial'|'fix'
 Review: ${link}
 Reply STOP to opt out, HELP for help.`;
 
-  const sent = await twilioSend(String(mgr?.phone));
-  if (!sent.ok) return { sent: 0, reason: sent.reason || 'send_failed', body };
+  const sent = await twilioSend(String(mgr?.phone), body);
+  if (!sent.ok) return { sent: 0, reason: (sent as any).reason || 'send_failed', body };
   return { sent: 1, to: [mgr?.phone], body, testMode: !!(sent as any).testMode };
 }
 
@@ -118,10 +124,10 @@ export async function notifyCleanerForTurn(turnId: string, message: string) {
     .eq('id', turnId)
     .maybeSingle();
 
-  if (!info) return { sent: 0, reason: 'turn_not_found' };
+  if (!info) return { sent: 0, reason: 'turn_not_found' as const };
 
-  const prop = firstOrNull(info as any?.properties);
-  const cleaner = firstOrNull(info as any?.cleaners);
+  const prop    = firstOrNull<any>((info as any)?.properties);
+  const cleaner = firstOrNull<any>((info as any)?.cleaners);
 
   const guard = canSend(cleaner as any);
   if (!guard.ok) return { sent: 0, reason: guard.reason };
@@ -133,7 +139,7 @@ Property: ${prop?.name || 'your recent turn'}
 Submit fixes: ${link}
 Reply STOP to opt out, HELP for help.`;
 
-  const sent = await twilioSend(String((cleaner as any)?.phone));
-  if (!sent.ok) return { sent: 0, reason: sent.reason || 'send_failed', body };
+  const sent = await twilioSend(String((cleaner as any)?.phone), body);
+  if (!sent.ok) return { sent: 0, reason: (sent as any).reason || 'send_failed', body };
   return { sent: 1, to: [ (cleaner as any)?.phone ], body, testMode: !!(sent as any).testMode };
 }
