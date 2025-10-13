@@ -66,7 +66,8 @@ function ThemedButton({ children, onClick, disabled=false, loading=false, kind='
 
 export default function Capture() {
   const { query } = useRouter();
-  const turnId = query.id;
+  const turnId = typeof query.id === 'string' ? query.id : '';
+  const tab = typeof query.tab === 'string' ? query.tab : 'capture'; // <-- NEW
 
   // -------- State --------
   const [shots, setShots] = useState(null);
@@ -545,7 +546,7 @@ export default function Capture() {
     }
   }
 
-  // -------- Submit (enforce min counts per shot) --------
+  // -------- Submit initial turn (enforce min counts per shot) --------
   async function submitAll() {
     if (submitting) return;
     const unmet = (shots || []).filter(s => (s.min_count || 1) > (uploadsByShot[s.shot_id]?.length || 0));
@@ -569,6 +570,50 @@ export default function Capture() {
         return;
       }
       window.location.href = `/turns/${turnId}/done`;
+    } finally {
+      setTimeout(() => setSubmitting(false), 300);
+    }
+  }
+
+  // -------- Submit fixes (NEEDS-FIX tab only; send only new photos) --------
+  async function submitFixes() {
+    if (submitting) return;
+
+    // Only send photos added in this session (they have a preview URL)
+    const newPhotos = Object.values(uploadsByShot)
+      .flat()
+      .filter(f => !!f.preview)
+      .map(f => ({ url: f.url, shotId: f.shotId, area_key: null }));
+
+    if (!newPhotos.length) {
+      alert('Please add at least one new photo to submit fixes.');
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const resp = await fetch('/api/turns/submit-fix', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ turnId, photos: newPhotos })
+      });
+
+      const json = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        alert('Submit fixes failed: ' + (json.error || resp.statusText));
+        return;
+      }
+
+      // Show test-mode destination while DISABLE_SMS=1
+      if (json?.notify?.testMode) {
+        console.log('[Fix submitted] test mode notify:', json.notify);
+        alert(`Fixes submitted. (Test mode) Would notify: ${json.notify?.to?.join(', ') || 'n/a'}`);
+      } else {
+        alert('Fixes submitted and manager notified.');
+      }
+
+      // Optional: stay on page or navigate somewhere
+      // window.location.reload();
     } finally {
       setTimeout(() => setSubmitting(false), 300);
     }
@@ -974,15 +1019,27 @@ export default function Capture() {
               </div>
             )}
 
-            <ThemedButton
-              onClick={submitAll}
-              loading={submitting}
-              kind="secondary"
-              ariaLabel="Submit Turn"
-              full
-            >
-              ✅ Submit Turn
-            </ThemedButton>
+            {tab === 'needs-fix' ? (
+              <ThemedButton
+                onClick={submitFixes}
+                loading={submitting}
+                kind="secondary"
+                ariaLabel="Submit Fixes"
+                full
+              >
+                🔧 Submit Fixes
+              </ThemedButton>
+            ) : (
+              <ThemedButton
+                onClick={submitAll}
+                loading={submitting}
+                kind="secondary"
+                ariaLabel="Submit Turn"
+                full
+              >
+                ✅ Submit Turn
+              </ThemedButton>
+            )}
           </div>
         </div>
       </section>
