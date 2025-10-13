@@ -111,7 +111,7 @@ Reply STOP to opt out, HELP for help.`;
   return { sent: 1, to: [mgr?.phone], body, testMode: !!(sent as any).testMode };
 }
 
-/** Optional: notify cleaner when manager requests more fixes (call this from that action). */
+/** Notify cleaner when manager requests fixes. */
 export async function notifyCleanerForTurn(turnId: string, message: string) {
   const supa = supaAdmin();
   const { data: info } = await supa
@@ -132,7 +132,9 @@ export async function notifyCleanerForTurn(turnId: string, message: string) {
   const guard = canSend(cleaner as any);
   if (!guard.ok) return { sent: 0, reason: guard.reason };
 
-  const link = `${siteBase()}/turns/${turnId}/fixes`;
+  // IMPORTANT: send cleaner to capture page on the needs-fix tab
+  const link = `${siteBase()}/turns/${turnId}/capture?tab=needs-fix`;
+
   const body =
 `TurnQA: ${message}
 Property: ${prop?.name || 'your recent turn'}
