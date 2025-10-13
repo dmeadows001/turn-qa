@@ -13,23 +13,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!turn_id) return res.status(400).json({ error: 'turn_id required' });
 
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-    const serviceKey = (process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY)!;
-    if (!supabaseUrl || !serviceKey) {
-      return res.status(500).json({ error: 'Supabase service env vars missing' });
-    }
+    const serviceKey  = (process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY)!;
+    if (!supabaseUrl || !serviceKey) return res.status(500).json({ error: 'Supabase service env vars missing' });
+
     const supabase = createClient(supabaseUrl, serviceKey);
 
-    // 1) Fetch the turn
+    // 1) Fetch the turn (only existing columns)
     const { data: turn, error: turnErr } = await supabase
       .from('turns')
-      .select('id, created_at, property_id, score, notes, cleaner_id')
+      .select('id, created_at, property_id, cleaner_id')   // ← no score here
       .eq('id', turn_id)
       .maybeSingle();
 
     if (turnErr) return res.status(500).json({ error: `turn query failed: ${turnErr.message}` });
     if (!turn)  return res.status(404).json({ error: 'Turn not found' });
 
-    // 2) Fetch the property (manager link)
+    // 2) Property (manager link)
     const { data: property, error: propErr } = await supabase
       .from('properties')
       .select('id, name, unit, manager_id, org_id')
@@ -50,7 +49,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (cleaner?.full_name) cleanerName = cleaner.full_name;
     }
 
-    // 4) Manager recipients (consented + verified)
+    // 4) Manager recipients
     const { data: managers, error: mgrErr } = await supabase
       .from('managers')
       .select('id, name, phone, sms_consent, phone_verified_at')
@@ -72,39 +71,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    // 5) Build message
-    const time = new Date(turn.created_at).toLocaleString('en-US', {
-      month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
-    });
+    // 5) Message
+    const time = new Date(turn.created_at).toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' });
     const propName = [property?.name, property?.unit].filter(Boolean).join(' · ');
-    const scorePart = turn.score != null ? `Score: ${turn.score}. ` : '';
     const site = process.env.NEXT_PUBLIC_SITE_URL || 'https://www.turnqa.com';
     const viewUrl = `${site}/manager/turns/${turn.id}`;
-    const body = [
-      `Turn submitted: ${propName}`,
-      `${cleanerName} at ${time}. ${scorePart}`.trim(),
-      `View: ${viewUrl}`,
-      `Reply STOP to opt out, HELP for help.`,
-    ].join('\n');
+    const body =
+`Turn submitted: ${propName}
+${cleanerName} at ${time}.
+View: ${viewUrl}
+Reply STOP to opt out, HELP for help.`;
 
-    // 6) Test bypass
+    // Test bypass
     if (process.env.DISABLE_SMS === '1') {
       return res.status(200).json({ ok: true, testMode: true, to: recipients, message: body });
     }
 
-    // 7) Twilio send (FIX: use TWILIO_FROM_NUMBER)
-    const sid  = process.env.TWILIO_ACCOUNT_SID;
+    // 6) Twilio send (FROM fix: use TWILIO_FROM_NUMBER)
+    const sid   = process.env.TWILIO_ACCOUNT_SID;
     const token = process.env.TWILIO_AUTH_TOKEN;
-    const mss  = process.env.TWILIO_MESSAGING_SERVICE_SID;
-    const from = process.env.TWILIO_FROM_NUMBER; // <-- important
+    const mss   = process.env.TWILIO_MESSAGING_SERVICE_SID;
+    const from  = process.env.TWILIO_FROM_NUMBER; // ← correct env name
     if (!sid || !token || (!mss && !from)) {
       return res.status(500).json({
         error: 'Twilio env vars missing (ACCOUNT_SID, AUTH_TOKEN, and FROM_NUMBER or MESSAGING_SERVICE_SID)',
         debug: { has_FROM_NUMBER: !!from, has_MSS: !!mss }
       });
     }
-    const client = twilio(sid, token);
 
+    const client = twilio(sid, token);
     const unique = [...new Set(recipients)];
     await Promise.all(
       unique.map((to) => client.messages.create(mss ? { to, body, messagingServiceSid: mss } : { to, body, from }))
