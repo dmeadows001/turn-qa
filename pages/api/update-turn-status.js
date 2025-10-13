@@ -25,18 +25,15 @@ function twilioClient() {
   const sid = (process.env.TWILIO_ACCOUNT_SID || '').trim();
   const tok = (process.env.TWILIO_AUTH_TOKEN || '').trim();
   if (!sid || !tok) return null;
-  // lazy import to avoid cold start unless needed
   const twilio = require('twilio');
   return twilio(sid, tok);
 }
 
 async function sendSmsSafe({ to, body }) {
   try {
-    // Test mode: pretend success without calling Twilio
     if (process.env.DISABLE_SMS === '1') {
       return { ok: true, testMode: true };
     }
-
     const client = twilioClient();
     if (!client) return { ok: false, warn: 'twilio not configured' };
 
@@ -62,7 +59,6 @@ export default async function handler(req, res) {
 
   try {
     const { turn_id, new_status, manager_note } = parseBody(req);
-
     if (!turn_id) return res.status(400).json({ error: 'turn_id is required' });
 
     const allowed = new Set(['needs_fix', 'approved']);
@@ -88,10 +84,9 @@ export default async function handler(req, res) {
     const { error: uErr } = await supa.from('turns').update(patch).eq('id', turn_id);
     if (uErr) throw uErr;
 
-    // Try to notify cleaners (do not fail the request if SMS fails)
+    // Notify cleaners (best-effort)
     let warn = null;
     try {
-      // Build recipient list: prefer the turn.cleaner_id; also include any assigned cleaners on the property
       const phones = new Set();
 
       if (turn.cleaner_id) {
@@ -123,14 +118,12 @@ export default async function handler(req, res) {
       }
 
       if (phones.size) {
-        // NEW deep link to the fixes page
         const deep = `${siteBase()}/turns/${encodeURIComponent(turn_id)}/fixes`;
         const body =
           new_status === 'needs_fix'
             ? `TurnQA: A manager requested fixes. Open: ${deep}\nReply STOP to opt out, HELP for help.`
             : `TurnQA: Your turn was approved.\nReply STOP to opt out, HELP for help.`;
 
-        // fire & forget each
         const results = await Promise.all(
           Array.from(phones).map(ph => sendSmsSafe({ to: ph, body }))
         );
