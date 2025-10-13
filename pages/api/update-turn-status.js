@@ -11,7 +11,17 @@ function parseBody(req) {
   return req.body || {};
 }
 
+function siteBase() {
+  return (
+    process.env.APP_BASE_URL ||
+    process.env.NEXT_PUBLIC_APP_BASE_URL ||
+    process.env.NEXT_PUBLIC_SITE_URL ||
+    'https://www.turnqa.com'
+  ).replace(/\/+$/, '');
+}
+
 function twilioClient() {
+  if (process.env.DISABLE_SMS === '1') return null; // short-circuit in test mode
   const sid = (process.env.TWILIO_ACCOUNT_SID || '').trim();
   const tok = (process.env.TWILIO_AUTH_TOKEN || '').trim();
   if (!sid || !tok) return null;
@@ -22,6 +32,11 @@ function twilioClient() {
 
 async function sendSmsSafe({ to, body }) {
   try {
+    // Test mode: pretend success without calling Twilio
+    if (process.env.DISABLE_SMS === '1') {
+      return { ok: true, testMode: true };
+    }
+
     const client = twilioClient();
     if (!client) return { ok: false, warn: 'twilio not configured' };
 
@@ -82,10 +97,10 @@ export default async function handler(req, res) {
       if (turn.cleaner_id) {
         const { data: c } = await supa
           .from('cleaners')
-          .select('phone, sms_consent, phone_verified_at')
+          .select('phone, sms_consent, phone_verified_at, sms_opt_out_at')
           .eq('id', turn.cleaner_id)
           .maybeSingle();
-        if (c?.phone && c.sms_consent && c.phone_verified_at) phones.add(c.phone);
+        if (c?.phone && c.sms_consent && c.phone_verified_at && !c.sms_opt_out_at) phones.add(c.phone);
       }
 
       const { data: ass } = await supa
@@ -100,19 +115,20 @@ export default async function handler(req, res) {
       if (ids.length) {
         const { data: cleaners } = await supa
           .from('cleaners')
-          .select('phone, sms_consent, phone_verified_at')
+          .select('phone, sms_consent, phone_verified_at, sms_opt_out_at')
           .in('id', ids);
         (cleaners || []).forEach(c => {
-          if (c?.phone && c.sms_consent && c.phone_verified_at) phones.add(c.phone);
+          if (c?.phone && c.sms_consent && c.phone_verified_at && !c.sms_opt_out_at) phones.add(c.phone);
         });
       }
 
       if (phones.size) {
-        const deep = `${process.env.NEXT_PUBLIC_APP_ORIGIN || 'https://www.turnqa.com'}/capture?tab=needs-fix&turn=${turn_id}`;
+        // NEW deep link to the fixes page
+        const deep = `${siteBase()}/turns/${encodeURIComponent(turn_id)}/fixes`;
         const body =
           new_status === 'needs_fix'
-            ? `TurnQA: A manager requested fixes. Open: ${deep}`
-            : `TurnQA: Your turn was approved.`;
+            ? `TurnQA: A manager requested fixes. Open: ${deep}\nReply STOP to opt out, HELP for help.`
+            : `TurnQA: Your turn was approved.\nReply STOP to opt out, HELP for help.`;
 
         // fire & forget each
         const results = await Promise.all(
