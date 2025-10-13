@@ -170,8 +170,13 @@ export default async function handler(req, res) {
       }
 
       if (cleanerPhone) {
-        const base = process.env.NEXT_PUBLIC_BASE_URL || 'https://www.turnqa.com';
-        const link = `${base}/capture?tab=needs-fix&turn=${encodeURIComponent(turnId)}`;
+        const base =
+        process.env.APP_BASE_URL ||
+        process.env.NEXT_PUBLIC_APP_BASE_URL ||
+        process.env.NEXT_PUBLIC_SITE_URL ||
+        'https://www.turnqa.com';
+
+        const link = `${base.replace(/\/+$/, '')}/turns/${encodeURIComponent(turnId)}/fixes`;
         const msg =
           `TurnQA: Updates needed${propertyName ? ` at ${propertyName}` : ''}.\n` +
           (overall_note ? `Note: ${overall_note}\n` : '') +
