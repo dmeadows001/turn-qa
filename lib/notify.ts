@@ -40,30 +40,41 @@ function siteBase() {
           'https://www.turnqa.com').replace(/\/+$/,'');
 }
 
+/** Helper: unwrap a possible array relation into a single object */
+function firstOrNull<T>(x: T | T[] | null | undefined): T | null {
+  if (!x) return null as any;
+  return Array.isArray(x) ? (x[0] ?? null) : x;
+}
+
 /** Notify the property's manager that the turn has a new submission. */
 export async function notifyManagerForTurn(turnId: string, kind: 'initial'|'fix') {
   const supa = supaAdmin();
 
-  const { data: info } = await supa
+  const { data: info, error } = await supa
     .from('turns')
     .select(`
       id, property_id, cleaner_id, created_at,
       properties:property_id ( name, manager_id, org_id ),
-      cleaners:cleaner_id ( full_name, phone )
+      cleaners:cleaner_id ( full_name, name, phone )
     `)
     .eq('id', turnId)
     .maybeSingle();
 
-  if (!info) return { sent: 0, reason: 'turn_not_found' };
+  if (error || !info) return { sent: 0, reason: 'turn_not_found' };
+
+  // unwrap relations that might arrive as arrays
+  const prop = firstOrNull(info as any?.properties);
+  const cleaner = firstOrNull(info as any?.cleaners);
 
   // choose manager
-  let managerId = info.properties?.manager_id || null;
-  if (!managerId && info.properties?.org_id) {
+  let managerId: string | null = prop?.manager_id ?? null;
+
+  if (!managerId && prop?.org_id) {
     // fallback: most recently verified manager in same org
     const { data: cand } = await supa
       .from('managers')
       .select('id, phone, sms_consent, sms_opt_out_at, phone_verified_at')
-      .eq('org_id', info.properties.org_id)
+      .eq('org_id', prop.org_id)
       .order('phone_verified_at', { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -74,13 +85,14 @@ export async function notifyManagerForTurn(turnId: string, kind: 'initial'|'fix'
   const { data: mgr } = await supa
     .from('managers')
     .select('id, name, phone, sms_consent, sms_opt_out_at, phone_verified_at')
-    .eq('id', managerId).maybeSingle();
+    .eq('id', managerId)
+    .maybeSingle();
 
   const guard = canSend(mgr!);
   if (!guard.ok) return { sent: 0, reason: guard.reason, manager: mgr };
 
-  const who = info.cleaners?.full_name || info.cleaners?.phone || 'Cleaner';
-  const propName = info.properties?.name || 'a property';
+  const who = cleaner?.full_name || cleaner?.name || cleaner?.phone || 'Cleaner';
+  const propName = prop?.name || 'a property';
   const link = `${siteBase()}/manager/turns/${turnId}`;
   const verb = kind === 'fix' ? 'submitted fixes' : 'submitted a turn';
   const body =
@@ -88,9 +100,9 @@ export async function notifyManagerForTurn(turnId: string, kind: 'initial'|'fix'
 Review: ${link}
 Reply STOP to opt out, HELP for help.`;
 
-  const sent = await twilioSend(String(mgr?.phone), body);
+  const sent = await twilioSend(String(mgr?.phone));
   if (!sent.ok) return { sent: 0, reason: sent.reason || 'send_failed', body };
-  return { sent: 1, to: [mgr?.phone], body, testMode: !!sent.testMode };
+  return { sent: 1, to: [mgr?.phone], body, testMode: !!(sent as any).testMode };
 }
 
 /** Optional: notify cleaner when manager requests more fixes (call this from that action). */
@@ -101,24 +113,27 @@ export async function notifyCleanerForTurn(turnId: string, message: string) {
     .select(`
       id, property_id, cleaner_id,
       properties:property_id ( name ),
-      cleaners:cleaner_id ( full_name, phone, sms_consent, sms_opt_out_at, phone_verified_at )
+      cleaners:cleaner_id ( full_name, name, phone, sms_consent, sms_opt_out_at, phone_verified_at )
     `)
     .eq('id', turnId)
     .maybeSingle();
 
-  if (!info || !info.cleaners) return { sent: 0, reason: 'cleaner_not_found' };
+  if (!info) return { sent: 0, reason: 'turn_not_found' };
 
-  const guard = canSend(info.cleaners);
+  const prop = firstOrNull(info as any?.properties);
+  const cleaner = firstOrNull(info as any?.cleaners);
+
+  const guard = canSend(cleaner as any);
   if (!guard.ok) return { sent: 0, reason: guard.reason };
 
   const link = `${siteBase()}/turns/${turnId}/fixes`;
   const body =
 `TurnQA: ${message}
-Property: ${info.properties?.name || 'your recent turn'}
+Property: ${prop?.name || 'your recent turn'}
 Submit fixes: ${link}
 Reply STOP to opt out, HELP for help.`;
 
-  const sent = await twilioSend(String(info.cleaners.phone), body);
+  const sent = await twilioSend(String((cleaner as any)?.phone));
   if (!sent.ok) return { sent: 0, reason: sent.reason || 'send_failed', body };
-  return { sent: 1, to: [info.cleaners.phone], body, testMode: !!sent.testMode };
+  return { sent: 1, to: [ (cleaner as any)?.phone ], body, testMode: !!(sent as any).testMode };
 }
