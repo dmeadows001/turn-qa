@@ -50,7 +50,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (new Date(row.expires_at).getTime() < Date.now()) return res.status(400).json({ error: 'Code expired. Request a new one.' });
 
     if (String(row.code) !== String(code)) {
-      await supabase.from('manager_phone_verifications')
+      await supabase
+        .from('manager_phone_verifications')
         .update({ attempts: (row.attempts ?? 0) + 1 })
         .eq('id', row.id);
       return res.status(400).json({ error: 'Invalid code.' });
@@ -60,16 +61,53 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const e164 = normalizeToE164(row.phone || '');
     if (!e164) return res.status(400).json({ error: 'Invalid phone format. Please re-enter as +1XXXXXXXXXX.' });
 
-    // 3) Build consent snapshot + IP
+    // 3) Consent snapshot + IP
     const now = new Date().toISOString();
     const consentText = 'I agree to receive SMS alerts (STOP to opt out, HELP for help).';
     const ip =
       (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
       (req.socket?.remoteAddress ?? null);
 
-    // 4) Update manager (or insert if missing)
-    // Try update by user_id
-    const { data: updated, error: upErr } = await supabase
+    // 4) Ensure a managers row exists WITH A NAME (NOT NULL)
+    const { data: mgrExisting, error: mgrFetchErr } = await supabase
+      .from('managers')
+      .select('id, name')
+      .eq('user_id', user_id)
+      .maybeSingle();
+
+    if (mgrFetchErr) return res.status(500).json({ error: mgrFetchErr.message });
+
+    if (!mgrExisting) {
+      // Pull a friendly display name from auth; fall back to email or "Manager"
+      let displayName = 'Manager';
+      try {
+        const { data: au } = await supabase.auth.admin.getUserById(user_id);
+        const u = au?.user;
+        displayName =
+          (u?.user_metadata?.full_name as string) ||
+          (u?.user_metadata?.name as string) ||
+          (u?.email as string) ||
+          'Manager';
+      } catch {
+        // ignore; keep fallback
+      }
+
+      const { error: insErr } = await supabase
+        .from('managers')
+        .insert({
+          user_id,
+          name: displayName, // <- NOT NULL
+          phone: null,
+          created_at: now,
+        })
+        .select('id')
+        .single();
+
+      if (insErr) return res.status(500).json({ error: insErr.message });
+    }
+
+    // 5) Update phone + consent on the managers row
+    const { error: upErr } = await supabase
       .from('managers')
       .update({
         phone: e164,
@@ -79,31 +117,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         sms_consent_ip: ip ? (ip as any) : null,
         consent_text_snapshot: consent ? consentText : null,
       })
-      .eq('user_id', user_id)
-      .select('id') // return something so we can see if row existed
-      .maybeSingle();
+      .eq('user_id', user_id);
 
     if (upErr) return res.status(500).json({ error: upErr.message });
 
-    // If no row was updated (manager not created yet), insert one
-    if (!updated) {
-      const { error: insErr } = await supabase.from('managers').insert({
-        user_id,
-        email: null,            // optional: you can set from auth profile elsewhere
-        name: null,
-        org_id: null,           // if you associate org on signup, set it here
-        phone: e164,
-        phone_verified_at: now,
-        sms_consent: !!consent,
-        sms_consent_at: consent ? now : null,
-        sms_consent_ip: ip ? (ip as any) : null,
-        consent_text_snapshot: consent ? consentText : null,
-        created_at: now,
-      });
-      if (insErr) return res.status(500).json({ error: insErr.message });
-    }
-
-    // 5) OTP consumed — delete it
+    // 6) OTP consumed — delete it
     await supabase.from('manager_phone_verifications').delete().eq('id', row.id);
 
     return res.status(200).json({ ok: true, phone: e164, consent: !!consent, verified_at: now });
