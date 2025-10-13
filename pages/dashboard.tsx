@@ -2,17 +2,18 @@
 import type { GetServerSideProps } from 'next';
 import { requireManagerPhoneVerified } from '@/lib/guards';
 
-type Props = {}; // add fields if you want to pass data to the page
+type Props = {}; // extend later if you pass data
 
 export const getServerSideProps: GetServerSideProps<Props> = async (ctx) => {
-  const gate = await requireManagerPhoneVerified(ctx);
+  // Treat the guard’s return loosely to avoid union-type mismatch
+  const gate: any = await requireManagerPhoneVerified(ctx as any);
 
-  // If the guard indicates a redirect, adapt it to Next's shape
-  if ('redirect' in gate) {
+  if (gate && gate.redirect) {
+    // Return a proper Next.js redirect object
     return { redirect: gate.redirect };
   }
 
-  // Otherwise just render the page
+  // Always return props when not redirecting
   return { props: {} };
 };
 
