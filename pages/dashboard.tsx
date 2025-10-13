@@ -2,14 +2,21 @@
 import type { GetServerSideProps } from 'next';
 import { requireManagerPhoneVerified } from '@/lib/guards';
 
-export const getServerSideProps: GetServerSideProps = async (ctx) => {
+type Props = {}; // add fields if you want to pass data to the page
+
+export const getServerSideProps: GetServerSideProps<Props> = async (ctx) => {
   const gate = await requireManagerPhoneVerified(ctx);
-  if ('redirect' in gate) return gate; // bounce to phone onboarding if not verified
+
+  // If the guard indicates a redirect, adapt it to Next's shape
+  if ('redirect' in gate) {
+    return { redirect: gate.redirect };
+  }
+
+  // Otherwise just render the page
   return { props: {} };
 };
 
 export default function Dashboard() {
-  // ...your existing dashboard UI here. Keeping a minimal placeholder:
   return (
     <main style={{ padding: 24 }}>
       <h1>Dashboard</h1>
