@@ -2,6 +2,9 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import twilio from 'twilio';
 import { createClient } from '@supabase/supabase-js';
+// at top with other imports
+import type { MessageListInstanceCreateOptions } from 'twilio/lib/rest/api/v2010/account/message';
+
 
 export const config = { api: { bodyParser: true } };
 
@@ -136,7 +139,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const body = `Turn ${shortId} submitted for ${propName}${scorePart}. Review: ${reviewUrl}`;
 
     // 4) Send the SMS
-    const msgPayload: twilio.Twilio.MessageListInstanceCreateOptions = {
+    const msgPayload: MessageListInstanceCreateOptions = {
       to: manager.phone_e164!,
       body,
     };
