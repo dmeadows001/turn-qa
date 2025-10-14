@@ -992,68 +992,71 @@ export default function Capture() {
 
           {/* Buttons + progress */}
           <div style={{ display:'flex', flexDirection:'column', gap:12, marginTop:16, maxWidth:420 }}>
-            <ThemedButton
-              onClick={runPrecheck}
-              loading={prechecking}
-              kind="primary"
-              ariaLabel="Run AI Pre-Check"
-            >
-              {prechecking && scanProgress.total > 0
-                ? `🔎 Scanning ${scanProgress.done}/${scanProgress.total} (${pct}%)`
-                : '🔎 Run AI Pre-Check'}
-            </ThemedButton>
+  <ThemedButton
+    onClick={runPrecheck}
+    loading={prechecking}
+    kind="primary"
+    ariaLabel="Run AI Pre-Check"
+  >
+    {prechecking && scanProgress.total > 0
+      ? `🔎 Scanning ${scanProgress.done}/${scanProgress.total} (${pct}%)`
+      : '🔎 Run AI Pre-Check'}
+  </ThemedButton>
 
-            {prechecking && scanProgress.total > 0 && (
-              <div>
-                <div style={{ height:8, background:'#1f2937', borderRadius:6, overflow:'hidden' }}>
-                  <div
-                    style={{
-                      height:'100%',
-                      width: `${pct}%`,
-                      background: '#0ea5e9',
-                      transition:'width 200ms ease'
-                    }}
-                  />
-                </div>
-                <div style={{ fontSize:12, color:'#94a3b8', marginTop:6 }}>
-                  Scanning {scanProgress.done} of {scanProgress.total}…
-                </div>
-              </div>
-            )}
+  {prechecking && scanProgress.total > 0 && (
+    <div>
+      <div style={{ height:8, background:'#1f2937', borderRadius:6, overflow:'hidden' }}>
+        <div
+          style={{
+            height:'100%',
+            width: `${pct}%`,
+            background: '#0ea5e9',
+            transition:'width 200ms ease'
+          }}
+        />
+      </div>
+      <div style={{ fontSize:12, color:'#94a3b8', marginTop:6 }}>
+        Scanning {scanProgress.done} of {scanProgress.total}…
+      </div>
+    </div>
+  )}
 
-            {tab === 'needs-fix' ? (
-              <>
-                <textarea
-                value={reply}
-                onChange={e => setReply(e.target.value)}
-                placeholder="Message to manager (optional)"
-                style={{
-                  width:'100%', minHeight:80, padding:10,
-                  borderRadius:8, border:'1px solid #334155',
-                  color:'#e5e7eb', background:'#0b1220'
-                }}
-              />
-              <ThemedButton
-                onClick={submitFixes}
-                loading={submitting}
-                kind="secondary"
-                ariaLabel="Submit Fixes"
-                full
-              >
-                🔧 Submit Fixes
-              </ThemedButton>
-            ) : (
-              <ThemedButton
-                onClick={submitAll}
-                loading={submitting}
-                kind="secondary"
-                ariaLabel="Submit Turn"
-                full
-              >
-                ✅ Submit Turn
-              </ThemedButton>
-            )}
-          </div>
+  {tab === 'needs-fix' ? (
+    <div>
+      <textarea
+        value={reply}
+        onChange={e => setReply(e.target.value)}
+        placeholder="Message to manager (optional)"
+        style={{
+          width:'100%', minHeight:80, padding:10,
+          borderRadius:8, border:'1px solid #334155',
+          color:'#e5e7eb', background:'#0b1220'
+        }}
+      />
+      <div style={{ height:8 }} />
+      <ThemedButton
+        onClick={submitFixes}
+        loading={submitting}
+        kind="secondary"
+        ariaLabel="Submit Fixes"
+        full
+      >
+        🔧 Submit Fixes
+      </ThemedButton>
+    </div>
+  ) : (
+    <ThemedButton
+      onClick={submitAll}
+      loading={submitting}
+      kind="secondary"
+      ariaLabel="Submit Turn"
+      full
+    >
+      ✅ Submit Turn
+    </ThemedButton>
+  )}
+</div>
+
         </div>
       </section>
 
