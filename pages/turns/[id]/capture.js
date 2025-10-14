@@ -98,6 +98,7 @@ export default function Capture() {
   const [lightboxPath, setLightboxPath] = useState(null);
   const [zoom, setZoom] = useState(1);
   const [rotation, setRotation] = useState(0);
+  const [reply, setReply] = useState(''); // cleaner’s optional note back to manager
 
   // One hidden file input per shot
   const inputRefs = useRef({});
@@ -595,7 +596,8 @@ export default function Capture() {
       const resp = await fetch('/api/turns/submit-fix', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ turn_id: turnId, photos: newPhotos })
+        body: JSON.stringify({ turn_id: turnId, reply, photos: newPhotos })
+        
       });
 
       const json = await resp.json().catch(() => ({}));
@@ -1020,6 +1022,17 @@ export default function Capture() {
             )}
 
             {tab === 'needs-fix' ? (
+              <>
+                <textarea
+                value={reply}
+                onChange={e => setReply(e.target.value)}
+                placeholder="Message to manager (optional)"
+                style={{
+                  width:'100%', minHeight:80, padding:10,
+                  borderRadius:8, border:'1px solid #334155',
+                  color:'#e5e7eb', background:'#0b1220'
+                }}
+              />
               <ThemedButton
                 onClick={submitFixes}
                 loading={submitting}
