@@ -140,3 +140,46 @@ export async function notifyManagerForTurn(turnId: string, kind: 'initial' | 'fi
     return { sent: 0, reason: 'twilio_error' as const, error: e?.message || String(e), debug: debug ? dbg : undefined };
   }
 }
+
+/** Notify cleaner when a manager requests fixes. */
+export async function notifyCleanerForTurn(turnId: string, message: string) {
+  const supa = supaAdmin();
+
+  // Load the turn -> property + cleaner
+  const { data: turn } = await supa
+    .from('turns')
+    .select('id, property_id, cleaner_id')
+    .eq('id', turnId)
+    .maybeSingle();
+
+  if (!turn) return { sent: 0, reason: 'turn_not_found' as const };
+
+  const { data: prop } = await supa
+    .from('properties')
+    .select('id, name')
+    .eq('id', turn.property_id)
+    .maybeSingle();
+
+  const { data: cleaner } = await supa
+    .from('cleaners')
+    .select('id, full_name, name, phone, sms_consent, sms_opt_out_at, phone_verified_at')
+    .eq('id', turn.cleaner_id)
+    .maybeSingle();
+
+  const guard = canSend(cleaner as any);
+  if (!guard.ok) return { sent: 0, reason: guard.reason };
+
+  // IMPORTANT: send the cleaner to the capture page on the needs-fix tab
+  const link = `${siteBase()}/turns/${turnId}/capture?tab=needs-fix`;
+
+  const body =
+`TurnQA: ${message}
+Property: ${prop?.name || 'your recent turn'}
+Submit fixes: ${link}
+Reply STOP to opt out, HELP for help.`;
+
+  const sent = await twilioSend(String((cleaner as any)?.phone), body);
+  if (!sent.ok) return { sent: 0, reason: (sent as any).reason || 'send_failed', body };
+  return { sent: 1, to: [ (cleaner as any)?.phone ], body, sid: (sent as any).sid, used: (sent as any).used, testMode: !!(sent as any).testMode };
+}
+
