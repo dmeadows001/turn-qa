@@ -61,7 +61,8 @@ async function tolerantInsertTurnPhotos(rows) {
     if (!error) return { ok: true, tried };
     const msg = (error.message || '').toLowerCase();
     if (!/column|does not exist|null value|constraint|invalid input|duplicate/i.test(msg)) {
-      lastErr = error; break;
+      lastErr = error;
+      break;
     }
     lastErr = error;
   }
@@ -84,7 +85,8 @@ async function fallbackInsertLegacyPhotos(rows) {
     if (!error) return { ok: true };
     const msg = (error.message || '').toLowerCase();
     if (!/column|does not exist|null value|constraint|invalid input|duplicate/i.test(msg)) {
-      lastErr = error; break;
+      lastErr = error;
+      break;
     }
     lastErr = error;
   }
@@ -106,3 +108,25 @@ export default async function handler(req, res) {
       if (!ins.ok) {
         const fb = await fallbackInsertLegacyPhotos(rows);
         if (!fb.ok) {
+          throw new Error((ins.error?.message || fb.error?.message) || 'could not insert photos');
+        }
+      }
+    }
+
+    // 2) Mark the turn as submitted
+    const { error: updErr } = await supa
+      .from('turns')
+      .update({ status: 'submitted', submitted_at: nowIso() })
+      .eq('id', turnId);
+
+    if (updErr) throw updErr;
+
+    // 3) 🔔 Notify the property's manager (fire-and-forget)
+    notifyManagerForTurn(turnId, 'initial').catch(console.error);
+
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error('submit-turn error', e);
+    return res.status(500).json({ error: e.message || 'submit-turn failed' });
+  }
+}
