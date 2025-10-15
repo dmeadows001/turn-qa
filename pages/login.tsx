@@ -1,9 +1,8 @@
 // pages/login.tsx
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
 import Link from 'next/link';
 import Image from 'next/image';
-
 import { supabaseBrowser } from '@/lib/supabaseBrowser';
 import Card from '@/components/ui/Card';
 import Input from '@/components/ui/Input';
@@ -20,20 +19,45 @@ export default function Login() {
   const [msg, setMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
+  // If already logged in, bounce to dashboard immediately
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      if (data?.session) {
+        console.log('[login] existing session; redirecting to', nextUrl);
+        router.replace(nextUrl);
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setMsg(null);
     setLoading(true);
+    console.log('[login] submitting…');
+
     try {
       const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-      if (error) throw error;
+      if (error) {
+        console.error('[login] signInWithPassword error:', error);
+        throw error;
+      }
+      console.log('[login] signInWithPassword ok; session?', !!data.session);
 
-      // Optional: seed / refresh profile trial window (ignore failures)
-      try { await fetch('/api/ensure-profile', { method: 'POST' }); } catch {}
+      // redirect (router) + fallback (location.href)
+      console.log('[login] redirecting to', nextUrl);
+      router.replace(nextUrl);
 
-      window.location.href = nextUrl || '/dashboard';
+      setTimeout(() => {
+        // Fallback in case router is blocked by something unexpected
+        if (window.location.pathname !== new URL(nextUrl, window.location.origin).pathname) {
+          console.warn('[login] router.replace did not navigate; forcing location.href');
+          window.location.href = nextUrl;
+        }
+      }, 800);
     } catch (e: any) {
       setMsg(e?.message || 'Sign-in failed');
+      console.error('[login] caught error:', e);
     } finally {
       setLoading(false);
     }
