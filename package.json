@@ -18,19 +18,19 @@
     "react": "18.2.0",
     "react-dom": "18.2.0",
     "twilio": "^5.9.0",
-<<<<<<< HEAD
     "uuid": "9.0.1",
     "stripe": "^16.6.0"
+	"jose": "^5.2.3"
   },
   "devDependencies": {
     "@types/node": "^24.5.2",
     "@types/react": "^19.1.15",
     "@types/react-dom": "^18.3.0",
     "typescript": "^5.9.2"
+	"jose": "^5.2.3"
   },
   "engines": {
-    "node": "22.x"
->>>>>>> 6421d55 (Add jose for signed manager links)
+    "node": ">=22.x"
   }
 }
 
