@@ -12,7 +12,7 @@ import Header from '@/components/layout/Header';
 export default function Login() {
   const router = useRouter();
   const supabase = supabaseBrowser();
-  const nextParam = typeof router.query?.next === 'string' ? router.query.next : '/dashboard';
+  const nextParam = typeof router.query?.next === 'string' ? router.query.next : '/admin/properties';
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -21,8 +21,8 @@ export default function Login() {
   const redirectedRef = useRef(false);
 
   const safeNext = (raw?: string) => {
-    let n = raw && typeof raw === 'string' ? raw : '/dashboard';
-    if (n.startsWith('/login')) n = '/dashboard';
+    let n = raw && typeof raw === 'string' ? raw : '/admin/properties';
+    if (n.startsWith('/login')) n = '/admin/properties';
     return n;
   };
 
