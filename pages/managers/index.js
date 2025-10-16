@@ -1,83 +1,33 @@
 // pages/managers/index.js
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
-import { supabaseBrowser } from '@/lib/supabaseBrowser';
+import { requireManagerPhoneVerified } from '@/lib/guards';
 
-export default function Managers() {
-  const [session, setSession] = useState(null);
+export async function getServerSideProps(ctx) {
+  const gate = await requireManagerPhoneVerified(ctx);
+  if (gate?.redirect) return { redirect: gate.redirect };
+  return { props: {} };
+}
 
-  useEffect(() => {
-    const supabase = supabaseBrowser();
-    supabase.auth.getSession().then(({ data }) => setSession(data.session || null));
-    const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => setSession(s));
-    return () => sub.subscription.unsubscribe();
-  }, []);
-
-  const page = {
-    minHeight: '100vh',
-    background: '#0b0b0f',
-    color: '#e5e7eb',
-    fontFamily: 'ui-sans-serif'
-  };
-  const wrap = { maxWidth: 780, margin: '0 auto', padding: '32px 16px' };
-  const header = { textAlign: 'center', marginBottom: 18 };
-  const title = { fontSize: 32, fontWeight: 800, letterSpacing: '-0.02em' };
-  const card = {
-    background: '#0f172a',
-    border: '1px solid #1f2937',      // ← fixed
-    borderRadius: 16,
-    padding: 20
-  };
-  const btnRow = { display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 };
-  const btnPrimary = {
-    padding: '12px 16px',
-    borderRadius: 12,
-    border: '1px solid #38bdf8',
-    background: '#0ea5e9',
-    color: '#0b0b0f',
-    textDecoration: 'none',
-    fontWeight: 600
-  };
-  const btnSecondary = {
-    padding: '12px 16px',
-    borderRadius: 12,
-    border: '1px solid #334155',
-    background: '#111827',
-    color: '#e5e7eb',
-    textDecoration: 'none',
-    fontWeight: 600
-  };
-  const muted = { color: '#9ca3af' };
-
+export default function ManagersHome() {
   return (
-    <div style={page}>
-      <main style={wrap}>
-        <header style={header}>
-          <div style={title}>TurnQA</div>
-        </header>
+    <main className="p-6" style={{ color: 'var(--text, #fff)' }}>
+      <h1 className="text-2xl font-bold mb-4">Manager Home</h1>
+      <section className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+        <NavCard title="Properties" href="/admin/properties" desc="Create or edit properties" />
+        <NavCard title="Invite Cleaner" href="/properties/PLACE_ID/invite" desc="Send SMS invite (replace PLACE_ID)" />
+        <NavCard title="Start a Turn" href="/properties/PLACE_ID/start-turn" desc="Manual start (replace PLACE_ID)" />
+        <NavCard title="Review a Turn" href="/turns/PLACE_TURN_ID/review" desc="Open review by ID" />
+      </section>
+    </main>
+  );
+}
 
-        <div style={card}>
-          <h1 style={{ marginTop: 0, marginBottom: 6 }}>Managers — Admin &amp; Review</h1>
-          <p style={muted}>New to TurnQA? Start a free trial. Already have an account? Sign in.</p>
-          <div style={btnRow}>
-            {session ? (
-              <Link href="/dashboard" style={btnPrimary}>Go to dashboard</Link>
-            ) : (
-              <>
-                <Link href="/signup" style={btnPrimary}>Start free trial</Link>
-                <Link href="/login" style={btnSecondary}>Manager sign in</Link>
-              </>
-            )}
-          </div>
-        </div>
-
-        <div style={{ ...card, marginTop: 16 }}>
-          <p style={muted}>
-            After you sign in, you’ll land on your dashboard to create a property, build the photo checklist,
-            invite cleaners, and review/approve turns.
-          </p>
-        </div>
-      </main>
-    </div>
+function NavCard({ title, href, desc }) {
+  return (
+    <Link href={href} className="block rounded-2xl p-4 border border-white/10 hover:border-white/20 transition">
+      <div className="text-lg font-semibold">{title}</div>
+      <div className="opacity-80 text-sm mt-1">{desc}</div>
+      <div className="underline text-sm mt-3">Open →</div>
+    </Link>
   );
 }
