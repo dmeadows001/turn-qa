@@ -1,3 +1,4 @@
+// pages/login.tsx
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/router';
 import Link from 'next/link';
@@ -114,8 +115,29 @@ export default function Login() {
         }
       }
 
+      // --- NEW: sync session to server cookies so SSR guards see it ---
       const { data: sessAfter, error: sessErr } = await supabase.auth.getSession();
       console.log('[login] post-signin getSession → error?', !!sessErr, 'hasSession?', !!sessAfter?.session);
+
+      const at = sessAfter?.session?.access_token;
+      const rt = sessAfter?.session?.refresh_token;
+      if (at && rt) {
+        try {
+          await fetch('/api/auth/sync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ access_token: at, refresh_token: rt }),
+            credentials: 'include',
+          });
+          console.log('[login] server cookies synced');
+        } catch (err) {
+          console.warn('[login] cookie sync failed; guard may not see session yet', err);
+        }
+      } else {
+        console.warn('[login] missing tokens; skipping cookie sync');
+      }
+      // --- END NEW ---
+
       if (sessAfter?.session) gotoNext('post-signin-session');
     } catch (e: any) {
       setMsg(e?.message || 'Sign-in failed');
@@ -128,11 +150,14 @@ export default function Login() {
   return (
     <>
       <Header />
-      <main className="auth-wrap" style={{
-        minHeight: 'calc(100vh - 56px)',
-        background:
-          'var(--bg), radial-gradient(1000px 600px at 80% -10%, rgba(124,92,255,.16), transparent 60%), radial-gradient(800px 500px at 0% 100%, rgba(0,229,255,.08), transparent 60%), linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0) 40%)'
-      }}>
+      <main
+        className="auth-wrap"
+        style={{
+          minHeight: 'calc(100vh - 56px)',
+          background:
+            'var(--bg), radial-gradient(1000px 600px at 80% -10%, rgba(124,92,255,.16), transparent 60%), radial-gradient(800px 500px at 0% 100%, rgba(0,229,255,.08), transparent 60%), linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0) 40%)'
+        }}
+      >
         <Card className="auth-card">
           <div className="auth-brand" style={{ gap: 12 }}>
             <Image src="/logo-camera.svg" alt="TurnQA" width={28} height={28} priority />
