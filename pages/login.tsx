@@ -1,5 +1,5 @@
 // pages/login.tsx
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/router';
 import Link from 'next/link';
 import Image from 'next/image';
@@ -19,44 +19,18 @@ export default function Login() {
   const [msg, setMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  // If already logged in, bounce to dashboard immediately
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data, error }) => {
-      console.log('[login] mount getSession → error?', !!error, 'hasSession?', !!data?.session);
-      if (data?.session) {
-        console.log('[login] existing session; redirecting to', nextUrl);
-        router.replace(nextUrl);
-      }
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const redirectedRef = useRef(false);
 
-  async function onSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setMsg(null);
-    setLoading(true);
-    console.log('[login] submitting…');
-
-    const t0 = performance.now();
+  // Helper: redirect once (debounced)
+  const gotoNext = (reason: string) => {
+    if (redirectedRef.current) return;
+    redirectedRef.current = true;
+    console.log(`[login] redirecting to ${nextUrl} (${reason})`);
     try {
-      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-      const t1 = performance.now();
-
-      if (error) {
-        console.error('[login] signInWithPassword error:', error);
-        throw error;
-      }
-      console.log('[login] signInWithPassword ok in', Math.round(t1 - t0), 'ms; immediate session?', !!data.session);
-
-      // Double-check what Supabase thinks *after* sign-in settles.
-      const { data: sessAfter, error: sessErr } = await supabase.auth.getSession();
-      console.log('[login] post-signin getSession → error?', !!sessErr, 'hasSession?', !!sessAfter?.session);
-      if (sessErr) console.warn('[login] post-signin getSession error:', sessErr);
-
-      // Redirect (router) + fallback (location.href)
-      console.log('[login] redirecting to', nextUrl);
+      // try router first
+      // @ts-ignore
       router.replace(nextUrl);
-
+      // hard fallback if router stalls
       setTimeout(() => {
         const expected = new URL(nextUrl, window.location.origin).pathname;
         if (window.location.pathname !== expected) {
@@ -64,6 +38,84 @@ export default function Login() {
           window.location.href = nextUrl;
         }
       }, 800);
+    } catch (e) {
+      console.warn('[login] router.replace threw; forcing location.href', e);
+      window.location.href = nextUrl;
+    }
+  };
+
+  // If already logged in, bounce to dashboard immediately
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data, error }) => {
+      console.log('[login] mount getSession → error?', !!error, 'hasSession?', !!data?.session);
+      if (data?.session) gotoNext('existing-session');
+    });
+
+    // Log auth state changes so we can see if Supabase fires them
+    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
+      console.log('[login] onAuthStateChange:', event, 'hasSession?', !!session);
+      if (session) gotoNext(`state-change:${event}`);
+    });
+    return () => sub.subscription?.unsubscribe();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Poller: if session appears after sign-in but promise hangs, we still navigate
+  const startSessionPoll = () => {
+    let tries = 0;
+    const id = setInterval(async () => {
+      tries += 1;
+      const { data, error } = await supabase.auth.getSession();
+      console.log('[login] poll getSession → error?', !!error, 'hasSession?', !!data?.session, 'try', tries);
+      if (data?.session) {
+        clearInterval(id);
+        gotoNext('poll-session-detected');
+      }
+      if (tries > 30) clearInterval(id); // stop after ~9s
+    }, 300);
+  };
+
+  async function onSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setMsg(null);
+    setLoading(true);
+    console.log('[login] submitting…');
+    startSessionPoll();
+
+    const t0 = performance.now();
+    try {
+      console.log('[login] calling signInWithPassword…');
+      const p = supabase.auth.signInWithPassword({ email, password });
+      console.log('[login] signInWithPassword promise created:', p);
+
+      // Race with a visibility timeout so we can see if it stalls
+      const timeout = new Promise((resolve) => {
+        setTimeout(() => resolve({ __timeout: true }), 4000);
+      });
+
+      // @ts-ignore
+      const result: any = await Promise.race([p, timeout]);
+      const t1 = performance.now();
+
+      if (result?.__timeout) {
+        console.warn('[login] signInWithPassword timed out (4s) — will rely on session poll + state change.');
+      } else {
+        console.log('[login] signInWithPassword resolved in', Math.round(t1 - t0), 'ms; result:', {
+          hasSession: !!result?.data?.session,
+          hasError: !!result?.error,
+        });
+        if (result?.error) {
+          console.error('[login] signInWithPassword error:', result.error);
+          throw result.error;
+        }
+      }
+
+      // Double-check after sign-in
+      const { data: sessAfter, error: sessErr } = await supabase.auth.getSession();
+      console.log('[login] post-signin getSession → error?', !!sessErr, 'hasSession?', !!sessAfter?.session);
+
+      if (sessAfter?.session) gotoNext('post-signin-session');
+      // else: session poll / onAuthStateChange will handle it
     } catch (e: any) {
       setMsg(e?.message || 'Sign-in failed');
       console.error('[login] caught error:', e);
@@ -78,7 +130,7 @@ export default function Login() {
       <main className="auth-wrap" style={{
         minHeight: 'calc(100vh - 56px)',
         background:
-          'var(--bg), radial-gradient(1000px 600px at 80% -10%, rgba(124,92,255,.16), transparent 60%), radial-gradient(800px 500px at 0% 100%, rgba(0,229,255,.08), transparent 60%), linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0) 40%)'
+          'var(--bg), radial-gradient(1000px 600px at 80% -10%, rgba(124,92,255,.16), transparent 60%), radial-gradient(800px 500px at 0% 100%, rgba(0% 100%), rgba(0,229,255,.08), transparent 60%), linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0) 40%)'
       }}>
         <Card className="auth-card">
           <div className="auth-brand" style={{ gap: 12 }}>
