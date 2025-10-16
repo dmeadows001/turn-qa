@@ -42,7 +42,8 @@ export default function PropertiesAdmin() {
   }
 
   return (
-    <main className="page-wrap">
+    <main className="page-wrap" style={{ paddingTop: 24 }}>
+      {/* Panel 1: Heading + Create form */}
       <div className="panel" style={{ marginBottom: 16 }}>
         <h1 className="text-2xl font-bold mb-4">Properties</h1>
 
@@ -64,6 +65,7 @@ export default function PropertiesAdmin() {
               onChange={e => setName(e.target.value)}
               placeholder="Beach House A"
               aria-label="Property name"
+              type="text"
             />
           </div>
           <div>
@@ -74,6 +76,7 @@ export default function PropertiesAdmin() {
               onChange={e => setAddress(e.target.value)}
               placeholder="123 Palm St"
               aria-label="Property address"
+              type="text"
             />
           </div>
           <button className="btn" disabled={creating} aria-busy={creating}>
@@ -82,6 +85,7 @@ export default function PropertiesAdmin() {
         </form>
       </div>
 
+      {/* Panel 2: Table/list */}
       <div className="panel">
         {loading ? (
           <div className="muted">Loading…</div>
