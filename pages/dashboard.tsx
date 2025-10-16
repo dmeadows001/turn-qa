@@ -48,16 +48,19 @@ export default function Dashboard() {
       }
     });
 
-    return () => { clearTimeout(timeoutId); sub.subscription?.unsubscribe(); };
+    return () => {
+      clearTimeout(timeoutId);
+      sub.subscription?.unsubscribe();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   if (!checked) {
     return (
-      <main className="p-6" style={{ color: 'var(--text, #fff)' }}>
-        <h1 className="text-xl font-semibold">Dashboard</h1>
-        <p>Loading auth…</p>
-      </main>
+    <main className="p-6" style={{ color: 'var(--text, #fff)' }}>
+      <h1 className="text-xl font-semibold">Dashboard</h1>
+      <p>Loading auth…</p>
+    </main>
     );
   }
 
@@ -133,3 +136,9 @@ export default function Dashboard() {
               </div>
               <div className="mt-3 text-sm underline">Open review →</div>
             </a>
+          ))}
+        </section>
+      )}
+    </main>
+  );
+}
