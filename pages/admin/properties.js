@@ -20,7 +20,10 @@ export default function PropertiesAdmin() {
 
   async function createProperty(e) {
     e.preventDefault();
-    if (!name.trim()) return alert('Name is required');
+    if (!name.trim()) {
+      alert('Name is required');
+      return;
+    }
     setCreating(true);
     const r = await fetch('/api/properties', {
       method: 'POST',
@@ -29,55 +32,80 @@ export default function PropertiesAdmin() {
     });
     setCreating(false);
     if (!r.ok) {
-      const j = await r.json().catch(()=>({}));
+      const j = await r.json().catch(() => ({}));
       alert('Create failed: ' + (j.error || r.statusText));
       return;
     }
-    setName(''); setAddress('');
+    setName('');
+    setAddress('');
     load();
   }
 
   return (
-    <div style={{ maxWidth: 900, margin: '24px auto', padding: '0 16px', fontFamily:'ui-sans-serif' }}>
-      <h1>Properties</h1>
+    <main className="page-wrap">
+      <div className="page-card">
+        <h1 className="text-2xl font-bold mb-4">Properties</h1>
 
-      <form onSubmit={createProperty} style={{ display:'grid', gridTemplateColumns:'1fr 1fr auto', gap:8, alignItems:'end', margin:'12px 0 24px' }}>
-        <div>
-          <label style={{ fontSize:12, color:'#555' }}>Name</label>
-          <input value={name} onChange={e=>setName(e.target.value)} placeholder="Beach House A" style={{ width:'100%', padding:8 }}/>
-        </div>
-        <div>
-          <label style={{ fontSize:12, color:'#555' }}>Address (optional)</label>
-          <input value={address} onChange={e=>setAddress(e.target.value)} placeholder="123 Palm St" style={{ width:'100%', padding:8 }}/>
-        </div>
-        <button disabled={creating} style={{ padding:'10px 14px' }}>➕ Create</button>
-      </form>
+        <form
+          onSubmit={createProperty}
+          style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 12, alignItems: 'end', margin: '12px 0 20px' }}
+        >
+          <div>
+            <label htmlFor="prop-name" style={{ fontSize: 12, opacity: .8 }}>Name</label>
+            <input
+              id="prop-name"
+              value={name}
+              onChange={e => setName(e.target.value)}
+              placeholder="Beach House A"
+              aria-label="Property name"
+            />
+          </div>
+          <div>
+            <label htmlFor="prop-address" style={{ fontSize: 12, opacity: .8 }}>Address (optional)</label>
+            <input
+              id="prop-address"
+              value={address}
+              onChange={e => setAddress(e.target.value)}
+              placeholder="123 Palm St"
+              aria-label="Property address"
+            />
+          </div>
+          <button className="btn" disabled={creating} aria-busy={creating}>
+            {creating ? 'Creating…' : '➕ Create'}
+          </button>
+        </form>
 
-      {loading ? <div>Loading…</div> : (
-        items.length === 0 ? <div>No properties yet.</div> : (
-          <table width="100%" cellPadding="8" style={{ borderCollapse:'collapse' }}>
+        {loading ? (
+          <div className="muted">Loading…</div>
+        ) : items.length === 0 ? (
+          <div className="muted">No properties yet.</div>
+        ) : (
+          <table className="table">
             <thead>
-              <tr style={{ background:'#f8fafc', textAlign:'left' }}>
-                <th>Name</th>
-                <th>Address</th>
-                <th>Created</th>
-                <th></th>
+              <tr>
+                <th style={{ width: '40%' }}>Name</th>
+                <th style={{ width: '35%' }}>Address</th>
+                <th style={{ width: '20%' }}>Created</th>
+                <th style={{ width: '5%' }} />
               </tr>
             </thead>
             <tbody>
               {items.map(p => (
-                <tr key={p.id} style={{ borderTop:'1px solid #e5e7eb' }}>
+                <tr key={p.id}>
                   <td>{p.name}</td>
-                  <td>{p.address}</td>
-                  <td>{new Date(p.created_at).toLocaleString()}</td>
-                  <td><Link href={`/admin/properties/${p.id}`} style={{ color:'#2563eb' }}>Edit Template →</Link></td>
+                  <td className="opacity-80">{p.address}</td>
+                  <td className="opacity-80">{new Date(p.created_at).toLocaleString()}</td>
+                  <td>
+                    <Link href={`/admin/properties/${p.id}`} className="underline">
+                      Edit Template →
+                    </Link>
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
-        )
-      )}
-    </div>
+        )}
+      </div>
+    </main>
   );
 }
-
