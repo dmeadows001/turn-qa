@@ -1,6 +1,8 @@
 // pages/admin/properties.js
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import ChromeDark from '../../components/ChromeDark';
+import { ui } from '../../lib/theme';
 
 export default function PropertiesAdmin() {
   const [items, setItems] = useState([]);
@@ -42,82 +44,83 @@ export default function PropertiesAdmin() {
   }
 
   return (
-    <main className="page-wrap" style={{ paddingTop: 24 }}>
-      {/* Panel 1: Heading + Create form */}
-      <div className="panel" style={{ marginBottom: 16 }}>
-        <h1 className="text-2xl font-bold mb-4">Properties</h1>
+    <ChromeDark title="Properties">
+      <section style={ui.sectionGrid}>
+        {/* Create panel */}
+        <div style={ui.card}>
+          <form
+            onSubmit={createProperty}
+            style={{
+              display: 'grid',
+              gridTemplateColumns: '1fr 1fr auto',
+              gap: 12,
+              alignItems: 'end'
+            }}
+          >
+            <div>
+              <label htmlFor="prop-name" style={ui.label}>Name</label>
+              <input
+                id="prop-name"
+                value={name}
+                onChange={e => setName(e.target.value)}
+                placeholder="Beach House A"
+                aria-label="Property name"
+                type="text"
+                style={ui.input}
+              />
+            </div>
+            <div>
+              <label htmlFor="prop-address" style={ui.label}>Address (optional)</label>
+              <input
+                id="prop-address"
+                value={address}
+                onChange={e => setAddress(e.target.value)}
+                placeholder="123 Palm St"
+                aria-label="Property address"
+                type="text"
+                style={ui.input}
+              />
+            </div>
+            <button disabled={creating} aria-busy={creating} style={ui.btnPrimary}>
+              {creating ? 'Creating…' : '➕ Create'}
+            </button>
+          </form>
+        </div>
 
-        <form
-          onSubmit={createProperty}
-          style={{
-            display: 'grid',
-            gridTemplateColumns: '1fr 1fr auto',
-            gap: 12,
-            alignItems: 'end',
-            margin: '8px 0 4px'
-          }}
-        >
-          <div>
-            <label htmlFor="prop-name" style={{ fontSize: 12, opacity: .8 }}>Name</label>
-            <input
-              id="prop-name"
-              value={name}
-              onChange={e => setName(e.target.value)}
-              placeholder="Beach House A"
-              aria-label="Property name"
-              type="text"
-            />
-          </div>
-          <div>
-            <label htmlFor="prop-address" style={{ fontSize: 12, opacity: .8 }}>Address (optional)</label>
-            <input
-              id="prop-address"
-              value={address}
-              onChange={e => setAddress(e.target.value)}
-              placeholder="123 Palm St"
-              aria-label="Property address"
-              type="text"
-            />
-          </div>
-          <button className="btn" disabled={creating} aria-busy={creating}>
-            {creating ? 'Creating…' : '➕ Create'}
-          </button>
-        </form>
-      </div>
-
-      {/* Panel 2: Table/list */}
-      <div className="panel">
-        {loading ? (
-          <div className="muted">Loading…</div>
-        ) : items.length === 0 ? (
-          <div className="muted">No properties yet.</div>
-        ) : (
-          <table className="table">
-            <thead>
-              <tr>
-                <th style={{ width: '40%' }}>Name</th>
-                <th style={{ width: '35%' }}>Address</th>
-                <th style={{ width: '20%' }}>Created</th>
-                <th style={{ width: '5%' }} />
-              </tr>
-            </thead>
-            <tbody>
-              {items.map(p => (
-                <tr key={p.id}>
-                  <td>{p.name}</td>
-                  <td className="opacity-80">{p.address}</td>
-                  <td className="opacity-80">{new Date(p.created_at).toLocaleString()}</td>
-                  <td>
-                    <Link href={`/admin/properties/${p.id}`} className="underline">
-                      Edit Template →
-                    </Link>
-                  </td>
+        {/* List panel */}
+        <div style={ui.card}>
+          {loading ? (
+            <div style={ui.muted}>Loading…</div>
+          ) : items.length === 0 ? (
+            <div style={ui.muted}>No properties yet.</div>
+          ) : (
+            <table style={{ width:'100%', borderCollapse:'collapse' }}>
+              <thead>
+                <tr>
+                  <th style={{ ...ui.sectionTitle, textTransform:'none', fontSize:14, color: ui.muted.color, background:'transparent', padding:'8px 12px', textAlign:'left' }}>Name</th>
+                  <th style={{ ...ui.sectionTitle, textTransform:'none', fontSize:14, color: ui.muted.color, background:'transparent', padding:'8px 12px', textAlign:'left' }}>Address</th>
+                  <th style={{ ...ui.sectionTitle, textTransform:'none', fontSize:14, color: ui.muted.color, background:'transparent', padding:'8px 12px', textAlign:'left' }}>Created</th>
+                  <th />
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-    </main>
+              </thead>
+              <tbody>
+                {items.map(p => (
+                  <tr key={p.id} style={{ borderTop:'1px solid #334155' }}>
+                    <td style={{ padding:'10px 12px' }}>{p.name}</td>
+                    <td style={{ padding:'10px 12px', opacity:.8 }}>{p.address}</td>
+                    <td style={{ padding:'10px 12px', opacity:.8 }}>{new Date(p.created_at).toLocaleString()}</td>
+                    <td style={{ padding:'10px 12px' }}>
+                      <Link href={`/admin/properties/${p.id}`} style={{ ...ui.btnSecondary, textDecoration:'none' }}>
+                        Edit Template →
+                      </Link>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </section>
+    </ChromeDark>
   );
 }
