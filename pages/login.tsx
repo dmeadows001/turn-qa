@@ -21,7 +21,8 @@ export default function Login() {
 
   // If already logged in, bounce to dashboard immediately
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
+    supabase.auth.getSession().then(({ data, error }) => {
+      console.log('[login] mount getSession → error?', !!error, 'hasSession?', !!data?.session);
       if (data?.session) {
         console.log('[login] existing session; redirecting to', nextUrl);
         router.replace(nextUrl);
@@ -36,21 +37,29 @@ export default function Login() {
     setLoading(true);
     console.log('[login] submitting…');
 
+    const t0 = performance.now();
     try {
       const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      const t1 = performance.now();
+
       if (error) {
         console.error('[login] signInWithPassword error:', error);
         throw error;
       }
-      console.log('[login] signInWithPassword ok; session?', !!data.session);
+      console.log('[login] signInWithPassword ok in', Math.round(t1 - t0), 'ms; immediate session?', !!data.session);
 
-      // redirect (router) + fallback (location.href)
+      // Double-check what Supabase thinks *after* sign-in settles.
+      const { data: sessAfter, error: sessErr } = await supabase.auth.getSession();
+      console.log('[login] post-signin getSession → error?', !!sessErr, 'hasSession?', !!sessAfter?.session);
+      if (sessErr) console.warn('[login] post-signin getSession error:', sessErr);
+
+      // Redirect (router) + fallback (location.href)
       console.log('[login] redirecting to', nextUrl);
       router.replace(nextUrl);
 
       setTimeout(() => {
-        // Fallback in case router is blocked by something unexpected
-        if (window.location.pathname !== new URL(nextUrl, window.location.origin).pathname) {
+        const expected = new URL(nextUrl, window.location.origin).pathname;
+        if (window.location.pathname !== expected) {
           console.warn('[login] router.replace did not navigate; forcing location.href');
           window.location.href = nextUrl;
         }
