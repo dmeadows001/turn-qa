@@ -102,3 +102,38 @@ button{cursor:pointer}
     padding-bottom: 32px;
   }
 }
+/* ===== Midnight Theme (append at end) ===== */
+:root {
+  --bg: radial-gradient(1000px 600px at 80% -10%, rgba(124,92,255,.16), transparent 60%),
+        radial-gradient(800px 500px at 0% 100%, rgba(0,229,255,.08), transparent 60%),
+        linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0) 40%),
+        #0b0d12;
+  --panel: rgba(20, 22, 30, 0.7);
+  --text: #e8ecf3;
+  --muted: rgba(232, 236, 243, 0.75);
+  --border: rgba(255,255,255,0.10);
+  --border-strong: rgba(255,255,255,0.16);
+  --accent: #9f8cff;
+  --accent-2: #00e5ff;
+  --danger: #fda4af;
+  --ok: #34d399;
+}
+
+html, body, #__next { min-height: 100%; }
+
+body {
+  /* force the dark theme to win over any earlier body rules */
+  background: var(--bg) !important;
+  color: var(--text) !important;
+}
+
+/* light utilities the admin pages can use */
+.page-wrap { max-width: 1100px; margin: 0 auto; padding: 20px 16px; }
+.page-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 16px;
+}
+.border-weak { border: 1px solid var(--border); border-radius: 12px; }
+
