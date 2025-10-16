@@ -1,40 +1,75 @@
 // lib/guards.ts
-import { createServerSupabaseClient } from '@supabase/auth-helpers-nextjs';
 import type { GetServerSidePropsContext } from 'next';
+import { createServerClient } from '@supabase/ssr';
+import { serialize } from 'cookie';
 
+/**
+ * Create a server-side Supabase client that reads/writes auth cookies.
+ * This matches the client we use via `createBrowserClient` and ensures
+ * the SSR guard can "see" the logged-in session.
+ */
+function makeServerSupabase(ctx: GetServerSidePropsContext) {
+  return createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        get: (name: string) => ctx.req.cookies[name],
+        set: (name: string, value: string, options: any) => {
+          ctx.res.setHeader('Set-Cookie', serialize(name, value, options));
+        },
+        remove: (name: string, options: any) => {
+          ctx.res.setHeader('Set-Cookie', serialize(name, '', { ...options, maxAge: 0 }));
+        },
+      },
+    }
+  );
+}
+
+/**
+ * Require a logged-in *manager* whose phone is verified.
+ * - If no session → redirect to /login?next=<current>
+ * - If not a manager (adjust if you use a different role model) → /
+ * - If manager row missing or not verified → /onboard/manager/phone?uid=<user_id>
+ *
+ * IMPORTANT: We do **not** insert rows from a guard (GET). Let onboarding create rows.
+ */
 export async function requireManagerPhoneVerified(ctx: GetServerSidePropsContext) {
-  const supabase = createServerSupabaseClient(ctx);
-  const { data: { user } } = await supabase.auth.getUser();
+  const supabase = makeServerSupabase(ctx);
 
-  if (!user) {
-    return { redirect: { destination: '/login', permanent: false } };
+  // 1) Read the session from auth cookies (set by the browser client)
+  const { data: { session } } = await supabase.auth.getSession();
+
+  if (!session) {
+    const next = encodeURIComponent(ctx.resolvedUrl || '/dashboard');
+    return { redirect: { destination: `/login?next=${next}`, permanent: false } };
   }
 
-  // Ensure a managers row exists for this user (create one if missing)
-  // This prevents “missing row” from bypassing the gate.
-  const { data: mgrRow } = await supabase
-    .from('managers')
-    .select('id, phone, sms_consent, phone_verified_at')
-    .eq('user_id', user.id)
-    .maybeSingle();
-
-  if (!mgrRow) {
-    // Create a skeleton manager row for this user so onboarding can complete
-    await supabase.from('managers').insert({ user_id: user.id }).select().single();
+  // Optional: app-metadata role check (comment out if you don't use roles there)
+  const role = (session.user.app_metadata as any)?.role;
+  if (role && role !== 'manager') {
+    return { redirect: { destination: '/', permanent: false } };
   }
 
-  // Re-fetch after possible insert
-  const { data: mgr } = await supabase
+  // 2) Load manager profile via RLS using the *user* session (no service key here)
+  //    Adjust table/columns if your schema differs.
+  const { data: mgr, error: mgrErr } = await supabase
     .from('managers')
     .select('phone, sms_consent, phone_verified_at')
-    .eq('user_id', user.id)
-    .single();
+    .eq('user_id', session.user.id)
+    .maybeSingle();
 
-  const verified = !!(mgr?.phone && mgr?.sms_consent && mgr?.phone_verified_at);
-  if (!verified) {
-    // pass uid in query so onboarding can hydrate immediately
-    return { redirect: { destination: `/onboard/manager/phone?uid=${user.id}`, permanent: false } };
+  if (mgrErr) {
+    // Fail closed but visible: send to onboarding to resolve state
+    return { redirect: { destination: `/onboard/manager/phone?uid=${session.user.id}`, permanent: false } };
   }
 
-  return { ok: true as const, user };
+  // If there is no row, or not verified, send to onboarding
+  const verified = !!(mgr?.phone && mgr?.sms_consent && mgr?.phone_verified_at);
+  if (!mgr || !verified) {
+    return { redirect: { destination: `/onboard/manager/phone?uid=${session.user.id}`, permanent: false } };
+  }
+
+  // 3) Gate passed
+  return { ok: true as const, user: session.user };
 }
