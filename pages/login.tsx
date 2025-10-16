@@ -1,4 +1,3 @@
-// pages/login.tsx
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/router';
 import Link from 'next/link';
@@ -12,55 +11,50 @@ import Header from '@/components/layout/Header';
 export default function Login() {
   const router = useRouter();
   const supabase = supabaseBrowser();
-  const nextUrl = typeof router.query?.next === 'string' ? router.query.next : '/dashboard';
+  const nextParam = typeof router.query?.next === 'string' ? router.query.next : '/dashboard';
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [msg, setMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-
   const redirectedRef = useRef(false);
 
-  // Helper: redirect once (debounced)
-  const gotoNext = (reason: string) => {
-    if (redirectedRef.current) return;
-    redirectedRef.current = true;
-    console.log(`[login] redirecting to ${nextUrl} (${reason})`);
-    try {
-      // try router first
-      // @ts-ignore
-      router.replace(nextUrl);
-      // hard fallback if router stalls
-      setTimeout(() => {
-        const expected = new URL(nextUrl, window.location.origin).pathname;
-        if (window.location.pathname !== expected) {
-          console.warn('[login] router.replace did not navigate; forcing location.href');
-          window.location.href = nextUrl;
-        }
-      }, 800);
-    } catch (e) {
-      console.warn('[login] router.replace threw; forcing location.href', e);
-      window.location.href = nextUrl;
-    }
+  const safeNext = (raw?: string) => {
+    let n = raw && typeof raw === 'string' ? raw : '/dashboard';
+    if (n.startsWith('/login')) n = '/dashboard';
+    return n;
   };
 
-  // If already logged in, bounce to dashboard immediately
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data, error }) => {
-      console.log('[login] mount getSession → error?', !!error, 'hasSession?', !!data?.session);
-      if (data?.session) gotoNext('existing-session');
-    });
+  const gotoNext = async (reason: string) => {
+    const target = safeNext(nextParam);
+    if (redirectedRef.current) return;
+    redirectedRef.current = true;
 
-    // Log auth state changes so we can see if Supabase fires them
-    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
-      console.log('[login] onAuthStateChange:', event, 'hasSession?', !!session);
-      if (session) gotoNext(`state-change:${event}`);
-    });
-    return () => sub.subscription?.unsubscribe();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    console.log(`[login] redirecting (${reason}) →`, target);
+    try {
+      await router.replace(target);
+    } catch (e) {
+      console.warn('[login] router.replace threw; considering hard nav', e);
+    }
 
-  // Poller: if session appears after sign-in but promise hangs, we still navigate
+    // Only force hard nav if we truly have a session and router didn’t move
+    setTimeout(async () => {
+      if (typeof window === 'undefined') return;
+      const expected = new URL(target, window.location.origin).pathname;
+      if (window.location.pathname === expected) return;
+
+      const { data } = await supabase.auth.getSession();
+      if (data?.session) {
+        console.warn('[login] router did not navigate; forcing hard nav');
+        window.location.href = target;
+      } else {
+        console.log('[login] no session yet — NOT forcing hard nav');
+        redirectedRef.current = false; // allow a later attempt
+      }
+    }, 900);
+  };
+
+  // Session poller as a safety net
   const startSessionPoll = () => {
     let tries = 0;
     const id = setInterval(async () => {
@@ -71,9 +65,23 @@ export default function Login() {
         clearInterval(id);
         gotoNext('poll-session-detected');
       }
-      if (tries > 30) clearInterval(id); // stop after ~9s
+      if (tries > 30) clearInterval(id); // ~9s
     }, 300);
   };
+
+  // If already logged in, bounce to dashboard
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data, error }) => {
+      console.log('[login] mount getSession → error?', !!error, 'hasSession?', !!data?.session);
+      if (data?.session) gotoNext('existing-session');
+    });
+    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
+      console.log('[login] onAuthStateChange:', event, 'hasSession?', !!session);
+      if (session) gotoNext(`state-change:${event}`);
+    });
+    return () => sub.subscription?.unsubscribe();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -88,19 +96,15 @@ export default function Login() {
       const p = supabase.auth.signInWithPassword({ email, password });
       console.log('[login] signInWithPassword promise created:', p);
 
-      // Race with a visibility timeout so we can see if it stalls
-      const timeout = new Promise((resolve) => {
-        setTimeout(() => resolve({ __timeout: true }), 4000);
-      });
-
+      const timeout = new Promise((resolve) => setTimeout(() => resolve({ __timeout: true }), 4000));
       // @ts-ignore
       const result: any = await Promise.race([p, timeout]);
       const t1 = performance.now();
 
       if (result?.__timeout) {
-        console.warn('[login] signInWithPassword timed out (4s) — will rely on session poll + state change.');
+        console.warn('[login] signInWithPassword timed out (4s) — will rely on poll/state-change.');
       } else {
-        console.log('[login] signInWithPassword resolved in', Math.round(t1 - t0), 'ms; result:', {
+        console.log('[login] signInWithPassword resolved in', Math.round(t1 - t0), 'ms;', {
           hasSession: !!result?.data?.session,
           hasError: !!result?.error,
         });
@@ -110,12 +114,9 @@ export default function Login() {
         }
       }
 
-      // Double-check after sign-in
       const { data: sessAfter, error: sessErr } = await supabase.auth.getSession();
       console.log('[login] post-signin getSession → error?', !!sessErr, 'hasSession?', !!sessAfter?.session);
-
       if (sessAfter?.session) gotoNext('post-signin-session');
-      // else: session poll / onAuthStateChange will handle it
     } catch (e: any) {
       setMsg(e?.message || 'Sign-in failed');
       console.error('[login] caught error:', e);
@@ -130,7 +131,7 @@ export default function Login() {
       <main className="auth-wrap" style={{
         minHeight: 'calc(100vh - 56px)',
         background:
-          'var(--bg), radial-gradient(1000px 600px at 80% -10%, rgba(124,92,255,.16), transparent 60%), radial-gradient(800px 500px at 0% 100%, rgba(0% 100%), rgba(0,229,255,.08), transparent 60%), linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0) 40%)'
+          'var(--bg), radial-gradient(1000px 600px at 80% -10%, rgba(124,92,255,.16), transparent 60%), radial-gradient(800px 500px at 0% 100%, rgba(0,229,255,.08), transparent 60%), linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0) 40%)'
       }}>
         <Card className="auth-card">
           <div className="auth-brand" style={{ gap: 12 }}>
