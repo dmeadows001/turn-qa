@@ -43,12 +43,18 @@ export default function PropertiesAdmin() {
 
   return (
     <main className="page-wrap">
-      <div className="page-card">
+      <div className="panel" style={{ marginBottom: 16 }}>
         <h1 className="text-2xl font-bold mb-4">Properties</h1>
 
         <form
           onSubmit={createProperty}
-          style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 12, alignItems: 'end', margin: '12px 0 20px' }}
+          style={{
+            display: 'grid',
+            gridTemplateColumns: '1fr 1fr auto',
+            gap: 12,
+            alignItems: 'end',
+            margin: '8px 0 4px'
+          }}
         >
           <div>
             <label htmlFor="prop-name" style={{ fontSize: 12, opacity: .8 }}>Name</label>
@@ -74,7 +80,9 @@ export default function PropertiesAdmin() {
             {creating ? 'Creating…' : '➕ Create'}
           </button>
         </form>
+      </div>
 
+      <div className="panel">
         {loading ? (
           <div className="muted">Loading…</div>
         ) : items.length === 0 ? (
