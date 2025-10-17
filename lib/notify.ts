@@ -99,7 +99,7 @@ export async function notifyManagerForTurn(turnId: string, kind: 'initial' | 'fi
 
   const who = cleaner?.full_name || cleaner?.name || cleaner?.phone || 'Cleaner';
   const propName = prop?.name || 'a property';
-  const link = `${siteBase()}/manager/turns/${turnId}`;
+  const link = `${siteBase()}/turns/${turnId}/review?manager=1`;
   const verb = kind === 'fix' ? 'submitted fixes' : 'submitted a turn';
   const body =
 `TurnQA: ${who} ${verb} for "${propName}".
