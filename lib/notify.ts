@@ -133,7 +133,7 @@ export async function notifyCleanerForTurn(turnId: string, message: string) {
   if (!guard.ok) return { sent: 0, reason: guard.reason };
 
   // IMPORTANT: send cleaner to capture page on the needs-fix tab
-  const link = `${siteBase()}/turns/${turnId}/review?tab=fix`;
+  const link = `${siteBase()}/turns/${turnId}/review`;
 
   const body =
 `TurnQA: ${message}
