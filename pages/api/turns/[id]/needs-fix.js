@@ -176,7 +176,7 @@ export default async function handler(req, res) {
         process.env.NEXT_PUBLIC_SITE_URL ||
         'https://www.turnqa.com';
 
-        const link = `${base.replace(/\/+$/, '')}/turns/${encodeURIComponent(turnId)}/fixes`;
+        const link = `${base.replace(/\/+$/, '')}/turns/${encodeURIComponent(turnId)}/review`;
         const msg =
           `TurnQA: Updates needed${propertyName ? ` at ${propertyName}` : ''}.\n` +
           (overall_note ? `Note: ${overall_note}\n` : '') +
