@@ -28,7 +28,7 @@ try {
   }
 }
 
-const supa = typeof _admin === 'function' ? _admin() : _admin;
+const supa = (typeof _admin === 'function' ? _admin() : _admin);
 const nowIso = () => new Date().toISOString();
 
 export default async function handler(req, res) {
@@ -48,16 +48,16 @@ export default async function handler(req, res) {
     const summary = (b.summary ?? b.overall_note ?? '').trim();
     const notify = Boolean(b.send_sms ?? b.notify ?? true);
 
-    // normalize into an array of { path, note }
+    // normalize into an array of { id?, path, note }
     const normalizedNotes = Array.isArray(b.notes)
-      ? b.notes.map(n => ({ path: String(n?.path || ''), note: String(n?.note || '') }))
+      ? b.notes.map(n => ({ id: n?.id, path: String(n?.path || ''), note: String(n?.note || '') }))
       : Array.isArray(b.photos)
-        ? b.photos.map(p => ({ path: String(p?.path || ''), note: String(p?.note || '') }))
+        ? b.photos.map(p => ({ id: p?.id, path: String(p?.path || ''), note: String(p?.note || '') }))
         : [];
 
     const ts = nowIso();
 
-    // 1) Set turn status + optional overall note
+    // 1) Update turn status + optional overall note
     {
       const { error } = await supa
         .from('turns')
@@ -70,10 +70,14 @@ export default async function handler(req, res) {
       if (error && !/column .* does not exist/i.test(error.message)) throw error;
     }
 
-    // 2) Try to flag specific photos (your existing logic kept intact)
+    // 2) Flag specific photos (exact the way you had), BUT:
+    //    capture the actual row(s) we updated so we can record precise findings.
     let flagged = 0;
     const attempted = [];
     const columns = ['id', 'path', 'storage_path', 'photo_path', 'url', 'file'];
+
+    // evidence captured from real rows we touch: [{ path, area_key, note }]
+    const matchedEvidence = [];
 
     function filenameOf(p) {
       const s = String(p || '');
@@ -81,39 +85,99 @@ export default async function handler(req, res) {
       return parts[parts.length - 1] || s;
     }
 
+    // derive the best path we can store in qa_findings to match the UI later
+    function bestPathFromRow(row) {
+      return (
+        row?.path ||
+        row?.storage_path ||
+        row?.photo_path ||
+        row?.url ||
+        row?.file ||
+        null
+      );
+    }
+
     async function updateById(table, id, note) {
+      // Read the row so we can record a finding with area/path
+      const { data: rows, error: selErr } = await supa
+        .from(table)
+        .select('id, area_key, path, storage_path, photo_path, url, file')
+        .eq('id', id)
+        .limit(1);
+      if (selErr || !rows?.length) return false;
+      const row = rows[0];
+
       const payload = { needs_fix: true, needs_fix_at: ts };
       if (note && String(note).trim()) payload.manager_notes = String(note).trim();
-      const { error, count } = await supa.from(table).update(payload, { count: 'exact' }).eq('id', id);
-      return !error && (count ?? 0) > 0;
+
+      const { error, count } = await supa
+        .from(table)
+        .update(payload, { count: 'exact' })
+        .eq('id', id);
+
+      if (!error && (count ?? 0) > 0) {
+        const p = bestPathFromRow(row);
+        if (p) matchedEvidence.push({ path: p, area_key: row?.area_key || null, note: note || '' });
+        return true;
+      }
+      return false;
     }
 
     async function updateByExactPath(table, turnId, col, path, note) {
+      // Select rows first so we can store their path/area_key
+      const { data: rows, error: selErr } = await supa
+        .from(table)
+        .select(`id, area_key, ${col}, path, storage_path, photo_path, url, file`)
+        .match({ turn_id: turnId, [col]: path });
+
+      if (selErr || !Array.isArray(rows) || rows.length === 0) return false;
+
       const payload = { needs_fix: true, needs_fix_at: ts };
       if (note && String(note).trim()) payload.manager_notes = String(note).trim();
+
       const { error, count } = await supa
         .from(table)
         .update(payload, { count: 'exact' })
         .match({ turn_id: turnId, [col]: path });
-      return !error && (count ?? 0) > 0;
+
+      if (!error && (count ?? 0) > 0) {
+        for (const r of rows) {
+          const p = bestPathFromRow(r);
+          if (p) matchedEvidence.push({ path: p, area_key: r?.area_key || null, note: note || '' });
+        }
+        return true;
+      }
+      return false;
     }
 
     async function updateByFilename(table, turnId, col, pathOrName, note) {
       const name = filenameOf(pathOrName);
       const { data, error } = await supa
         .from(table)
-        .select(`id, ${col}, turn_id`)
+        .select(`id, ${col}, turn_id, area_key, path, storage_path, photo_path, url, file`)
         .eq('turn_id', turnId);
 
       if (error || !Array.isArray(data)) return false;
       const matches = data.filter(r => String(r[col] || '').endsWith('/' + name));
       if (matches.length === 0) return false;
 
-      let ok = false;
-      for (const m of matches) {
-        ok = (await updateById(table, m.id, note)) || ok;
+      const ids = matches.map(m => m.id);
+      const payload = { needs_fix: true, needs_fix_at: ts };
+      if (note && String(note).trim()) payload.manager_notes = String(note).trim();
+
+      const { error: updErr, count } = await supa
+        .from(table)
+        .update(payload, { count: 'exact' })
+        .in('id', ids);
+
+      if (!updErr && (count ?? 0) > 0) {
+        for (const m of matches) {
+          const p = bestPathFromRow(m);
+          if (p) matchedEvidence.push({ path: p, area_key: m?.area_key || null, note: note || '' });
+        }
+        return true;
       }
-      return ok;
+      return false;
     }
 
     async function tryFlag(one) {
@@ -151,23 +215,40 @@ export default async function handler(req, res) {
       if (await tryFlag(n)) flagged++;
     }
 
-    // 3) Persist findings to qa_findings for the cleaner UI highlight
+    // 3) Persist findings to qa_findings (use the actual rows we flagged)
     try {
-      // optional: clear any previous findings for this turn so they don’t pile up
       await supa.from('qa_findings').delete().eq('turn_id', turnId);
 
-      const rows = normalizedNotes
-        .filter(n => (n.path || '').trim().length > 0)
-        .map(n => ({
-          turn_id: turnId,
-          evidence_url: n.path,               // UI compares this against photo `path`
-          note: (n.note || '').trim() || null,
-          severity: 'needs_fix',              // keep simple; adjust if you add enum later
-          created_at: ts,
-        }));
+      const rowsFromMatches = matchedEvidence.map(m => ({
+        turn_id: turnId,
+        area_key: m.area_key || null,
+        label: 'needs_fix',
+        severity: 'needs_fix',
+        note: (m.note || '').trim() || null,
+        evidence_url: m.path,  // matches what cleaner UI will compare against
+        created_at: ts,
+      }));
 
-      if (rows.length) {
-        const { error: insErr } = await supa.from('qa_findings').insert(rows);
+      // Fallback: if we didn’t match anything (e.g., path didn’t find rows),
+      // still write something so the cleaner has context.
+      const fallback = (!rowsFromMatches.length
+        ? normalizedNotes
+            .filter(n => (n.path || '').trim().length > 0)
+            .map(n => ({
+              turn_id: turnId,
+              area_key: null,
+              label: 'needs_fix',
+              severity: 'needs_fix',
+              note: (n.note || '').trim() || null,
+              evidence_url: n.path,
+              created_at: ts,
+            }))
+        : []);
+
+      const toInsert = rowsFromMatches.length ? rowsFromMatches : fallback;
+
+      if (toInsert.length) {
+        const { error: insErr } = await supa.from('qa_findings').insert(toInsert);
         if (insErr) console.error('insert qa_findings failed', insErr);
       }
     } catch (e) {
@@ -177,7 +258,6 @@ export default async function handler(req, res) {
 
     // 4) Notify cleaner (optional)
     if (notify) {
-      // find cleaner phone
       let cleanerPhone = null;
       let propertyName = null;
 
