@@ -24,8 +24,7 @@ async function fetchPhotos(turnId) {
   }));
 }
 
-// NEW: try to load existing findings for this turn.
-// Expected shape: { findings: [{ path, note, severity? }] }
+// Load existing findings for this turn: { findings: [{ path, note, severity? }] }
 async function fetchFindings(turnId) {
   try {
     const r = await fetch(`/api/turns/${turnId}/findings`);
@@ -33,7 +32,6 @@ async function fetchFindings(turnId) {
     const j = await r.json().catch(() => ({}));
     return Array.isArray(j.findings) ? j.findings : [];
   } catch {
-    // If this route isn't implemented yet, just return empty.
     return [];
   }
 }
@@ -58,7 +56,7 @@ function badgeStyle(status) {
   };
 }
 
-// NEW: highlighted-card style for flagged photos (Midnight amber)
+// Highlight style for flagged photos
 const flaggedCardStyle = {
   border: '1px solid #d97706',
   boxShadow: '0 0 0 3px rgba(217,119,6,0.25) inset',
@@ -85,11 +83,11 @@ export default function Review() {
   const [acting, setActing] = useState(false);
 
   // Per-photo state:
-  const [notesByPath, setNotesByPath] = useState({});         // { [path]: string }
+  const [notesByPath, setNotesByPath] = useState({});          // { [path]: string }
   const [selectedPaths, setSelectedPaths] = useState(new Set()); // Set<string>
 
-  // NEW: store findings for highlight + prefill
-  const [findingsByPath, setFindingsByPath] = useState({});   // { [path]: {note, severity?} }
+  // Findings for highlight + prefill
+  const [findingsByPath, setFindingsByPath] = useState({});    // { [path]: {note, severity?} }
 
   // Cleaner “fix & resubmit” state
   const [cleanerReply, setCleanerReply] = useState('');
@@ -107,10 +105,13 @@ export default function Review() {
         const [t, ph] = await Promise.all([fetchTurn(turnId), fetchPhotos(turnId)]);
         setTurn(t);
         setStatus(t?.status || 'in_progress');
-        setManagerNote(t?.manager_notes || '');
+
+        // BUGFIX: server uses `manager_note` (singular)
+        setManagerNote(t?.manager_note || '');
+
         setPhotos(ph);
 
-        // NEW: load findings and prefill states (both modes benefit)
+        // Load findings and prefill
         const f = await fetchFindings(turnId);
         if (f.length) {
           const map = {};
@@ -120,13 +121,13 @@ export default function Review() {
             if (!it?.path) return;
             map[it.path] = { note: it.note || '', severity: it.severity || 'warn' };
             sel.add(it.path);
-            // Pre-fill the note box in manager mode so they can edit/clear
             notes[it.path] = it.note || '';
           });
           setFindingsByPath(map);
-          // Only auto-check in manager mode; cleaners just see highlight.
-          if (isManagerMode) setSelectedPaths(sel);
+          if (isManagerMode) setSelectedPaths(sel); // managers see the boxes pre-checked
           setNotesByPath(prev => ({ ...notes, ...prev }));
+        } else {
+          setFindingsByPath({});
         }
       } catch (e) {
         setLoadErr(e.message || 'load failed');
@@ -160,7 +161,7 @@ export default function Review() {
     setNotesByPath(prev => ({ ...prev, [path]: text }));
   }
 
-  // --- Old status update for Approve only (needs-fix uses the new per-photo route) ---
+  // --- Approve ---
   async function markApproved() {
     if (!turnId) return;
     setActing(true);
@@ -183,12 +184,11 @@ export default function Review() {
     }
   }
 
-  // --- Send “needs fix” with per-photo notes + summary (also triggers SMS) ---
+  // --- Needs Fix (with notes) ---
   async function sendNeedsFix() {
     if (!turnId) return;
     setActing(true);
     try {
-      // Build notes array:
       const selected = new Set(selectedPaths);
       const payloadNotes = [];
 
@@ -219,7 +219,8 @@ export default function Review() {
       if (!r.ok) throw new Error(j.error || 'Needs-fix failed');
 
       setStatus('needs_fix');
-      // NEW: update local highlight state from what we just sent
+
+      // Update local highlight immediately
       const newMap = {};
       const sel = new Set();
       const newNotes = {};
@@ -252,10 +253,8 @@ export default function Review() {
     try {
       const uploaded = [];
       for (const f of files) {
-        // Local preview
         const preview = URL.createObjectURL(f);
 
-        // Reuse your upload-url endpoint
         const meta = await fetch('/api/upload-url', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -440,8 +439,6 @@ export default function Review() {
                 const path = p.path || '';
                 const selected = selectedPaths.has(path);
                 const noteVal = notesByPath[path] || '';
-
-                // NEW: flagged if we have a finding for this path (any role)
                 const flagged = !!findingsByPath[path];
 
                 return (
@@ -569,7 +566,6 @@ export default function Review() {
               </button>
             </div>
 
-            {/* Staged thumbnails */}
             {staged.length > 0 && (
               <div style={{ marginTop:12 }}>
                 <div style={{ fontWeight:700, marginBottom:6 }}>Staged photos (not yet submitted)</div>
