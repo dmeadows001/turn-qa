@@ -24,6 +24,20 @@ async function fetchPhotos(turnId) {
   }));
 }
 
+// NEW: try to load existing findings for this turn.
+// Expected shape: { findings: [{ path, note, severity? }] }
+async function fetchFindings(turnId) {
+  try {
+    const r = await fetch(`/api/turns/${turnId}/findings`);
+    if (!r.ok) return [];
+    const j = await r.json().catch(() => ({}));
+    return Array.isArray(j.findings) ? j.findings : [];
+  } catch {
+    // If this route isn't implemented yet, just return empty.
+    return [];
+  }
+}
+
 function badgeStyle(status) {
   const map = {
     approved:    { bg:'#064e3b', fg:'#86efac', bd:'#065f46' },  // green
@@ -44,6 +58,13 @@ function badgeStyle(status) {
   };
 }
 
+// NEW: highlighted-card style for flagged photos (Midnight amber)
+const flaggedCardStyle = {
+  border: '1px solid #d97706',
+  boxShadow: '0 0 0 3px rgba(217,119,6,0.25) inset',
+  background: '#0b1220'
+};
+
 export default function Review() {
   const router = useRouter();
   const turnId = router.query.id;
@@ -62,8 +83,13 @@ export default function Review() {
   // Manager notes (top-level summary) + per-photo selections/notes
   const [managerNote, setManagerNote] = useState('');
   const [acting, setActing] = useState(false);
-  const [notesByPath, setNotesByPath] = useState({});   // { [path]: string }
+
+  // Per-photo state:
+  const [notesByPath, setNotesByPath] = useState({});         // { [path]: string }
   const [selectedPaths, setSelectedPaths] = useState(new Set()); // Set<string>
+
+  // NEW: store findings for highlight + prefill
+  const [findingsByPath, setFindingsByPath] = useState({});   // { [path]: {note, severity?} }
 
   // Cleaner “fix & resubmit” state
   const [cleanerReply, setCleanerReply] = useState('');
@@ -78,19 +104,38 @@ export default function Review() {
       setLoading(true);
       setLoadErr('');
       try {
-        const t = await fetchTurn(turnId);
+        const [t, ph] = await Promise.all([fetchTurn(turnId), fetchPhotos(turnId)]);
         setTurn(t);
         setStatus(t?.status || 'in_progress');
         setManagerNote(t?.manager_notes || '');
-        const ph = await fetchPhotos(turnId);
         setPhotos(ph);
+
+        // NEW: load findings and prefill states (both modes benefit)
+        const f = await fetchFindings(turnId);
+        if (f.length) {
+          const map = {};
+          const sel = new Set();
+          const notes = {};
+          f.forEach(it => {
+            if (!it?.path) return;
+            map[it.path] = { note: it.note || '', severity: it.severity || 'warn' };
+            sel.add(it.path);
+            // Pre-fill the note box in manager mode so they can edit/clear
+            notes[it.path] = it.note || '';
+          });
+          setFindingsByPath(map);
+          // Only auto-check in manager mode; cleaners just see highlight.
+          if (isManagerMode) setSelectedPaths(sel);
+          setNotesByPath(prev => ({ ...notes, ...prev }));
+        }
       } catch (e) {
         setLoadErr(e.message || 'load failed');
       } finally {
         setLoading(false);
       }
     })();
-  }, [turnId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [turnId, isManagerMode]);
 
   // Cleanup local object URLs
   useEffect(() => {
@@ -138,14 +183,12 @@ export default function Review() {
     }
   }
 
-  // --- New: send “needs fix” with per-photo notes + summary (also triggers SMS) ---
+  // --- Send “needs fix” with per-photo notes + summary (also triggers SMS) ---
   async function sendNeedsFix() {
     if (!turnId) return;
     setActing(true);
     try {
       // Build notes array:
-      // - include everything selected
-      // - also include any photo that has a non-empty note even if not selected
       const selected = new Set(selectedPaths);
       const payloadNotes = [];
 
@@ -176,6 +219,19 @@ export default function Review() {
       if (!r.ok) throw new Error(j.error || 'Needs-fix failed');
 
       setStatus('needs_fix');
+      // NEW: update local highlight state from what we just sent
+      const newMap = {};
+      const sel = new Set();
+      const newNotes = {};
+      payloadNotes.forEach(it => {
+        newMap[it.path] = { note: it.note || '', severity: 'warn' };
+        sel.add(it.path);
+        newNotes[it.path] = it.note || '';
+      });
+      setFindingsByPath(newMap);
+      setSelectedPaths(sel);
+      setNotesByPath(prev => ({ ...prev, ...newNotes }));
+
       alert('Marked Needs Fix. Cleaner notified via SMS.');
     } catch (e) {
       alert(e.message || 'Could not send needs-fix.');
@@ -205,7 +261,7 @@ export default function Review() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             turnId,
-            shotId: 'fixes',              // logical bucket for fixes
+            shotId: 'fixes',
             filename: f.name,
             mime: f.type || 'image/jpeg'
           })
@@ -217,7 +273,6 @@ export default function Review() {
           continue;
         }
 
-        // Upload file to storage
         await fetch(meta.uploadUrl, {
           method: 'PUT',
           headers: { 'Content-Type': meta.mime || f.type || 'application/octet-stream' },
@@ -227,9 +282,7 @@ export default function Review() {
         uploaded.push({ name: f.name, preview, path: meta.path });
       }
 
-      if (uploaded.length) {
-        setStaged(prev => [...prev, ...uploaded]);
-      }
+      if (uploaded.length) setStaged(prev => [...prev, ...uploaded]);
     } finally {
       setUploadingFix(false);
     }
@@ -256,13 +309,12 @@ export default function Review() {
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error || 'Resubmit failed');
 
-      // Clear staged + reload photos + show success
       staged.forEach(s => s.preview && URL.revokeObjectURL(s.preview));
       setStaged([]);
       setCleanerReply('');
       const ph = await fetchPhotos(turnId);
       setPhotos(ph);
-      setStatus('submitted'); // mirror server change
+      setStatus('submitted');
       alert('Submitted fixes for review ✅');
     } catch (e) {
       alert(e.message || 'Could not resubmit fixes.');
@@ -302,7 +354,6 @@ export default function Review() {
             </span>
           </h2>
 
-          {/* Notice if not in manager mode */}
           {!isManagerMode && (
             <div style={{
               marginTop: 8, padding: '8px 10px',
@@ -313,7 +364,7 @@ export default function Review() {
             </div>
           )}
 
-          {/* ---- Manager Action Bar (hidden unless ?manager=1) ---- */}
+          {/* Manager actions */}
           {isManagerMode && (
             <div style={{
               margin:'12px 0 6px',
@@ -389,8 +440,21 @@ export default function Review() {
                 const path = p.path || '';
                 const selected = selectedPaths.has(path);
                 const noteVal = notesByPath[path] || '';
+
+                // NEW: flagged if we have a finding for this path (any role)
+                const flagged = !!findingsByPath[path];
+
                 return (
-                  <div key={p.id} style={{ border: '1px solid #334155', borderRadius: 12, overflow: 'hidden', background:'#0b1220' }}>
+                  <div
+                    key={p.id}
+                    style={{
+                      border: '1px solid #334155',
+                      borderRadius: 12,
+                      overflow: 'hidden',
+                      background:'#0b1220',
+                      ...(flagged ? flaggedCardStyle : null)
+                    }}
+                  >
                     <a href={p.url} target="_blank" rel="noreferrer">
                       <img
                         src={p.url}
@@ -398,9 +462,26 @@ export default function Review() {
                         style={{ width: '100%', display: 'block', aspectRatio: '4/3', objectFit: 'cover' }}
                       />
                     </a>
+
                     <div style={{ padding: 10, fontSize: 12 }}>
                       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:8 }}>
-                        <div><b>{p.area_key || '—'}</b></div>
+                        <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                          <b>{p.area_key || '—'}</b>
+                          {flagged && (
+                            <span style={{
+                              padding:'2px 8px',
+                              borderRadius:999,
+                              fontSize:11,
+                              fontWeight:700,
+                              color:'#fcd34d',
+                              background:'#4a2f04',
+                              border:'1px solid #d97706'
+                            }}>
+                              needs fix
+                            </span>
+                          )}
+                        </div>
+
                         {isManagerMode && (
                           <label style={{ display:'flex', alignItems:'center', gap:6, cursor:'pointer', userSelect:'none' }}>
                             <input
@@ -413,6 +494,7 @@ export default function Review() {
                           </label>
                         )}
                       </div>
+
                       <div style={{ color: '#9ca3af' }}>{new Date(p.created_at).toLocaleString()}</div>
                       <div style={{ color: '#64748b', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{p.path}</div>
 
@@ -426,6 +508,21 @@ export default function Review() {
                             placeholder="Note for this photo (optional)…"
                             style={{ ...ui.input, width:'100%', padding:'8px 10px', resize:'vertical', background:'#0b1220' }}
                           />
+                        </div>
+                      )}
+
+                      {/* Cleaner view: show manager note, if any */}
+                      {!isManagerMode && flagged && findingsByPath[path]?.note && (
+                        <div style={{
+                          marginTop:8,
+                          padding:'8px 10px',
+                          background:'#0f172a',
+                          border:'1px solid #334155',
+                          borderRadius:8,
+                          color:'#cbd5e1'
+                        }}>
+                          <div style={{ fontSize:11, color:'#94a3b8', marginBottom:4, fontWeight:700 }}>Manager note</div>
+                          <div style={{ whiteSpace:'pre-wrap' }}>{findingsByPath[path].note}</div>
                         </div>
                       )}
                     </div>
