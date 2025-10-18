@@ -153,30 +153,42 @@ export default async function handler(req, res) {
       if (await tryFlag(n)) flagged++;
     }
 
-    // --- 3) Persist findings rows so the cleaner page can highlight ---
-    const findingRows = normalizedNotes
+        // --- 3) Persist findings rows so the cleaner page can highlight ---
+    // Use a constraint-safe severity ('warn'), and retry without severity if needed.
+    const findingRowsBase = normalizedNotes
       .filter(n => (n.path || '').trim().length > 0)
       .map(n => ({
-        id: mkId(),                  // ensure id always present (DB may not have default)
+        id: mkId(),                  // ensure id is present
         turn_id: turnId,
-        evidence_url: n.path,        // the cleaner UI compares against photo.path
+        evidence_url: n.path,        // UI compares against photo.path
         note: (n.note || '').trim() || null,
-        severity: 'needs_fix',
         created_at: ts,
       }));
+
+    // First attempt: include severity = 'warn'
+    const rowsWithSeverity = findingRowsBase.map(r => ({ ...r, severity: 'warn' }));
 
     let findingsInserted = 0;
     let findingsInsertErr = null;
 
     try {
+      // Clear previous findings for this turn
       await supa.from('qa_findings').delete().eq('turn_id', turnId);
 
-      if (findingRows.length) {
-        // Use .select('id') to reliably get inserted count
-        const { data: insData, error: insErr } = await supa
+      if (rowsWithSeverity.length) {
+        // Try with severity = 'warn'
+        let { data: insData, error: insErr } = await supa
           .from('qa_findings')
-          .insert(findingRows)
-          .select('id'); // returns rows so we can count
+          .insert(rowsWithSeverity)
+          .select('id'); // so we can count reliably
+
+        // If the insert fails because of a severity constraint, retry without severity column
+        if (insErr && /severity|check constraint|violates check constraint/i.test(insErr.message || '')) {
+          const rowsNoSeverity = findingRowsBase; // no severity field at all
+          const retry = await supa.from('qa_findings').insert(rowsNoSeverity).select('id');
+          insData = retry.data;
+          insErr = retry.error;
+        }
 
         if (insErr) {
           findingsInsertErr = insErr.message || String(insErr);
