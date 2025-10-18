@@ -41,8 +41,20 @@ export default async function handler(req, res) {
     const turnId = String(req.query.id || '').trim();
     if (!turnId) return res.status(400).json({ error: 'missing id' });
 
-    // { overall_note?: string, photos?: [{ id?: string, path?: string, note?: string }], notify?: boolean, debug?: boolean }
-    const { overall_note = '', photos = [], notify = true, debug = false } = req.body || {};
+    // Support BOTH payload shapes:
+    //  - new: { notes: [{ path, note }], summary?, send_sms? }
+    //  - old: { photos: [{ id?, path?, note? }], overall_note?, notify? }
+    const b = req.body || {};
+    const summary = (b.summary ?? b.overall_note ?? '').trim();
+    const notify = Boolean(b.send_sms ?? b.notify ?? true);
+
+    // normalize into an array of { path, note }
+    const normalizedNotes = Array.isArray(b.notes)
+      ? b.notes.map(n => ({ path: String(n?.path || ''), note: String(n?.note || '') }))
+      : Array.isArray(b.photos)
+        ? b.photos.map(p => ({ path: String(p?.path || ''), note: String(p?.note || '') }))
+        : [];
+
     const ts = nowIso();
 
     // 1) Set turn status + optional overall note
@@ -52,13 +64,13 @@ export default async function handler(req, res) {
         .update({
           status: 'needs_fix',
           needs_fix_at: ts,
-          manager_note: overall_note || null,
+          manager_note: summary || null,
         })
         .eq('id', turnId);
       if (error && !/column .* does not exist/i.test(error.message)) throw error;
     }
 
-    // 2) Try to flag specific photos
+    // 2) Try to flag specific photos (your existing logic kept intact)
     let flagged = 0;
     const attempted = [];
     const columns = ['id', 'path', 'storage_path', 'photo_path', 'url', 'file'];
@@ -88,7 +100,6 @@ export default async function handler(req, res) {
 
     async function updateByFilename(table, turnId, col, pathOrName, note) {
       const name = filenameOf(pathOrName);
-      // Select candidates by suffix match, then update exact row(s)
       const { data, error } = await supa
         .from(table)
         .select(`id, ${col}, turn_id`)
@@ -136,11 +147,35 @@ export default async function handler(req, res) {
       return false;
     }
 
-    for (const p of Array.isArray(photos) ? photos : []) {
-      if (await tryFlag(p)) flagged++;
+    for (const n of normalizedNotes) {
+      if (await tryFlag(n)) flagged++;
     }
 
-    // 3) Notify cleaner (optional)
+    // 3) Persist findings to qa_findings for the cleaner UI highlight
+    try {
+      // optional: clear any previous findings for this turn so they don’t pile up
+      await supa.from('qa_findings').delete().eq('turn_id', turnId);
+
+      const rows = normalizedNotes
+        .filter(n => (n.path || '').trim().length > 0)
+        .map(n => ({
+          turn_id: turnId,
+          evidence_url: n.path,               // UI compares this against photo `path`
+          note: (n.note || '').trim() || null,
+          severity: 'needs_fix',              // keep simple; adjust if you add enum later
+          created_at: ts,
+        }));
+
+      if (rows.length) {
+        const { error: insErr } = await supa.from('qa_findings').insert(rows);
+        if (insErr) console.error('insert qa_findings failed', insErr);
+      }
+    } catch (e) {
+      console.error('qa_findings write failed', e);
+      // non-fatal
+    }
+
+    // 4) Notify cleaner (optional)
     if (notify) {
       // find cleaner phone
       let cleanerPhone = null;
@@ -171,15 +206,15 @@ export default async function handler(req, res) {
 
       if (cleanerPhone) {
         const base =
-        process.env.APP_BASE_URL ||
-        process.env.NEXT_PUBLIC_APP_BASE_URL ||
-        process.env.NEXT_PUBLIC_SITE_URL ||
-        'https://www.turnqa.com';
+          process.env.APP_BASE_URL ||
+          process.env.NEXT_PUBLIC_APP_BASE_URL ||
+          process.env.NEXT_PUBLIC_SITE_URL ||
+          'https://www.turnqa.com';
 
         const link = `${base.replace(/\/+$/, '')}/turns/${encodeURIComponent(turnId)}/review`;
         const msg =
           `TurnQA: Updates needed${propertyName ? ` at ${propertyName}` : ''}.\n` +
-          (overall_note ? `Note: ${overall_note}\n` : '') +
+          (summary ? `Note: ${summary}\n` : '') +
           (flagged > 0 ? `${flagged} item(s) marked.\n` : '') +
           `Resume here: ${link}`;
         await sendSmsMinimal(cleanerPhone, msg);
@@ -189,8 +224,8 @@ export default async function handler(req, res) {
     return res.json({
       ok: true,
       flagged,
-      summary_used: true,
-      attempted: debug ? attempted : undefined, // include trace only if you pass {debug:true}
+      summary_used: Boolean(summary),
+      attempted: (b.debug ? attempted : undefined),
     });
   } catch (e) {
     console.error('[api/turns/[id]/needs-fix] error', e);
