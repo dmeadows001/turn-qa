@@ -32,6 +32,12 @@ try {
 const supa = typeof _admin === 'function' ? _admin() : _admin;
 const nowIso = () => new Date().toISOString();
 
+// Safe UUID helper (Node 18+ has globalThis.crypto.randomUUID)
+const mkId = () =>
+  (globalThis.crypto?.randomUUID
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(16).slice(2)}`);
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', ['POST']);
@@ -52,7 +58,7 @@ export default async function handler(req, res) {
     const normalizedNotes = Array.isArray(b.notes)
       ? b.notes.map(n => ({ path: String(n?.path || ''), note: String(n?.note || '') }))
       : Array.isArray(b.photos)
-        ? b.photos.map(p => ({ path: String(p?.path || ''), note: String(p?.note || '') }))
+        ? b.photos.map(p => ({ id: p?.id, path: String(p?.path || ''), note: String(p?.note || '') }))
         : [];
 
     const ts = nowIso();
@@ -71,7 +77,6 @@ export default async function handler(req, res) {
     }
 
     // --- 2) Best-effort flagging on turn_photos/photos (non-blocking) ---
-    // kept from your earlier implementation so “needs_fix” flags still set in those tables
     let flagged = 0;
     const attempted = [];
     const columns = ['id', 'path', 'storage_path', 'photo_path', 'url', 'file'];
@@ -148,32 +153,40 @@ export default async function handler(req, res) {
       if (await tryFlag(n)) flagged++;
     }
 
-    // --- 3) Always write findings rows so the cleaner page can highlight ---
-    // We DO NOT require a DB match for the path; we just store what the UI sent.
+    // --- 3) Persist findings rows so the cleaner page can highlight ---
     const findingRows = normalizedNotes
       .filter(n => (n.path || '').trim().length > 0)
       .map(n => ({
+        id: mkId(),                  // ensure id always present (DB may not have default)
         turn_id: turnId,
-        evidence_url: n.path,           // the cleaner UI compares against photo.path
+        evidence_url: n.path,        // the cleaner UI compares against photo.path
         note: (n.note || '').trim() || null,
         severity: 'needs_fix',
         created_at: ts,
       }));
 
-    let insertedCount = 0;
+    let findingsInserted = 0;
+    let findingsInsertErr = null;
+
     try {
       await supa.from('qa_findings').delete().eq('turn_id', turnId);
+
       if (findingRows.length) {
-        const { error: insErr, count } = await supa
+        // Use .select('id') to reliably get inserted count
+        const { data: insData, error: insErr } = await supa
           .from('qa_findings')
-          .insert(findingRows, { count: 'exact' });
+          .insert(findingRows)
+          .select('id'); // returns rows so we can count
+
         if (insErr) {
+          findingsInsertErr = insErr.message || String(insErr);
           console.error('[qa_findings insert] error:', insErr);
         } else {
-          insertedCount = count || findingRows.length;
+          findingsInserted = Array.isArray(insData) ? insData.length : 0;
         }
       }
     } catch (e) {
+      findingsInsertErr = e?.message || String(e);
       console.error('[qa_findings insert] exception:', e);
     }
 
@@ -225,11 +238,11 @@ export default async function handler(req, res) {
     return res.json({
       ok: true,
       flagged,
-      findings_inserted: insertedCount,
-      tried_to_insert: findingRows.length,
+      findings_tried_to_insert: findingRows.length,
+      findings_inserted: findingsInserted,
+      findings_insert_error: findingsInsertErr, // null when all good
       summary_used: Boolean(summary),
-      // flip to true if you want to see path-matching attempts:
-      // attempted,
+      // attempted, // uncomment for detailed path matching trace
     });
   } catch (e) {
     console.error('[api/turns/[id]/needs-fix] error', e);
