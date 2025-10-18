@@ -1,9 +1,8 @@
 // pages/api/turns/[id]/findings.ts
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabaseAdmin } from '../../../../lib/supabaseAdmin'; // from project root: lib/supabaseAdmin.ts
+import { supabaseAdmin } from '../../../../lib/supabaseAdmin'; // factory function in your repo
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  // Only GET
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -16,22 +15,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    // Read all findings for this turn
-    const { data, error } = await supabaseAdmin
+    const sb = supabaseAdmin(); // ← create the admin client
+
+    // Note: PostgREST aliasing uses column:alias (no spaces)
+    const { data, error } = await sb
       .from('qa_findings')
-      .select('path: evidence_url, note, severity, created_at') // adjust column aliases if you prefer
+      .select('evidence_url:path, note, severity, created_at')
       .eq('turn_id', turnId)
       .order('created_at', { ascending: true });
 
     if (error) throw error;
 
-    // Normalize the shape the UI expects
-    const findings = (data || []).map((row: any) => ({
-      path: row.path || row.evidence_url || '',
-      note: row.note || '',
-      severity: row.severity || 'warn',
-      created_at: row.created_at,
-    })).filter(f => f.path);
+    const findings = (data || [])
+      .map((row: any) => ({
+        path: row.path || row.evidence_url || '',
+        note: row.note || '',
+        severity: row.severity || 'warn',
+        created_at: row.created_at,
+      }))
+      .filter(f => f.path);
 
     return res.status(200).json({ findings });
   } catch (e: any) {
