@@ -4,6 +4,50 @@ import { supabaseAdmin as _admin } from '@/lib/supabaseAdmin';
 const supa = typeof _admin === 'function' ? _admin() : _admin;
 const nowIso = () => new Date().toISOString();
 
+// Try a list of column names until one exists.
+async function updateCleanerNoteWithFallback(turnId, reply) {
+  const tried = [];
+  const payloadBase = {
+    status: 'submitted',
+    submitted_at: nowIso(),
+  };
+
+  // Try these in order; adjust if your schema uses something else.
+  const candidates = ['cleaner_note', 'cleaner_reply', 'cleaner_message'];
+
+  for (const col of candidates) {
+    try {
+      const payload = { ...payloadBase };
+      if (reply && String(reply).trim()) payload[col] = String(reply).trim();
+
+      const { error } = await supa.from('turns').update(payload).eq('id', turnId);
+      if (!error) return { ok: true, used: col, tried };
+      // If it's a “column does not exist” error, keep going; otherwise, bubble up.
+      if (!/column .* does not exist/i.test(error.message || '')) {
+        return { ok: false, tried: [...tried, col], error: error.message || String(error) };
+      }
+      tried.push(col);
+    } catch (e) {
+      const msg = e?.message || String(e);
+      if (!/column .* does not exist/i.test(msg)) {
+        return { ok: false, tried: [...tried, col], error: msg };
+      }
+      tried.push(col);
+      // continue loop
+    }
+  }
+
+  // If we’re here, none of the columns exist; still try to set status/submitted_at only.
+  const { error: finalErr } = await supa
+    .from('turns')
+    .update(payloadBase)
+    .eq('id', turnId);
+
+  return finalErr
+    ? { ok: false, tried, error: finalErr.message || String(finalErr) }
+    : { ok: true, used: null, tried };
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', ['POST']);
@@ -12,67 +56,32 @@ export default async function handler(req, res) {
 
   try {
     const { turn_id, reply = '', photos = [] } = req.body || {};
-    if (!turn_id) return res.status(400).json({ error: 'missing turn_id' });
+    const turnId = String(turn_id || '').trim();
+    if (!turnId) return res.status(400).json({ error: 'missing turn_id' });
 
-    const ts = nowIso();
+    // (Optional) You can record uploaded photo paths somewhere if your app needs it.
+    // Most setups using /api/upload-url + a storage list endpoint do NOT require DB inserts here,
+    // so we leave photos alone to avoid breaking existing flows.
 
-    // --- A) Update status to submitted ---
-    {
-      const { error } = await supa
-        .from('turns')
-        .update({ status: 'submitted', submitted_at: ts })
-        .eq('id', turn_id);
-      if (error && !/column .* does not exist/i.test(error.message)) throw error;
+    // Update status and store cleaner message with column fallback
+    const result = await updateCleanerNoteWithFallback(turnId, reply);
+
+    if (!result.ok) {
+      // Non-fatal, but let the client know what happened
+      return res.status(200).json({
+        ok: true,
+        warning: 'Cleaner note column not found; status updated',
+        fallback_error: result.error,
+        columns_tried: result.tried,
+        used_column: null,
+      });
     }
-
-    // --- B) Save cleaner note in whichever column exists ---
-    // we try `cleaner_note`, then `cleaner_reply`, then `cleaner_message`
-    async function trySave(col) {
-      const { error } = await supa
-        .from('turns')
-        .update({ [col]: reply || null })
-        .eq('id', turn_id);
-      if (error) {
-        if (/column .* does not exist/i.test(error.message)) return false; // try next column
-        throw error; // a real error
-      }
-      return true;
-    }
-
-    let noteSavedIn = null;
-    if (reply && reply.trim().length > 0) {
-      for (const c of ['cleaner_note', 'cleaner_reply', 'cleaner_message']) {
-        const ok = await trySave(c).catch(e => { throw e; });
-        if (ok) { noteSavedIn = c; break; }
-      }
-    }
-
-    // --- C) (Optional) Record photos if you want.
-    // We no-op here to avoid changing your current photo pipeline.
-    // If you DO want to persist paths on this endpoint, uncomment below:
-    //
-    // try {
-    //   const rows = (Array.isArray(photos) ? photos : [])
-    //     .filter(p => p?.path)
-    //     .map(p => ({ turn_id, path: p.path, created_at: ts }));
-    //   if (rows.length) {
-    //     // Try turn_photos first, then photos
-    //     let { error } = await supa.from('turn_photos').insert(rows);
-    //     if (error && /relation .* does not exist/i.test(error.message)) {
-    //       const r2 = await supa.from('photos').insert(rows);
-    //       if (r2.error) console.error('[resubmit-turn photos insert] error:', r2.error);
-    //     } else if (error) {
-    //       console.error('[resubmit-turn photos insert] error:', error);
-    //     }
-    //   }
-    // } catch (e) {
-    //   console.error('[resubmit-turn photos] exception', e);
-    // }
 
     return res.json({
       ok: true,
-      status: 'submitted',
-      note_saved_in: noteSavedIn, // which column was used (if any)
+      used_column: result.used,     // which column we ended up using (if any)
+      columns_tried: result.tried,  // which ones we skipped because they didn’t exist
+      photos_received: Array.isArray(photos) ? photos.length : 0,
     });
   } catch (e) {
     console.error('[api/resubmit-turn] error', e);
