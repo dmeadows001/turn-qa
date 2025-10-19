@@ -96,6 +96,9 @@ export default function Review() {
   const [submittingFixes, setSubmittingFixes] = useState(false);
   const fileInputRef = useRef(null);
 
+  // NEW: manager-side display of the most recent cleaner message
+  const [lastCleanerNote, setLastCleanerNote] = useState('');
+
   useEffect(() => {
     if (!turnId) return;
     (async () => {
@@ -109,9 +112,10 @@ export default function Review() {
         // grab any cleaner note field the API returned on the turn row
         const cleanerNote =
           t?.cleaner_note ?? t?.cleaner_reply ?? t?.cleaner_message ?? '';
-        setCleanerReply(''); // (this state is for the cleaner form; just keeping it clean)
+        setLastCleanerNote(cleanerNote);   // <-- store it for manager display
+        setCleanerReply('');               // cleaner-side input; keep it clean
 
-        // BUGFIX: server uses `manager_note` (singular)
+        // server uses `manager_note` (singular)
         setManagerNote(t?.manager_note || '');
 
         setPhotos(ph);
@@ -383,6 +387,23 @@ export default function Review() {
                 {loadErr && <span style={{ color:'#fca5a5' }}>({loadErr})</span>}
               </div>
 
+              {/* NEW: show most recent cleaner message to the manager */}
+              {lastCleanerNote && (
+                <div style={{
+                  marginTop:10,
+                  padding:12,
+                  border:'1px solid #334155',
+                  borderRadius:8,
+                  background:'#0b1220',
+                  color:'#cbd5e1'
+                }}>
+                  <div style={{ fontSize:12, fontWeight:700, color:'#9ca3af', marginBottom:6 }}>
+                    Cleaner note
+                  </div>
+                  <div style={{ whiteSpace:'pre-wrap' }}>{lastCleanerNote}</div>
+                </div>
+              )}
+
               <div style={{ marginTop:10 }}>
                 <div style={{ fontSize:12, fontWeight:700, color:'#9ca3af', marginBottom:6 }}>
                   Optional overall note to cleaner (summary)
@@ -497,7 +518,7 @@ export default function Review() {
                         )}
                       </div>
 
-                      <div style={{ color: '#9ca3af' }}>{new Date(p.created_at).toLocaleString()}</div>
+                      <div style={{ color: '#9ca5af' }}>{new Date(p.created_at).toLocaleString()}</div>
                       <div style={{ color: '#64748b', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{p.path}</div>
 
                       {/* Per-photo note (manager only) */}
@@ -586,7 +607,7 @@ export default function Review() {
                       ) : (
                         <div style={{ padding:10, color:'#cbd5e1' }}>{s.name}</div>
                       )}
-                      <div style={{ padding:8, fontSize:12, color:'#9ca3af' }}>
+                      <div style={{ padding:8, fontSize:12, color:'#9ca5af' }}>
                         {s.name}
                       </div>
                     </div>
