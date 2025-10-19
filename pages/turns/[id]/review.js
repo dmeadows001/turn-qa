@@ -106,6 +106,11 @@ export default function Review() {
         setTurn(t);
         setStatus(t?.status || 'in_progress');
 
+        // grab any cleaner note field the API returned on the turn row
+        const cleanerNote =
+          t?.cleaner_note ?? t?.cleaner_reply ?? t?.cleaner_message ?? '';
+        setCleanerReply(''); // (this state is for the cleaner form; just keeping it clean)
+
         // BUGFIX: server uses `manager_note` (singular)
         setManagerNote(t?.manager_note || '');
 
