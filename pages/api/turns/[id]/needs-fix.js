@@ -34,15 +34,9 @@ const nowIso = () => new Date().toISOString();
 
 // simple id helper (Node 18+ has crypto.randomUUID)
 const mkId = () =>
-  (globalThis.crypto && typeof crypto.randomUUID === 'function')
-    ? crypto.randomUUID()
-    : `id_${Date.now().toString(36)}_${Math.random().toString(36).slice(2,10)}`;
-
-// Safe UUID helper (Node 18+ has globalThis.crypto.randomUUID)
-const mkId = () =>
-  (globalThis.crypto?.randomUUID
-    ? crypto.randomUUID()
-    : `${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function')
+    ? globalThis.crypto.randomUUID()
+    : `id_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -59,7 +53,7 @@ export default async function handler(req, res) {
     //  - { photos: [{ id?, path?, note? }], overall_note?, notify? }
     const b = req.body || {};
     const summary = (b.summary ?? b.overall_note ?? '').trim();
-    const notify  = Boolean(b.send_sms ?? b.notify ?? true);
+    const notify = Boolean(b.send_sms ?? b.notify ?? true);
 
     const normalizedNotes = Array.isArray(b.notes)
       ? b.notes.map(n => ({ path: String(n?.path || ''), note: String(n?.note || '') }))
@@ -100,22 +94,22 @@ export default async function handler(req, res) {
       return !error && (count ?? 0) > 0;
     }
 
-    async function updateByExactPath(table, turnId, col, path, note) {
+    async function updateByExactPath(table, turnIdParam, col, path, note) {
       const payload = { needs_fix: true, needs_fix_at: ts };
       if (note && String(note).trim()) payload.manager_notes = String(note).trim();
       const { error, count } = await supa
         .from(table)
         .update(payload, { count: 'exact' })
-        .match({ turn_id: turnId, [col]: path });
+        .match({ turn_id: turnIdParam, [col]: path });
       return !error && (count ?? 0) > 0;
     }
 
-    async function updateByFilename(table, turnId, col, pathOrName, note) {
+    async function updateByFilename(table, turnIdParam, col, pathOrName, note) {
       const name = filenameOf(pathOrName);
       const { data, error } = await supa
         .from(table)
         .select(`id, ${col}, turn_id`)
-        .eq('turn_id', turnId);
+        .eq('turn_id', turnIdParam);
 
       if (error || !Array.isArray(data)) return false;
       const matches = data.filter(r => String(r[col] || '').endsWith('/' + name));
@@ -159,57 +153,57 @@ export default async function handler(req, res) {
       if (await tryFlag(n)) flagged++;
     }
 
-       // --- 3) Persist findings rows so the cleaner page can highlight ---
-const findingRowsBase = normalizedNotes
-  .filter(n => (n.path || '').trim().length > 0)
-  .map(n => ({
-    id: mkId(),
-    turn_id: turnId,
-    evidence_url: n.path,          // the cleaner UI compares against photo.path
-    note: (n.note || '').trim() || null,
-    created_at: ts,
-  }));
+    // --- 3) Persist findings rows so the cleaner page can highlight ---
+    const findingRowsBase = normalizedNotes
+      .filter(n => (n.path || '').trim().length > 0)
+      .map(n => ({
+        id: mkId(),
+        turn_id: turnId,
+        evidence_url: n.path, // the cleaner UI compares against photo.path
+        note: (n.note || '').trim() || null,
+        created_at: ts,
+      }));
 
-// First attempt: include severity = 'warn'
-const rowsWithSeverity = findingRowsBase.map(r => ({ ...r, severity: 'warn' }));
+    // First attempt: include severity = 'warn'
+    const rowsWithSeverity = findingRowsBase.map(r => ({ ...r, severity: 'warn' }));
 
-let findingsInserted = 0;
-let findingsInsertErr = null;
-const findingsTriedToInsert = findingRowsBase.length;
+    let findingsInserted = 0;
+    let findingsInsertErr = null;
+    const findingsTriedToInsert = findingRowsBase.length;
 
-try {
-  // Clear previous findings for this turn
-  await supa.from('qa_findings').delete().eq('turn_id', turnId);
+    try {
+      // Clear previous findings for this turn
+      await supa.from('qa_findings').delete().eq('turn_id', turnId);
 
-  if (rowsWithSeverity.length) {
-    // Try with severity
-    let { data: insData, error: insErr } = await supa
-      .from('qa_findings')
-      .insert(rowsWithSeverity)
-      .select('id');
+      if (rowsWithSeverity.length) {
+        // Try with severity
+        let { data: insData, error: insErr } = await supa
+          .from('qa_findings')
+          .insert(rowsWithSeverity)
+          .select('id');
 
-    // If a CHECK constraint on severity fails, retry without the column
-    if (insErr && /severity|check constraint|violates check constraint/i.test(insErr.message || '')) {
-      const retry = await supa
-        .from('qa_findings')
-        .insert(findingRowsBase)     // no severity field
-        .select('id');
+        // If a CHECK constraint on severity fails, retry without the column
+        if (insErr && /severity|check constraint|violates check constraint/i.test(insErr.message || '')) {
+          const retry = await supa
+            .from('qa_findings')
+            .insert(findingRowsBase) // no severity field
+            .select('id');
 
-      insData = retry.data;
-      insErr  = retry.error;
+          insData = retry.data;
+          insErr = retry.error;
+        }
+
+        if (insErr) {
+          findingsInsertErr = insErr.message || String(insErr);
+          console.error('[qa_findings insert] error:', insErr);
+        } else {
+          findingsInserted = Array.isArray(insData) ? insData.length : 0;
+        }
+      }
+    } catch (e) {
+      findingsInsertErr = e?.message || String(e);
+      console.error('[qa_findings insert] exception:', e);
     }
-
-    if (insErr) {
-      findingsInsertErr = insErr.message || String(insErr);
-      console.error('[qa_findings insert] error:', insErr);
-    } else {
-      findingsInserted = Array.isArray(insData) ? insData.length : 0;
-    }
-  }
-} catch (e) {
-  findingsInsertErr = e?.message || String(e);
-  console.error('[qa_findings insert] exception:', e);
-}
 
     // --- 4) SMS (optional) ---
     if (notify) {
@@ -256,16 +250,15 @@ try {
       }
     }
 
-   return res.json({
-  ok: true,
-  flagged,
-  findings_tried_to_insert: findingsTriedToInsert,
-  findings_inserted: findingsInserted,
-  findings_insert_error: findingsInsertErr,
-  summary_used: Boolean(summary),
-  // attempted, // uncomment to debug matching attempts
-});
-
+    return res.json({
+      ok: true,
+      flagged,
+      findings_tried_to_insert: findingsTriedToInsert,
+      findings_inserted: findingsInserted,
+      findings_insert_error: findingsInsertErr,
+      summary_used: Boolean(summary),
+      // attempted, // uncomment to debug path-matching attempts
+    });
   } catch (e) {
     console.error('[api/turns/[id]/needs-fix] error', e);
     return res.status(500).json({ error: e.message || 'needs-fix failed' });
