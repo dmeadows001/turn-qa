@@ -296,40 +296,53 @@ export default function Review() {
     }
   }
 
-  async function submitFixes() {
-    if (!turnId) return;
-    if (staged.length === 0 && !cleanerReply.trim()) {
-      alert('Add at least one photo or a note before submitting.');
-      return;
-    }
-    setSubmittingFixes(true);
-    try {
-      const payload = {
-        turn_id: turnId,
-        reply: cleanerReply || '',
-        photos: staged.map(s => ({ path: s.path }))
-      };
-      const r = await fetch('/api/resubmit-turn', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(j.error || 'Resubmit failed');
-
-      staged.forEach(s => s.preview && URL.revokeObjectURL(s.preview));
-      setStaged([]);
-      setCleanerReply('');
-      const ph = await fetchPhotos(turnId);
-      setPhotos(ph);
-      setStatus('submitted');
-      alert('Submitted fixes for review ✅');
-    } catch (e) {
-      alert(e.message || 'Could not resubmit fixes.');
-    } finally {
-      setSubmittingFixes(false);
-    }
+async function submitFixes() {
+  if (!turnId) return;
+  if (staged.length === 0 && !cleanerReply.trim()) {
+    alert('Add at least one photo or a note before submitting.');
+    return;
   }
+  setSubmittingFixes(true);
+  try {
+    const payload = {
+      turn_id: turnId,
+      reply: cleanerReply || '',
+      photos: staged.map(s => ({ path: s.path }))
+    };
+    const r = await fetch('/api/resubmit-turn', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || 'Resubmit failed');
+
+    // Clean up local state
+    staged.forEach(s => s.preview && URL.revokeObjectURL(s.preview));
+    setStaged([]);
+    setCleanerReply('');
+    const ph = await fetchPhotos(turnId);
+    setPhotos(ph);
+    setStatus('submitted');
+
+    // Optional toast
+    alert('Submitted fixes for review ✅');
+
+    // ⬇️ Redirect cleaner to their turns list
+    // (Do this only when not in manager mode.)
+    if (!isManagerMode) {
+      // absolute: window.location.href = 'https://www.turnqa.com/cleaner/turns';
+      // relative is fine too:
+      window.location.href = '/cleaner/turns';
+      // or: router.replace('/cleaner/turns');
+    }
+  } catch (e) {
+    alert(e.message || 'Could not resubmit fixes.');
+  } finally {
+    setSubmittingFixes(false);
+  }
+}
+
 
   if (!turnId) {
     return (
