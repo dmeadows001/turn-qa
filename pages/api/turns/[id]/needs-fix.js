@@ -32,6 +32,12 @@ try {
 const supa = typeof _admin === 'function' ? _admin() : _admin;
 const nowIso = () => new Date().toISOString();
 
+// simple id helper (Node 18+ has crypto.randomUUID)
+const mkId = () =>
+  (globalThis.crypto && typeof crypto.randomUUID === 'function')
+    ? crypto.randomUUID()
+    : `id_${Date.now().toString(36)}_${Math.random().toString(36).slice(2,10)}`;
+
 // Safe UUID helper (Node 18+ has globalThis.crypto.randomUUID)
 const mkId = () =>
   (globalThis.crypto?.randomUUID
@@ -153,54 +159,57 @@ export default async function handler(req, res) {
       if (await tryFlag(n)) flagged++;
     }
 
-        // --- 3) Persist findings rows so the cleaner page can highlight ---
-    // Use a constraint-safe severity ('warn'), and retry without severity if needed.
-    const findingRowsBase = normalizedNotes
-      .filter(n => (n.path || '').trim().length > 0)
-      .map(n => ({
-        id: mkId(),                  // ensure id is present
-        turn_id: turnId,
-        evidence_url: n.path,        // UI compares against photo.path
-        note: (n.note || '').trim() || null,
-        created_at: ts,
-      }));
+       // --- 3) Persist findings rows so the cleaner page can highlight ---
+const findingRowsBase = normalizedNotes
+  .filter(n => (n.path || '').trim().length > 0)
+  .map(n => ({
+    id: mkId(),
+    turn_id: turnId,
+    evidence_url: n.path,          // the cleaner UI compares against photo.path
+    note: (n.note || '').trim() || null,
+    created_at: ts,
+  }));
 
-    // First attempt: include severity = 'warn'
-    const rowsWithSeverity = findingRowsBase.map(r => ({ ...r, severity: 'warn' }));
+// First attempt: include severity = 'warn'
+const rowsWithSeverity = findingRowsBase.map(r => ({ ...r, severity: 'warn' }));
 
-    let findingsInserted = 0;
-    let findingsInsertErr = null;
+let findingsInserted = 0;
+let findingsInsertErr = null;
+const findingsTriedToInsert = findingRowsBase.length;
 
-    try {
-      // Clear previous findings for this turn
-      await supa.from('qa_findings').delete().eq('turn_id', turnId);
+try {
+  // Clear previous findings for this turn
+  await supa.from('qa_findings').delete().eq('turn_id', turnId);
 
-      if (rowsWithSeverity.length) {
-        // Try with severity = 'warn'
-        let { data: insData, error: insErr } = await supa
-          .from('qa_findings')
-          .insert(rowsWithSeverity)
-          .select('id'); // so we can count reliably
+  if (rowsWithSeverity.length) {
+    // Try with severity
+    let { data: insData, error: insErr } = await supa
+      .from('qa_findings')
+      .insert(rowsWithSeverity)
+      .select('id');
 
-        // If the insert fails because of a severity constraint, retry without severity column
-        if (insErr && /severity|check constraint|violates check constraint/i.test(insErr.message || '')) {
-          const rowsNoSeverity = findingRowsBase; // no severity field at all
-          const retry = await supa.from('qa_findings').insert(rowsNoSeverity).select('id');
-          insData = retry.data;
-          insErr = retry.error;
-        }
+    // If a CHECK constraint on severity fails, retry without the column
+    if (insErr && /severity|check constraint|violates check constraint/i.test(insErr.message || '')) {
+      const retry = await supa
+        .from('qa_findings')
+        .insert(findingRowsBase)     // no severity field
+        .select('id');
 
-        if (insErr) {
-          findingsInsertErr = insErr.message || String(insErr);
-          console.error('[qa_findings insert] error:', insErr);
-        } else {
-          findingsInserted = Array.isArray(insData) ? insData.length : 0;
-        }
-      }
-    } catch (e) {
-      findingsInsertErr = e?.message || String(e);
-      console.error('[qa_findings insert] exception:', e);
+      insData = retry.data;
+      insErr  = retry.error;
     }
+
+    if (insErr) {
+      findingsInsertErr = insErr.message || String(insErr);
+      console.error('[qa_findings insert] error:', insErr);
+    } else {
+      findingsInserted = Array.isArray(insData) ? insData.length : 0;
+    }
+  }
+} catch (e) {
+  findingsInsertErr = e?.message || String(e);
+  console.error('[qa_findings insert] exception:', e);
+}
 
     // --- 4) SMS (optional) ---
     if (notify) {
@@ -247,15 +256,16 @@ export default async function handler(req, res) {
       }
     }
 
-    return res.json({
-      ok: true,
-      flagged,
-      findings_tried_to_insert: findingRows.length,
-      findings_inserted: findingsInserted,
-      findings_insert_error: findingsInsertErr, // null when all good
-      summary_used: Boolean(summary),
-      // attempted, // uncomment for detailed path matching trace
-    });
+   return res.json({
+  ok: true,
+  flagged,
+  findings_tried_to_insert: findingsTriedToInsert,
+  findings_inserted: findingsInserted,
+  findings_insert_error: findingsInsertErr,
+  summary_used: Boolean(summary),
+  // attempted, // uncomment to debug matching attempts
+});
+
   } catch (e) {
     console.error('[api/turns/[id]/needs-fix] error', e);
     return res.status(500).json({ error: e.message || 'needs-fix failed' });
