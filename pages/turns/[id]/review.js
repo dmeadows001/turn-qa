@@ -96,7 +96,7 @@ export default function Review() {
   const [submittingFixes, setSubmittingFixes] = useState(false);
   const fileInputRef = useRef(null);
 
-  // NEW: manager-side display of the most recent cleaner message
+  // manager-side display of the most recent cleaner message
   const [lastCleanerNote, setLastCleanerNote] = useState('');
 
   useEffect(() => {
@@ -109,11 +109,10 @@ export default function Review() {
         setTurn(t);
         setStatus(t?.status || 'in_progress');
 
-        // grab any cleaner note field the API returned on the turn row
         const cleanerNote =
           t?.cleaner_note ?? t?.cleaner_reply ?? t?.cleaner_message ?? '';
-        setLastCleanerNote(cleanerNote);   // <-- store it for manager display
-        setCleanerReply('');               // cleaner-side input; keep it clean
+        setLastCleanerNote(cleanerNote);
+        setCleanerReply('');
 
         // server uses `manager_note` (singular)
         setManagerNote(t?.manager_note || '');
@@ -296,53 +295,138 @@ export default function Review() {
     }
   }
 
-async function submitFixes() {
-  if (!turnId) return;
-  if (staged.length === 0 && !cleanerReply.trim()) {
-    alert('Add at least one photo or a note before submitting.');
-    return;
-  }
-  setSubmittingFixes(true);
-  try {
-    const payload = {
-      turn_id: turnId,
-      reply: cleanerReply || '',
-      photos: staged.map(s => ({ path: s.path }))
-    };
-    const r = await fetch('/api/resubmit-turn', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(j.error || 'Resubmit failed');
-
-    // Clean up local state
-    staged.forEach(s => s.preview && URL.revokeObjectURL(s.preview));
-    setStaged([]);
-    setCleanerReply('');
-    const ph = await fetchPhotos(turnId);
-    setPhotos(ph);
-    setStatus('submitted');
-
-    // Optional toast
-    alert('Submitted fixes for review ✅');
-
-    // ⬇️ Redirect cleaner to their turns list
-    // (Do this only when not in manager mode.)
-    if (!isManagerMode) {
-      // absolute: window.location.href = 'https://www.turnqa.com/cleaner/turns';
-      // relative is fine too:
-      window.location.href = '/cleaner/turns';
-      // or: router.replace('/cleaner/turns');
+  async function submitFixes() {
+    if (!turnId) return;
+    if (staged.length === 0 && !cleanerReply.trim()) {
+      alert('Add at least one photo or a note before submitting.');
+      return;
     }
-  } catch (e) {
-    alert(e.message || 'Could not resubmit fixes.');
-  } finally {
-    setSubmittingFixes(false);
-  }
-}
+    setSubmittingFixes(true);
+    try {
+      const payload = {
+        turn_id: turnId,
+        reply: cleanerReply || '',
+        photos: staged.map(s => ({ path: s.path }))
+      };
+      const r = await fetch('/api/resubmit-turn', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || 'Resubmit failed');
 
+      staged.forEach(s => s.preview && URL.revokeObjectURL(s.preview));
+      setStaged([]);
+      setCleanerReply('');
+      const ph = await fetchPhotos(turnId);
+      setPhotos(ph);
+      setStatus('submitted');
+
+      alert('Submitted fixes for review ✅');
+
+      if (!isManagerMode) {
+        window.location.href = '/cleaner/turns';
+      }
+    } catch (e) {
+      alert(e.message || 'Could not resubmit fixes.');
+    } finally {
+      setSubmittingFixes(false);
+    }
+  }
+
+  // ---------- Small helper to render one photo card ----------
+  function PhotoCard({ p }) {
+    const path = p.path || '';
+    const selected = selectedPaths.has(path);
+    const noteVal = notesByPath[path] || '';
+    const flagged = !!findingsByPath[path];
+
+    return (
+      <div
+        key={p.id}
+        style={{
+          border: '1px solid #334155',
+          borderRadius: 12,
+          overflow: 'hidden',
+          background:'#0b1220',
+          ...(flagged ? flaggedCardStyle : null)
+        }}
+      >
+        <a href={p.url} target="_blank" rel="noreferrer">
+          <img
+            src={p.url}
+            alt={p.area_key || 'photo'}
+            style={{ width: '100%', display: 'block', aspectRatio: '4/3', objectFit: 'cover' }}
+          />
+        </a>
+
+        <div style={{ padding: 10, fontSize: 12 }}>
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:8 }}>
+            <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+              <b>{p.area_key || '—'}</b>
+              {flagged && (
+                <span style={{
+                  padding:'2px 8px',
+                  borderRadius:999,
+                  fontSize:11,
+                  fontWeight:700,
+                  color:'#fcd34d',
+                  background:'#4a2f04',
+                  border:'1px solid #d97706'
+                }}>
+                  needs fix
+                </span>
+              )}
+            </div>
+
+            {isManagerMode && (
+              <label style={{ display:'flex', alignItems:'center', gap:6, cursor:'pointer', userSelect:'none' }}>
+                <input
+                  type="checkbox"
+                  checked={selected}
+                  onChange={() => togglePath(path)}
+                  style={{ transform:'scale(1.1)' }}
+                />
+                <span>Needs fix</span>
+              </label>
+            )}
+          </div>
+
+          <div style={{ color: '#9ca3af' }}>{new Date(p.created_at).toLocaleString()}</div>
+          <div style={{ color: '#64748b', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{p.path}</div>
+
+          {/* Per-photo note (manager only) */}
+          {isManagerMode && (
+            <div style={{ marginTop:8 }}>
+              <textarea
+                value={noteVal}
+                onChange={e => setNote(path, e.target.value)}
+                rows={2}
+                placeholder="Note for this photo (optional)…"
+                style={{ ...ui.input, width:'100%', padding:'8px 10px', resize:'vertical', background:'#0b1220' }}
+              />
+            </div>
+          )}
+
+          {/* Cleaner view: show manager note, if any */}
+          {!isManagerMode && flagged && findingsByPath[path]?.note && (
+            <div style={{
+              marginTop:8,
+              padding:'8px 10px',
+              background:'#0f172a',
+              border:'1px solid #334155',
+              borderRadius:8,
+              color:'#cbd5e1'
+            }}>
+              <div style={{ fontSize:11, color:'#94a3b8', marginBottom:4, fontWeight:700 }}>Manager note</div>
+              <div style={{ whiteSpace:'pre-wrap' }}>{findingsByPath[path].note}</div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   if (!turnId) {
     return (
@@ -400,7 +484,7 @@ async function submitFixes() {
                 {loadErr && <span style={{ color:'#fca5a5' }}>({loadErr})</span>}
               </div>
 
-              {/* NEW: show most recent cleaner message to the manager */}
+              {/* Show most recent cleaner message to the manager */}
               {lastCleanerNote && (
                 <div style={{
                   marginTop:10,
@@ -466,106 +550,53 @@ async function submitFixes() {
           </div>
         </div>
 
-        {/* Photos */}
+        {/* Photos (grouped by area_key) */}
         <div style={ui.card}>
           {loading ? (
             <div>Loading photos…</div>
           ) : photos.length === 0 ? (
             <div style={ui.muted}>No photos yet.</div>
           ) : (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px,1fr))', gap: 12, marginTop: 4 }}>
-              {photos.map(p => {
-                const path = p.path || '';
-                const selected = selectedPaths.has(path);
-                const noteVal = notesByPath[path] || '';
-                const flagged = !!findingsByPath[path];
+            <>
+              {(() => {
+                // Build map { area_keyOrUncat: Photo[] }
+                const byArea = photos.reduce((acc, p) => {
+                  const key = p.area_key && p.area_key.trim() ? p.area_key.trim() : '__UNCAT__';
+                  (acc[key] ||= []).push(p);
+                  return acc;
+                }, {});
 
-                return (
-                  <div
-                    key={p.id}
-                    style={{
-                      border: '1px solid #334155',
-                      borderRadius: 12,
-                      overflow: 'hidden',
-                      background:'#0b1220',
-                      ...(flagged ? flaggedCardStyle : null)
-                    }}
-                  >
-                    <a href={p.url} target="_blank" rel="noreferrer">
-                      <img
-                        src={p.url}
-                        alt={p.area_key || 'photo'}
-                        style={{ width: '100%', display: 'block', aspectRatio: '4/3', objectFit: 'cover' }}
-                      />
-                    </a>
+                // Sort photos newest first inside each area (optional)
+                Object.values(byArea).forEach(list =>
+                  list.sort((a,b) => new Date(b.created_at) - new Date(a.created_at))
+                );
 
-                    <div style={{ padding: 10, fontSize: 12 }}>
-                      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:8 }}>
-                        <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-                          <b>{p.area_key || '—'}</b>
-                          {flagged && (
-                            <span style={{
-                              padding:'2px 8px',
-                              borderRadius:999,
-                              fontSize:11,
-                              fontWeight:700,
-                              color:'#fcd34d',
-                              background:'#4a2f04',
-                              border:'1px solid #d97706'
-                            }}>
-                              needs fix
-                            </span>
-                          )}
-                        </div>
+                // Ordered area headers: alphabetic, then "Uncategorized" if any
+                const areas = Object.keys(byArea)
+                  .filter(k => k !== '__UNCAT__')
+                  .sort((a,b) => a.localeCompare(b, undefined, { numeric:true }))
+                  .concat(byArea['__UNCAT__'] ? ['__UNCAT__'] : []);
 
-                        {isManagerMode && (
-                          <label style={{ display:'flex', alignItems:'center', gap:6, cursor:'pointer', userSelect:'none' }}>
-                            <input
-                              type="checkbox"
-                              checked={selected}
-                              onChange={() => togglePath(path)}
-                              style={{ transform:'scale(1.1)' }}
-                            />
-                            <span>Needs fix</span>
-                          </label>
-                        )}
+                return areas.map(areaKey => (
+                  <div key={areaKey} style={{ marginBottom: 18 }}>
+                    <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between', margin:'6px 4px 10px' }}>
+                      <h3 style={{ margin:0 }}>
+                        {areaKey === '__UNCAT__' ? 'Uncategorized' : areaKey}
+                      </h3>
+                      <div style={{ fontSize:12, color:'#94a3b8' }}>
+                        {byArea[areaKey].length} photo{byArea[areaKey].length === 1 ? '' : 's'}
                       </div>
+                    </div>
 
-                      <div style={{ color: '#9ca5af' }}>{new Date(p.created_at).toLocaleString()}</div>
-                      <div style={{ color: '#64748b', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{p.path}</div>
-
-                      {/* Per-photo note (manager only) */}
-                      {isManagerMode && (
-                        <div style={{ marginTop:8 }}>
-                          <textarea
-                            value={noteVal}
-                            onChange={e => setNote(path, e.target.value)}
-                            rows={2}
-                            placeholder="Note for this photo (optional)…"
-                            style={{ ...ui.input, width:'100%', padding:'8px 10px', resize:'vertical', background:'#0b1220' }}
-                          />
-                        </div>
-                      )}
-
-                      {/* Cleaner view: show manager note, if any */}
-                      {!isManagerMode && flagged && findingsByPath[path]?.note && (
-                        <div style={{
-                          marginTop:8,
-                          padding:'8px 10px',
-                          background:'#0f172a',
-                          border:'1px solid #334155',
-                          borderRadius:8,
-                          color:'#cbd5e1'
-                        }}>
-                          <div style={{ fontSize:11, color:'#94a3b8', marginBottom:4, fontWeight:700 }}>Manager note</div>
-                          <div style={{ whiteSpace:'pre-wrap' }}>{findingsByPath[path].note}</div>
-                        </div>
-                      )}
+                    <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(220px,1fr))', gap:12 }}>
+                      {byArea[areaKey].map(p => (
+                        <PhotoCard key={p.id} p={p} />
+                      ))}
                     </div>
                   </div>
-                );
-              })}
-            </div>
+                ));
+              })()}
+            </>
           )}
         </div>
 
@@ -620,7 +651,7 @@ async function submitFixes() {
                       ) : (
                         <div style={{ padding:10, color:'#cbd5e1' }}>{s.name}</div>
                       )}
-                      <div style={{ padding:8, fontSize:12, color:'#9ca5af' }}>
+                      <div style={{ padding:8, fontSize:12, color:'#9ca3af' }}>
                         {s.name}
                       </div>
                     </div>
