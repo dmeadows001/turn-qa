@@ -8,31 +8,45 @@ const BUCKET =
   process.env.SUPABASE_STORAGE_BUCKET ||
   'photos';
 
-// choose the first non-empty field as the path, or return an absolute url if that's what we have
-function pickBestPathFromPhotosRow(p) {
-  const candidates = [
-    p?.path,
-    p?.storage_path,
-    p?.photo_path,
-    p?.file,
-  ].map(x => (x || '').trim()).filter(Boolean);
+// Try to pull a storage object path out of a URL produced by Supabase Storage.
+// Handles both public and signed URLs, e.g.:
+//  - /storage/v1/object/public/<bucket>/turns/abc/xyz.jpg
+//  - /storage/v1/object/sign/<bucket>/turns/abc/xyz.jpg?token=...
+function pathFromSupabaseUrl(url, bucket = BUCKET) {
+  if (!url || typeof url !== 'string') return '';
+  try {
+    // Work with absolute or relative
+    const u = url.startsWith('http') ? new URL(url) : new URL(url, 'https://dummy');
+    const p = u.pathname || '';
+    // Look for “…/object/(public|sign)/<bucket>/<key...>”
+    const m = p.match(/\/object\/(?:public|sign)\/([^/]+)\/(.+)/);
+    if (m && m[1] && m[2]) {
+      const b = decodeURIComponent(m[1]);
+      const key = decodeURIComponent(m[2]);
+      if (!bucket || b === bucket) return key;
+    }
 
-  // If `url` is already an absolute URL, we can return it as-is (no signing needed).
-  const absoluteUrl = (p?.url || '').trim();
-  if (absoluteUrl && /^https?:\/\//i.test(absoluteUrl)) {
-    return { storagePath: '', absoluteUrl };
+    // Older CDN-style or rewrites (rare) — last-resort guess:
+    // If the bucket name appears, take what's after it.
+    const idx = p.indexOf(`/${bucket}/`);
+    if (idx >= 0) {
+      return decodeURIComponent(p.slice(idx + bucket.length + 2));
+    }
+  } catch {
+    // ignore
   }
-
-  const storagePath = (candidates[0] || '').replace(/^\/+/, '');
-  return { storagePath, absoluteUrl: '' };
+  return '';
 }
+
+// Prefer the first non-empty value
+const coalesce = (...vals) => vals.find(v => (typeof v === 'string' && v.trim().length > 0)) || '';
 
 export default async function handler(req, res) {
   try {
     const turnId = String(req.query.id || req.query.turn_id || '').trim();
     if (!turnId) return res.status(400).json({ error: 'missing turn id' });
 
-    // 1) turn_photos for this turn (path may be null)
+    // --- A) Base rows from turn_photos (source of truth for area_key/shot binding)
     const { data: tpRows, error: tpErr } = await supa
       .from('turn_photos')
       .select('id, turn_id, shot_id, path, created_at, area_key')
@@ -42,85 +56,86 @@ export default async function handler(req, res) {
     if (tpErr) throw tpErr;
     const rows = Array.isArray(tpRows) ? tpRows : [];
 
-    // 2) For rows missing area_key, look it up from template_shots via shot_id
-    const missingShotIds = Array.from(
-      new Set(
-        rows
-          .filter(r => !r.area_key && r.shot_id)
-          .map(r => String(r.shot_id))
-          .filter(Boolean)
-      )
-    );
-
-    let tsMap = {};
-    if (missingShotIds.length) {
-      const { data: tsRows, error: tsErr } = await supa
-        .from('template_shots')
-        .select('id, area_key')
-        .in('id', missingShotIds);
-
-      if (tsErr) {
-        console.warn('[list-turn-photos] template_shots lookup failed', tsErr.message || tsErr);
-      } else {
-        tsMap = Object.fromEntries((tsRows || []).map(t => [String(t.id), t.area_key || '']));
-      }
-    }
-
-    // 3) For rows missing path, try to source it from the photos table by matching IDs.
-    const idsNeedingPath = rows.filter(r => !r.path).map(r => String(r.id));
-    let photosMap = {};
-    if (idsNeedingPath.length) {
-      const { data: pRows, error: pErr } = await supa
+    // --- B) Optional helper rows from photos (schema varies across installs)
+    // Use select('*') so we don't 404 on unknown columns.
+    let photosRows = [];
+    try {
+      const { data: ph, error: phErr } = await supa
         .from('photos')
-        .select('id, path, storage_path, photo_path, file, url')
-        .in('id', idsNeedingPath);
-
-      if (pErr) {
-        console.warn('[list-turn-photos] photos lookup failed', pErr.message || pErr);
-      } else {
-        photosMap = Object.fromEntries((pRows || []).map(p => [String(p.id), p]));
-      }
+        .select('*')
+        .eq('turn_id', turnId);
+      if (!phErr && Array.isArray(ph)) photosRows = ph;
+    } catch {
+      // photos table might not even exist in some installs — that's fine
+      photosRows = [];
     }
 
-    // 4) Build output + sign storage paths
+    // Build quick lookup maps from photos:
+    //  1) by id
+    //  2) by shot_id
+    const byId = new Map();
+    const byShot = new Map();
+    for (const r of photosRows) {
+      const rid = String(r?.id || '');
+      if (rid) byId.set(rid, r);
+      const sid = String(r?.shot_id || '');
+      if (sid) byShot.set(sid, r);
+    }
+
     const out = [];
     for (const r of rows) {
-      const areaKey = r.area_key || tsMap[String(r.shot_id)] || '';
+      const rawPath = String(r.path || '');
+      let path = rawPath;
 
-      // prefer turn_photos.path; if missing, fall back to a photos row
-      let storagePath = String(r.path || '').replace(/^\/+/, '');
-      let absoluteUrl = '';
+      // Fallback to a photos row for the same id or shot_id
+      const ph = byId.get(String(r.id)) || byShot.get(String(r.shot_id)) || null;
 
-      if (!storagePath) {
-        const pRow = photosMap[String(r.id)];
-        if (pRow) {
-          const best = pickBestPathFromPhotosRow(pRow);
-          storagePath = best.storagePath;
-          absoluteUrl  = best.absoluteUrl;
-        }
+      // Try to manufacture a path if missing
+      if (!path && ph) {
+        // These keys may or may not exist in your schema; we guard via coalesce(*)
+        const fromCols = coalesce(
+          ph.path,          // some installs
+          ph.storage_path,  // others
+          ph.photo_path,    // others
+        );
+
+        // If columns didn’t help, try extracting the storage key from a URL
+        const fromUrl = pathFromSupabaseUrl(ph.url, BUCKET) || pathFromSupabaseUrl(ph.file, BUCKET);
+
+        path = coalesce(fromCols, fromUrl, '');
       }
 
+      // Build a URL to return to the UI
       let signedUrl = '';
-      if (absoluteUrl) {
-        // Already a full URL (likely public or pre-signed) — use it directly.
-        signedUrl = absoluteUrl;
-      } else if (storagePath) {
+
+      if (path) {
+        // We have a storage key — sign it
         try {
-          const { data: s } = await supa.storage.from(BUCKET).createSignedUrl(storagePath, 60 * 60);
+          const { data: s } = await supa.storage.from(BUCKET).createSignedUrl(path, 60 * 60);
           signedUrl = s?.signedUrl || '';
         } catch (e) {
-          console.warn('[list-turn-photos] signed url failed for', storagePath, e?.message || e);
+          console.warn('[list-turn-photos] signed url create failed', { path, msg: e?.message || e });
         }
+      } else if (ph) {
+        // No key but we might have a direct http(s) URL saved — use it as-is
+        const direct = coalesce(
+          (typeof ph.url === 'string' && ph.url.startsWith('http')) ? ph.url : '',
+          (typeof ph.file === 'string' && ph.file.startsWith('http')) ? ph.file : '',
+        );
+        if (direct) signedUrl = direct;
       }
+
+      // Area grouping (either already on turn_photos, or fallback from template_shots via your other API)
+      const areaKey = r.area_key || '';
 
       out.push({
         id: r.id,
         turn_id: r.turn_id,
         shot_id: r.shot_id,
-        path: storagePath || null,   // normalized storage path if we have one
+        path: path || '',        // normalized storage key if we found one
         created_at: r.created_at,
-        area_key: areaKey,           // used by UI to group sections
-        signedUrl,                   // UI <img src={signedUrl}>
+        area_key: areaKey,
+        signedUrl,               // either signed storage URL or a direct saved URL
       });
     }
 
