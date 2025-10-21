@@ -8,114 +8,118 @@ const BUCKET =
   process.env.SUPABASE_STORAGE_BUCKET ||
   'photos';
 
-// Pull a storage object key out of a Supabase Storage URL (public or signed)
+// Extract a storage key from a Supabase Storage URL (public or signed)
 function pathFromSupabaseUrl(url, bucket = BUCKET) {
   if (!url || typeof url !== 'string') return '';
   try {
-    const u = url.startsWith('http') ? new URL(url) : new URL(url, 'https://dummy');
+    const u = url.startsWith('http') ? new URL(url) : new URL(url, 'https://x');
     const p = u.pathname || '';
+
+    // /object/(public|sign)/<bucket>/<key...>
     const m = p.match(/\/object\/(?:public|sign)\/([^/]+)\/(.+)/);
-    if (m && m[1] && m[2] && decodeURIComponent(m[1]) === bucket) {
+    if (m && decodeURIComponent(m[1]) === bucket) {
       return decodeURIComponent(m[2]);
     }
+
+    // Fallback: /<bucket>/...
     const idx = p.indexOf(`/${bucket}/`);
     if (idx >= 0) return decodeURIComponent(p.slice(idx + bucket.length + 2));
   } catch {}
   return '';
 }
 
-const coalesce = (...vals) =>
-  vals.find(v => typeof v === 'string' && v.trim().length > 0) || '';
-
 export default async function handler(req, res) {
   try {
     const turnId = String(req.query.id || req.query.turn_id || '').trim();
     if (!turnId) return res.status(400).json({ error: 'missing turn id' });
 
-    // A) Source of truth for sections & order
+    // 1) Base rows (order & section source)
     const { data: tpRows, error: tpErr } = await supa
       .from('turn_photos')
       .select('id, turn_id, shot_id, path, created_at, area_key')
       .eq('turn_id', turnId)
       .order('created_at', { ascending: true });
-
     if (tpErr) throw tpErr;
     const rows = Array.isArray(tpRows) ? tpRows : [];
 
-    // B) Optional: inspect photos with * to avoid schema assumptions
+    // 2) If any rows are missing area_key, fetch from template_shots (by shot_id)
+    const missingShotIds = Array.from(
+      new Set(
+        rows
+          .filter(r => !r.area_key && r.shot_id)
+          .map(r => String(r.shot_id))
+          .filter(Boolean)
+      )
+    );
+
+    let tsMap = {};
+    if (missingShotIds.length) {
+      try {
+        const { data: tsRows, error: tsErr } = await supa
+          .from('template_shots')
+          .select('id, area_key')
+          .in('id', missingShotIds);
+        if (!tsErr && Array.isArray(tsRows)) {
+          tsMap = Object.fromEntries(tsRows.map(t => [String(t.id), t.area_key || '']));
+        }
+      } catch {}
+    }
+
+    // 3) Optionally read photos rows (schema-agnostic: select '*')
     let photosRows = [];
     try {
-      const { data: ph, error: phErr } = await supa
-        .from('photos')
-        .select('*')
-        .eq('turn_id', turnId);
+      const { data: ph, error: phErr } = await supa.from('photos').select('*').eq('turn_id', turnId);
       if (!phErr && Array.isArray(ph)) photosRows = ph;
-    } catch {
-      photosRows = [];
+    } catch {}
+    const photosById = new Map();
+    for (const ph of photosRows) {
+      const pid = String(ph?.id || '');
+      if (pid) photosById.set(pid, ph);
     }
 
-    // Build quick lookups from photos (best-effort)
-    const byId = new Map();
-    const allPhotos = [];
-    for (const r of photosRows) {
-      if (r && typeof r === 'object') {
-        const rid = String(r.id || '');
-        if (rid) byId.set(rid, r);
-        allPhotos.push(r);
-      }
-    }
-
-    // C) New: list objects in storage under turns/<turnId>
-    //    (non-recursive; your earlier paths showed files directly there)
+    // 4) List storage for the turn; used to match by filename if needed
     let storageIndex = [];
     try {
       const { data: files, error: listErr } = await supa.storage
         .from(BUCKET)
         .list(`turns/${turnId}`, { limit: 1000, offset: 0, sortBy: { column: 'name', order: 'asc' } });
-
       if (!listErr && Array.isArray(files)) {
         storageIndex = files
           .filter(f => f && typeof f.name === 'string')
-          .map(f => ({
-            name: f.name,                     // filename.ext
-            key: `turns/${turnId}/${f.name}`, // storage object key
-          }));
+          .map(f => ({ name: f.name, key: `turns/${turnId}/${f.name}` }));
       }
     } catch (e) {
       console.warn('[list-turn-photos] storage list failed', e?.message || e);
     }
 
-    // Helper: try to recover a storage key from a photos row (scan all string fields)
+    // Helpers to recover a storage key/URL
     function keyFromPhotosRow(ph) {
       if (!ph || typeof ph !== 'object') return { key: '', directUrl: '' };
 
-      // 1) any http(s) field -> see if it's a storage URL
-      for (const [k, v] of Object.entries(ph)) {
+      // 1) any http(s) field -> try parse as Storage URL
+      for (const v of Object.values(ph)) {
         if (typeof v === 'string' && v.startsWith('http')) {
-          const maybeKey = pathFromSupabaseUrl(v, BUCKET);
-          if (maybeKey) return { key: maybeKey, directUrl: '' };
+          const maybe = pathFromSupabaseUrl(v, BUCKET);
+          if (maybe) return { key: maybe, directUrl: '' };
         }
       }
 
-      // 2) any string that looks like a path-ish thing
-      for (const [k, v] of Object.entries(ph)) {
-        if (typeof v === 'string' && v.includes('/')) {
-          // If it already looks like "turns/<turnId>/..."
-          if (v.includes(`turns/${turnId}/`)) return { key: v.replace(/^\/+/, ''), directUrl: '' };
+      // 2) any string that already looks like a storage key/path
+      for (const v of Object.values(ph)) {
+        if (typeof v === 'string' && v.includes(`turns/${turnId}/`)) {
+          return { key: v.replace(/^\/+/, ''), directUrl: '' };
         }
       }
 
-      // 3) last resort: if we have a direct http URL and not a storage key, return direct URL
-      for (const [k, v] of Object.entries(ph)) {
+      // 3) last resort: pass through a direct URL so the <img> still renders
+      for (const v of Object.values(ph)) {
         if (typeof v === 'string' && v.startsWith('http')) {
           return { key: '', directUrl: v };
         }
       }
-
       return { key: '', directUrl: '' };
     }
 
-    // Helper: match a storage file by containing the shot_id in its filename
     function keyFromStorageByShot(shotId) {
       const sid = String(shotId || '');
       if (!sid) return '';
@@ -123,39 +127,44 @@ export default async function handler(req, res) {
       return hit ? hit.key : '';
     }
 
+    // 5) Build response
     const out = [];
-
     for (const r of rows) {
-      const areaKey = r.area_key || '';
+      let areaKey = r.area_key || tsMap[String(r.shot_id)] || '';
+
+      // Find a usable path/URL
       let key = String(r.path || '');
       let directUrl = '';
 
-      // If turn_photos.path missing, try photos row by same id
       if (!key) {
-        const ph = byId.get(String(r.id));
+        const ph = photosById.get(String(r.id));
         if (ph) {
           const got = keyFromPhotosRow(ph);
           key = got.key || '';
           directUrl = got.directUrl || '';
         }
       }
-
-      // If still no key/direct URL, try to find in storage by shot_id pattern
       if (!key && !directUrl) {
         key = keyFromStorageByShot(r.shot_id);
       }
 
+      // Get a URL for the <img>
       let signedUrl = '';
-
       if (key) {
         try {
-          const { data: s, error: signErr } = await supa.storage.from(BUCKET).createSignedUrl(key, 60 * 60);
-          if (!signErr) signedUrl = s?.signedUrl || '';
+          // try 1: signed (works with private buckets)
+          const s = await supa.storage.from(BUCKET).createSignedUrl(key, 3600);
+          signedUrl = s?.data?.signedUrl || s?.signedUrl || '';
+          if (!signedUrl) {
+            // try 2: public URL (works if bucket is public or has public file)
+            const pub = supa.storage.from(BUCKET).getPublicUrl(key);
+            signedUrl = pub?.data?.publicUrl || pub?.publicUrl || '';
+          }
         } catch (e) {
-          console.warn('[list-turn-photos] sign failed', { key, msg: e?.message || e });
+          console.warn('[list-turn-photos] sign/public url failed', { key, msg: e?.message || e });
         }
       } else if (directUrl) {
-        signedUrl = directUrl; // fine to pass through a real URL
+        signedUrl = directUrl;
       }
 
       out.push({
@@ -164,7 +173,7 @@ export default async function handler(req, res) {
         shot_id: r.shot_id,
         path: key || '',
         created_at: r.created_at,
-        area_key: areaKey,
+        area_key: areaKey,       // <- grouping key for the UI
         signedUrl,
       });
     }
