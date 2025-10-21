@@ -280,11 +280,14 @@ export default function Review() {
           continue;
         }
 
-        await fetch(meta.uploadUrl, {
-          method: 'PUT',
-          headers: { 'Content-Type': meta.mime || f.type || 'application/octet-stream' },
-          body: f
+        // NEW: upload to Supabase signed upload URL via multipart/form-data
+        const fd = new FormData();
+        fd.append('file', f);              // field name MUST be "file"
+        await fetch(meta.signedUploadUrl, {
+          method: 'POST',
+          body: fd                          // do NOT set Content-Type; the browser will
         });
+
 
         uploaded.push({ name: f.name, preview, path: meta.path });
       }
