@@ -3,10 +3,45 @@ import { supabaseAdmin as _admin } from '@/lib/supabaseAdmin';
 
 const supa = typeof _admin === 'function' ? _admin() : _admin;
 
+// Pick the bucket; defaults to "photos"
 const BUCKET =
   process.env.NEXT_PUBLIC_SUPABASE_STORAGE_BUCKET ||
   process.env.SUPABASE_STORAGE_BUCKET ||
   'photos';
+
+// 6 hours to avoid expiring while users scroll / reopen
+const EXPIRES = 60 * 60 * 6;
+
+/**
+ * Create a signed URL for a storage object path.
+ * Falls back to publicUrl (in case the bucket/object is public).
+ * Returns null if neither works.
+ */
+async function signPathOrNull(path) {
+  try {
+    if (!path) return null;
+
+    // Try a signed URL first
+    const { data: signed, error: signErr } = await supa
+      .storage
+      .from(BUCKET)
+      .createSignedUrl(path, EXPIRES);
+
+    if (!signErr && signed?.signedUrl) return signed.signedUrl;
+
+    // Fallback to public URL if the object/bucket is public
+    const { data: pub } = supa.storage.from(BUCKET).getPublicUrl(path);
+    return pub?.publicUrl ?? null;
+  } catch (e) {
+    // As a last resort, try public url once more
+    try {
+      const { data: pub } = supa.storage.from(BUCKET).getPublicUrl(path);
+      return pub?.publicUrl ?? null;
+    } catch {
+      return null;
+    }
+  }
+}
 
 export default async function handler(req, res) {
   try {
@@ -52,16 +87,16 @@ export default async function handler(req, res) {
     // 3) Normalize + sign URLs.
     const out = [];
     for (const r of rows) {
-      const path = String(r.path || '').replace(/^\/+/, '');
+      // normalize path (strip accidental leading slashes)
+      const path = String(r.path || '').replace(/^\/+/, '') || null;
+
       const areaKey = r.area_key || tsMap[String(r.shot_id)] || '';
 
-      let signedUrl = '';
+      let signedUrl = null;
       if (path) {
-        try {
-          const { data: s } = await supa.storage.from(BUCKET).createSignedUrl(path, 60 * 60);
-          signedUrl = s?.signedUrl || '';
-        } catch (e) {
-          console.warn('[list-turn-photos] signed url failed for', path, e?.message || e);
+        signedUrl = await signPathOrNull(path);
+        if (!signedUrl) {
+          console.warn('[list-turn-photos] could not produce URL for', { bucket: BUCKET, path });
         }
       }
 
@@ -71,8 +106,8 @@ export default async function handler(req, res) {
         shot_id: r.shot_id,
         path,
         created_at: r.created_at,
-        area_key: areaKey,   // <-- used by the UI to group sections
-        signedUrl,
+        area_key: areaKey,  // used by the UI to group sections
+        signedUrl: signedUrl || '', // <-- IMPORTANT: camelCase
       });
     }
 
