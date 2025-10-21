@@ -8,24 +8,30 @@ const BUCKET =
   process.env.SUPABASE_STORAGE_BUCKET ||
   'photos';
 
-// Extract a storage key from a Supabase Storage URL (public or signed)
-function pathFromSupabaseUrl(url, bucket = BUCKET) {
-  if (!url || typeof url !== 'string') return '';
-  try {
-    const u = url.startsWith('http') ? new URL(url) : new URL(url, 'https://x');
-    const p = u.pathname || '';
+// quick helper: does a path look like a real file (has a dot/extension)?
+function looksLikeFile(p) {
+  return /\.[a-z0-9]+$/i.test(p || '');
+}
 
-    // /object/(public|sign)/<bucket>/<key...>
-    const m = p.match(/\/object\/(?:public|sign)\/([^/]+)\/(.+)/);
-    if (m && decodeURIComponent(m[1]) === bucket) {
-      return decodeURIComponent(m[2]);
-    }
+// normalize strip leading slashes
+function cleanPath(p) {
+  return String(p || '').replace(/^\/+/, '');
+}
 
-    // Fallback: /<bucket>/...
-    const idx = p.indexOf(`/${bucket}/`);
-    if (idx >= 0) return decodeURIComponent(p.slice(idx + bucket.length + 2));
-  } catch {}
-  return '';
+// storage.list wrapper to fetch the latest file in a folder
+async function findOneFileUnderPrefix(prefix) {
+  const folder = cleanPath(prefix).replace(/^\/+/, '');
+  // Supabase expects the *folder path relative to the bucket*,
+  // without a trailing slash for listing
+  const { data, error } = await supa.storage.from(BUCKET).list(folder, {
+    limit: 100,
+    sortBy: { column: 'name', order: 'desc' }, // pick latest-looking name first
+  });
+  if (error || !Array.isArray(data) || data.length === 0) return null;
+
+  // Prefer image-like files
+  const file = data.find(f => /\.(jpe?g|png|webp|heic|heif|gif)$/i.test(f.name)) || data[0];
+  return file ? `${folder}/${file.name}` : null;
 }
 
 export default async function handler(req, res) {
@@ -33,16 +39,18 @@ export default async function handler(req, res) {
     const turnId = String(req.query.id || req.query.turn_id || '').trim();
     if (!turnId) return res.status(400).json({ error: 'missing turn id' });
 
-    // 1) Base rows (order & section source)
+    // 1) Pull photos for this turn (no join).
     const { data: tpRows, error: tpErr } = await supa
       .from('turn_photos')
       .select('id, turn_id, shot_id, path, created_at, area_key')
       .eq('turn_id', turnId)
       .order('created_at', { ascending: true });
+
     if (tpErr) throw tpErr;
+
     const rows = Array.isArray(tpRows) ? tpRows : [];
 
-    // 2) If any rows are missing area_key, fetch from template_shots (by shot_id)
+    // 2) For any rows that are missing area_key, fetch from template_shots by shot_id.
     const missingShotIds = Array.from(
       new Set(
         rows
@@ -54,128 +62,82 @@ export default async function handler(req, res) {
 
     let tsMap = {};
     if (missingShotIds.length) {
-      try {
-        const { data: tsRows, error: tsErr } = await supa
-          .from('template_shots')
-          .select('id, area_key')
-          .in('id', missingShotIds);
-        if (!tsErr && Array.isArray(tsRows)) {
-          tsMap = Object.fromEntries(tsRows.map(t => [String(t.id), t.area_key || '']));
-        }
-      } catch {}
-    }
+      const { data: tsRows, error: tsErr } = await supa
+        .from('template_shots')
+        .select('id, area_key')
+        .in('id', missingShotIds);
 
-    // 3) Optionally read photos rows (schema-agnostic: select '*')
-    let photosRows = [];
-    try {
-      const { data: ph, error: phErr } = await supa.from('photos').select('*').eq('turn_id', turnId);
-      if (!phErr && Array.isArray(ph)) photosRows = ph;
-    } catch {}
-    const photosById = new Map();
-    for (const ph of photosRows) {
-      const pid = String(ph?.id || '');
-      if (pid) photosById.set(pid, ph);
-    }
-
-    // 4) List storage for the turn; used to match by filename if needed
-    let storageIndex = [];
-    try {
-      const { data: files, error: listErr } = await supa.storage
-        .from(BUCKET)
-        .list(`turns/${turnId}`, { limit: 1000, offset: 0, sortBy: { column: 'name', order: 'asc' } });
-      if (!listErr && Array.isArray(files)) {
-        storageIndex = files
-          .filter(f => f && typeof f.name === 'string')
-          .map(f => ({ name: f.name, key: `turns/${turnId}/${f.name}` }));
+      if (!tsErr && Array.isArray(tsRows)) {
+        tsMap = Object.fromEntries(tsRows.map(t => [String(t.id), t.area_key || '']));
+      } else if (tsErr) {
+        console.warn('[list-turn-photos] template_shots lookup failed', tsErr.message || tsErr);
       }
-    } catch (e) {
-      console.warn('[list-turn-photos] storage list failed', e?.message || e);
     }
 
-    // Helpers to recover a storage key/URL
-    function keyFromPhotosRow(ph) {
-      if (!ph || typeof ph !== 'object') return { key: '', directUrl: '' };
-
-      // 1) any http(s) field -> try parse as Storage URL
-      for (const v of Object.values(ph)) {
-        if (typeof v === 'string' && v.startsWith('http')) {
-          const maybe = pathFromSupabaseUrl(v, BUCKET);
-          if (maybe) return { key: maybe, directUrl: '' };
-        }
-      }
-
-      // 2) any string that already looks like a storage key/path
-      for (const v of Object.values(ph)) {
-        if (typeof v === 'string' && v.includes(`turns/${turnId}/`)) {
-          return { key: v.replace(/^\/+/, ''), directUrl: '' };
-        }
-      }
-
-      // 3) last resort: pass through a direct URL so the <img> still renders
-      for (const v of Object.values(ph)) {
-        if (typeof v === 'string' && v.startsWith('http')) {
-          return { key: '', directUrl: v };
-        }
-      }
-      return { key: '', directUrl: '' };
-    }
-
-    function keyFromStorageByShot(shotId) {
-      const sid = String(shotId || '');
-      if (!sid) return '';
-      const hit = storageIndex.find(f => f.name.includes(sid));
-      return hit ? hit.key : '';
-    }
-
-    // 5) Build response
+    // 3) Normalize + sign URLs (with folder -> file fallback).
     const out = [];
+
+    // We'll collect any DB updates we want to perform (folder->file backfill)
+    const updates = [];
+
     for (const r of rows) {
-      let areaKey = r.area_key || tsMap[String(r.shot_id)] || '';
+      const areaKey = r.area_key || tsMap[String(r.shot_id)] || '';
 
-      // Find a usable path/URL
-      let key = String(r.path || '');
-      let directUrl = '';
-
-      if (!key) {
-        const ph = photosById.get(String(r.id));
-        if (ph) {
-          const got = keyFromPhotosRow(ph);
-          key = got.key || '';
-          directUrl = got.directUrl || '';
-        }
-      }
-      if (!key && !directUrl) {
-        key = keyFromStorageByShot(r.shot_id);
+      // Prefer the DB path; if missing, construct a folder prefix we expect
+      // e.g. turns/<turn_id>/<shot_id>
+      let objPath = cleanPath(r.path);
+      if (!objPath) {
+        objPath = `turns/${turnId}/${r.shot_id || ''}`.replace(/\/+$/, '');
       }
 
-      // Get a URL for the <img>
       let signedUrl = '';
-      if (key) {
-        try {
-          // try 1: signed (works with private buckets)
-          const s = await supa.storage.from(BUCKET).createSignedUrl(key, 3600);
-          signedUrl = s?.data?.signedUrl || s?.signedUrl || '';
-          if (!signedUrl) {
-            // try 2: public URL (works if bucket is public or has public file)
-            const pub = supa.storage.from(BUCKET).getPublicUrl(key);
-            signedUrl = pub?.data?.publicUrl || pub?.publicUrl || '';
+      let finalPath = objPath;
+
+      try {
+        if (!looksLikeFile(finalPath)) {
+          // It's a folder prefix — list to find a file under it
+          const found = await findOneFileUnderPrefix(finalPath);
+          if (found) {
+            finalPath = found;
+            // Remember to backfill this onto the row so next time is faster
+            updates.push({ id: r.id, path: finalPath });
           }
-        } catch (e) {
-          console.warn('[list-turn-photos] sign/public url failed', { key, msg: e?.message || e });
         }
-      } else if (directUrl) {
-        signedUrl = directUrl;
+
+        if (looksLikeFile(finalPath)) {
+          const { data: s, error: sErr } = await supa.storage
+            .from(BUCKET)
+            .createSignedUrl(finalPath, 60 * 60);
+          if (!sErr) signedUrl = s?.signedUrl || '';
+        }
+      } catch (e) {
+        console.warn('[list-turn-photos] signing/list error for', objPath, e?.message || e);
       }
 
       out.push({
         id: r.id,
         turn_id: r.turn_id,
         shot_id: r.shot_id,
-        path: key || '',
+        path: finalPath,         // may be folder OR the discovered file key
         created_at: r.created_at,
-        area_key: areaKey,       // <- grouping key for the UI
+        area_key: areaKey,
         signedUrl,
       });
+    }
+
+    // 4) Best-effort path backfill (folder -> actual file key), non-blocking
+    if (updates.length) {
+      try {
+        // Supabase doesn't support multi-row update in one call by array of objects,
+        // so run them individually; keep it fire-and-forget-ish.
+        await Promise.all(
+          updates.map(u =>
+            supa.from('turn_photos').update({ path: u.path }).eq('id', u.id)
+          )
+        );
+      } catch (e) {
+        console.warn('[list-turn-photos] backfill update failed', e?.message || e);
+      }
     }
 
     return res.json({ photos: out });
