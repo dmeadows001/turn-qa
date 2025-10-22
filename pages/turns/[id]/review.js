@@ -122,13 +122,23 @@ export default function Review() {
         // server uses `manager_note` (singular)
         setManagerNote(t?.manager_note || '');
 
-        setPhotos(ph);
+        // --- NEW: client-side de-dupe by final path (keep newest). If no path, key by id.
+        const byPath = new Map();
+        for (const p of ph) {
+          const key = p.path ? p.path : `__id:${p.id || ''}`;
+          const prev = byPath.get(key);
+          if (!prev || new Date(p.created_at) > new Date(prev.created_at)) {
+            byPath.set(key, p);
+          }
+        }
+        const deduped = Array.from(byPath.values());
+        setPhotos(deduped);
 
-        // --- Prefill findings keyed by photoKey (not raw path)
+        // --- Prefill findings keyed by photoKey (not raw path) using the *deduped* list
         const f = await fetchFindings(turnId);
         if (f.length) {
           // Build a quick index from path -> array of photo keys that currently display that path
-          const pathToKeys = ph.reduce((acc, p) => {
+          const pathToKeys = deduped.reduce((acc, p) => {
             const k = keyFor(p);
             const path = p.path || '';
             if (!acc[path]) acc[path] = [];
@@ -348,7 +358,18 @@ export default function Review() {
       setStaged([]);
       setCleanerReply('');
       const ph = await fetchPhotos(turnId);
-      setPhotos(ph);
+
+      // re-apply de-dupe on refresh after submit
+      const byPath = new Map();
+      for (const p of ph) {
+        const key = p.path ? p.path : `__id:${p.id || ''}`;
+        const prev = byPath.get(key);
+        if (!prev || new Date(p.created_at) > new Date(prev.created_at)) {
+          byPath.set(key, p);
+        }
+      }
+      setPhotos(Array.from(byPath.values()));
+
       setStatus('submitted');
 
       alert('Submitted fixes for review ✅');
