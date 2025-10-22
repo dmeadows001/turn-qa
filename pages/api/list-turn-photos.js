@@ -34,21 +34,45 @@ async function findOneFileUnderPrefix(prefix) {
   return file ? `${folder}/${file.name}` : null;
 }
 
+// Try to select turn_photos including optional columns (e.g., is_fix).
+// If a column doesn't exist, we retry without it.
+async function selectTurnPhotosFlexible(turnId) {
+  // Attempt 1: include optional columns
+  const baseCols = 'id, turn_id, shot_id, path, created_at, area_key';
+  const optionalCols = ', is_fix'; // add more optional columns here if needed later
+  let { data, error } = await supa
+    .from('turn_photos')
+    .select(baseCols + optionalCols)
+    .eq('turn_id', turnId)
+    .order('created_at', { ascending: true });
+
+  if (!error) {
+    return { rows: Array.isArray(data) ? data : [] };
+  }
+
+  // If the error is about a missing column, retry without optional
+  if (/column .* does not exist/i.test(error.message || '')) {
+    const r2 = await supa
+      .from('turn_photos')
+      .select(baseCols)
+      .eq('turn_id', turnId)
+      .order('created_at', { ascending: true });
+
+    if (r2.error) throw r2.error;
+    return { rows: Array.isArray(r2.data) ? r2.data : [] };
+  }
+
+  // Other errors: bubble up
+  throw error;
+}
+
 export default async function handler(req, res) {
   try {
     const turnId = String(req.query.id || req.query.turn_id || '').trim();
     if (!turnId) return res.status(400).json({ error: 'missing turn id' });
 
-    // 1) Pull photos for this turn (no join).
-    const { data: tpRows, error: tpErr } = await supa
-      .from('turn_photos')
-      .select('id, turn_id, shot_id, path, created_at, area_key')
-      .eq('turn_id', turnId)
-      .order('created_at', { ascending: true });
-
-    if (tpErr) throw tpErr;
-
-    const rows = Array.isArray(tpRows) ? tpRows : [];
+    // 1) Pull photos for this turn, flexibly (will include is_fix if present)
+    const { rows } = await selectTurnPhotosFlexible(turnId);
 
     // 2) For any rows that are missing area_key, fetch from template_shots by shot_id.
     const missingShotIds = Array.from(
@@ -122,14 +146,14 @@ export default async function handler(req, res) {
         created_at: r.created_at,
         area_key: areaKey,
         signedUrl,
+        // NEW: include is_fix if the column exists (else false)
+        is_fix: Boolean(r.is_fix),
       });
     }
 
     // 4) Best-effort path backfill (folder -> actual file key), non-blocking
     if (updates.length) {
       try {
-        // Supabase doesn't support multi-row update in one call by array of objects,
-        // so run them individually; keep it fire-and-forget-ish.
         await Promise.all(
           updates.map(u =>
             supa.from('turn_photos').update({ path: u.path }).eq('id', u.id)
