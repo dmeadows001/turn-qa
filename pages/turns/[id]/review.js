@@ -21,7 +21,9 @@ async function fetchPhotos(turnId) {
     created_at: p.created_at,
     url: p.signedUrl || '',
     path: p.path || '',
-    is_fix: Boolean(p.is_fix || false),   // <-- NEW
+    // NEW: persist fix state + note coming from API
+    is_fix: !!p.is_fix,
+    cleaner_note: p.cleaner_note || null,
   }));
 }
 
@@ -57,18 +59,18 @@ function badgeStyle(status) {
   };
 }
 
-// Highlight style for flagged photos
+// Highlight styles
 const flaggedCardStyle = {
   border: '1px solid #d97706',
   boxShadow: '0 0 0 3px rgba(217,119,6,0.25) inset',
   background: '#0b1220'
 };
 
-// NEW: subtle green highlight for "fix" photos
+// NEW: green style for FIX photos
 const fixCardStyle = {
   border: '1px solid #065f46',
-  boxShadow: '0 0 0 3px rgba(16,185,129,0.18) inset',
-  background: '#0b1220'
+  boxShadow: '0 0 0 3px rgba(5, 150, 105, 0.25) inset',
+  background: '#071a16'
 };
 
 export default function Review() {
@@ -97,7 +99,7 @@ export default function Review() {
   // Findings for highlight + prefill
   const [findingsByPath, setFindingsByPath] = useState({});    // { [path]: {note, severity?} }
 
-  // Cleaner “fix & resubmit” state
+  // Cleaner “fix & resubmit” (when viewing as cleaner)
   const [cleanerReply, setCleanerReply] = useState('');
   const [staged, setStaged] = useState([]); // [{name, preview, path, area_key?}]
   const [uploadingFix, setUploadingFix] = useState(false);
@@ -288,13 +290,10 @@ export default function Review() {
           continue;
         }
 
-        // NEW: upload to Supabase signed upload URL via multipart/form-data
+        // Using signed multipart upload (your backend supports this)
         const fd = new FormData();
         fd.append('file', f);
-        await fetch(meta.signedUploadUrl, {
-          method: 'POST',
-          body: fd
-        });
+        await fetch(meta.signedUploadUrl, { method: 'POST', body: fd });
 
         uploaded.push({ name: f.name, preview, path: meta.path });
       }
@@ -351,19 +350,20 @@ export default function Review() {
     const selected = selectedPaths.has(path);
     const noteVal = notesByPath[path] || '';
     const flagged = !!findingsByPath[path];
-    const isFix = Boolean(p.is_fix); // <-- NEW
-
-    const cardStyle = {
-      border: '1px solid #334155',
-      borderRadius: 12,
-      overflow: 'hidden',
-      background:'#0b1220',
-      ...(flagged ? flaggedCardStyle : null),
-      ...(isFix ? fixCardStyle : null),   // <-- add green inset if fix
-    };
+    const isFix = !!p.is_fix;
 
     return (
-      <div key={p.id} style={cardStyle}>
+      <div
+        key={p.id}
+        style={{
+          border: '1px solid #334155',
+          borderRadius: 12,
+          overflow: 'hidden',
+          background:'#0b1220',
+          ...(flagged ? flaggedCardStyle : null),
+          ...(isFix ? fixCardStyle : null),
+        }}
+      >
         <a href={p.url} target="_blank" rel="noreferrer">
           <img
             src={p.url}
@@ -374,9 +374,8 @@ export default function Review() {
 
         <div style={{ padding: 10, fontSize: 12 }}>
           <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:8 }}>
-            <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap' }}>
+            <div style={{ display:'flex', alignItems:'center', gap:8 }}>
               <b>{p.area_key || '—'}</b>
-
               {flagged && (
                 <span style={{
                   padding:'2px 8px',
@@ -390,7 +389,6 @@ export default function Review() {
                   needs fix
                 </span>
               )}
-
               {isFix && (
                 <span style={{
                   padding:'2px 8px',
@@ -401,7 +399,7 @@ export default function Review() {
                   background:'#064e3b',
                   border:'1px solid #065f46'
                 }}>
-                  fix
+                  FIX
                 </span>
               )}
             </div>
@@ -422,7 +420,7 @@ export default function Review() {
           <div style={{ color: '#9ca3af' }}>{new Date(p.created_at).toLocaleString()}</div>
           <div style={{ color: '#64748b', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{p.path}</div>
 
-          {/* Per-photo note (manager only) */}
+          {/* Per-photo note (manager only, when composing) */}
           {isManagerMode && (
             <div style={{ marginTop:8 }}>
               <textarea
@@ -432,6 +430,21 @@ export default function Review() {
                 placeholder="Note for this photo (optional)…"
                 style={{ ...ui.input, width:'100%', padding:'8px 10px', resize:'vertical', background:'#0b1220' }}
               />
+            </div>
+          )}
+
+          {/* Manager view of the cleaner's FIX note (persistent) */}
+          {isFix && p.cleaner_note && (
+            <div style={{
+              marginTop:8,
+              padding:'8px 10px',
+              background:'#052e2b',
+              border:'1px solid #065f46',
+              borderRadius:8,
+              color:'#86efac'
+            }}>
+              <div style={{ fontSize:11, color:'#86efac', marginBottom:4, fontWeight:700 }}>Cleaner note</div>
+              <div style={{ whiteSpace:'pre-wrap' }}>{p.cleaner_note}</div>
             </div>
           )}
 
@@ -592,7 +605,7 @@ export default function Review() {
                   return acc;
                 }, {});
 
-                // Sort photos newest first inside each area (optional)
+                // Sort photos newest first inside each area
                 Object.values(byArea).forEach(list =>
                   list.sort((a,b) => new Date(b.created_at) - new Date(a.created_at))
                 );
