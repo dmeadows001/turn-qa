@@ -14,23 +14,6 @@ const DEFAULT_SHOTS = [
   { shot_id: 'fallback-bedroom',        area_key: 'bedroom_overall',     label: 'Bedroom - Overall',         min_count: 1 }
 ];
 
-// ---- helper used by thumbnails (defined once, not inside a loop) ----
-function ensureThumb(path, setThumbByPath, requestedThumbsRef, signPath) {
-  if (!path) return;
-  if (requestedThumbsRef.current.has(path)) return;
-  requestedThumbsRef.current.add(path);
-  signPath(path)
-    .then((url) => {
-      if (!url) return;
-      // don't overwrite if another signer already set it
-      setThumbByPath((prev) => (prev[path] ? prev : { ...prev, [path]: url }));
-    })
-    .catch(() => {
-      // allow retry if signing failed
-      requestedThumbsRef.current.delete(path);
-    });
-}
-
 // Re-usable button variants that honor theme.js
 function ThemedButton({ children, onClick, disabled=false, loading=false, kind='primary', full=false, ariaLabel }) {
   const base = {
@@ -67,63 +50,34 @@ function ThemedButton({ children, onClick, disabled=false, loading=false, kind='
 export default function Capture() {
   const { query } = useRouter();
   const turnId = typeof query.id === 'string' ? query.id : '';
-  const tab = typeof query.tab === 'string' ? query.tab : 'capture'; // 'capture' | 'needs-fix'
+  const tab = typeof query.tab === 'string' ? query.tab : 'capture'; // 'needs-fix' when coming from SMS
 
   // -------- State --------
   const [shots, setShots] = useState(null);
-  // { [shotId]: [{name,url,width,height,shotId,preview, note?}] }
+  // files we render per-shot; each file: {name, url (storage path), width, height, shotId, preview?, isFix?, cleanerNote?}
   const [uploadsByShot, setUploadsByShot] = useState({});
-  const [aiFlags, setAiFlags] = useState([]);             // summary lines
-  const [aiByPath, setAiByPath] = useState({});           // { [storagePath]: issues[] }
   const [submitting, setSubmitting] = useState(false);
-  const [prechecking, setPrechecking] = useState(false);
   const [templateRules, setTemplateRules] = useState({ property: '', template: '' });
-  const [scannedPaths, setScannedPaths] = useState(new Set());
-  const [scanProgress, setScanProgress] = useState({ done: 0, total: 0 });
 
-  // Signed thumbnail cache for existing photos
-  const [thumbByPath, setThumbByPath] = useState({});      // { [storagePath]: signedUrl }
-  const requestedThumbsRef = useRef(new Set());            // to avoid duplicate signing
+  // Signed thumbnail cache for existing/new photos
+  const [thumbByPath, setThumbByPath] = useState({});
+  const requestedThumbsRef = useRef(new Set());
 
-  // Needs-fix notes (from manager) — ALWAYS keep this shape
-  const [fixNotes, setFixNotes] = useState({
-    byPath: {},            // { [storagePath]: note }
-    overall: '',           // overall note text
-    count: 0,              // number of flagged photos
-  });
+  // Needs-fix (manager) notes to show to cleaner, by storage path
+  const [fixNotes, setFixNotes] = useState({ byPath: {}, overall: '', count: 0 });
   const [hideFixBanner, setHideFixBanner] = useState(false);
 
-  // Lightbox
-  const [lightboxOpen, setLightboxOpen] = useState(false);
-  const [lightboxUrl, setLightboxUrl] = useState(null);
-  const [lightboxPath, setLightboxPath] = useState(null);
-  const [zoom, setZoom] = useState(1);
-  const [rotation, setRotation] = useState(0);
-  const [reply, setReply] = useState(''); // cleaner’s optional overall note back to manager
+  // Cleaner overall reply (optional)
+  const [reply, setReply] = useState('');
+
+  // Per-new-photo cleaner notes (keyed by storage path)
+  const [cleanerNoteByNewPath, setCleanerNoteByNewPath] = useState({});
 
   // One hidden file input per shot
   const inputRefs = useRef({});
 
-  // -------- Helpers / UI bits --------
-  const sevPill = (sev='info') => {
-    const bg = sev === 'fail' ? '#3f1a1a' : sev === 'warn' ? '#3a2b10' : '#111b2f';
-    const fg = sev === 'fail' ? '#fecaca' : sev === 'warn' ? '#fde68a' : '#cbd5e1';
-    return {
-      display:'inline-block', padding:'2px 6px', borderRadius:8, fontSize:12, marginRight:6,
-      background: bg, color: fg, border: '1px solid rgba(148,163,184,.25)'
-    };
-  };
-
+  // ------- helpers -------
   const smallMeta = { fontSize: 12, color: '#94a3b8' };
-
-  async function getDims(file) {
-    return await new Promise((resolve, reject) => {
-      const img = new Image();
-      img.onload = () => { resolve({ width: img.naturalWidth, height: img.naturalHeight }); URL.revokeObjectURL(img.src); };
-      img.onerror = reject;
-      img.src = URL.createObjectURL(file);
-    });
-  }
 
   async function signPath(path) {
     const resp = await fetch('/api/sign-photo', {
@@ -136,89 +90,21 @@ export default function Capture() {
     return json.url;
   }
 
-  async function viewPhoto(path) {
-    try {
-      const url = await signPath(path);
-      setLightboxPath(path);
-      setLightboxUrl(url);
-      setZoom(1);
-      setRotation(0);
-      setLightboxOpen(true);
-    } catch { alert('Could not open photo. Try again.'); }
-  }
-  function closeLightbox(){ setLightboxOpen(false); setLightboxUrl(null); setLightboxPath(null); }
-  function zoomIn(){ setZoom(z => Math.min(z + 0.25, 3)); }
-  function zoomOut(){ setZoom(z => Math.max(z - 0.25, 0.5)); }
-  function rotateLeft(){ setRotation(r => (r - 90 + 360) % 360); }
-  function rotateRight(){ setRotation(r => (r + 90) % 360); }
-  async function refreshSignedUrl(){ if (!lightboxPath) return; try { setLightboxUrl(await signPath(lightboxPath)); } catch {} }
-  function downloadCurrent(){
-    if (!lightboxUrl) return;
-    const a = document.createElement('a');
-    a.href = lightboxUrl;
-    a.download = lightboxPath?.split('/').pop() || 'photo.jpg';
-    document.body.appendChild(a); a.click(); a.remove();
-  }
-
-  // ---- EXISTING PHOTO ATTACHMENT HELPERS (robust matching) ----
-  function norm(s) {
-    return String(s || '')
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '_')
-      .replace(/^_+|_+$/g, '');
-  }
-
-  function groupExistingByShot(items = [], shots = []) {
-    // Build lookup maps
-    const byShotId = new Map();   // normalized shot_id  -> shot_id
-    const byArea   = new Map();   // normalized area_key -> shot_id
-    const byLabel  = new Map();   // normalized label    -> shot_id
-
-    shots.forEach(s => {
-      if (s.shot_id) byShotId.set(norm(s.shot_id), s.shot_id);
-      if (s.area_key) byArea.set(norm(s.area_key), s.shot_id);
-      if (s.label) byLabel.set(norm(s.label), s.shot_id);
+  function ensureThumb(path) {
+    if (!path || requestedThumbsRef.current.has(path) || thumbByPath[path]) return;
+    requestedThumbsRef.current.add(path);
+    signPath(path).then(url => {
+      if (url) setThumbByPath(prev => (prev[path] ? prev : { ...prev, [path]: url }));
+    }).catch(() => {
+      requestedThumbsRef.current.delete(path);
     });
-
-    const grouped = {}; // { [shotId]: [files] }
-    const misc = [];
-
-    for (const it of items) {
-      const file = {
-        name: it.filename || (it.path?.split('/').pop() || 'photo.jpg'),
-        shotId: null,
-        url: it.path,                  // storage path (viewer will sign it)
-        width: it.width || null,
-        height: it.height || null,
-        preview: null,
-        // note: only used for NEW fixes the cleaner adds in this session
-      };
-
-      // Try in order: exact shot_id, area_key, label (all normalized)
-      const tryShot  = byShotId.get(norm(it.shot_id));
-      const tryArea  = byArea.get(norm(it.area_key));
-      const tryLabel = byLabel.get(norm(it.label));
-
-      const target = tryShot || tryArea || tryLabel || null;
-
-      if (target) {
-        file.shotId = target;
-        if (!grouped[target]) grouped[target] = [];
-        grouped[target].push(file);
-      } else {
-        misc.push(file);
-      }
-    }
-
-    return { grouped, misc };
   }
 
   function openPicker(shotId) {
-    const el = inputRefs.current[shotId];
-    if (el) el.click();
+    inputRefs.current[shotId]?.click();
   }
 
-  // -------- Load required shots (with shot_id) for this turn --------
+  // -------- Load template (required shots) --------
   useEffect(() => {
     async function loadTemplate() {
       if (!turnId) return;
@@ -245,46 +131,57 @@ export default function Capture() {
     loadTemplate();
   }, [turnId]);
 
-  // --- Load existing photos AFTER shots are known ---
+  // --- Load existing photos for this turn (NOW via list-turn-photos so we get is_fix & cleaner_note) ---
   useEffect(() => {
     async function loadExisting() {
       if (!turnId || !Array.isArray(shots)) return;
-
       try {
-        const r = await fetch(`/api/turns/${turnId}/photos`);
+        const r = await fetch(`/api/list-turn-photos?id=${turnId}`);
         const j = await r.json();
-        const items = Array.isArray(j.items) ? j.items : [];
-        if (items.length === 0) return;
+        const items = Array.isArray(j.photos) ? j.photos : [];
 
-        // Robust grouping (accept area_key/label fallbacks)
-        const { grouped, misc } = groupExistingByShot(items, shots);
+        // group by shot_id when present; otherwise fall back to area_key/label matching
+        const byShot = {};
+        for (const it of items) {
+          const path = it.path || '';
+          const shotId = it.shot_id || null;
 
-        // Add a pseudo-shot for unmatched photos
-        if (misc.length > 0 && !shots.some(s => s.shot_id === '__extras__')) {
-          setShots(prev => [
-            ...(prev || []),
-            {
-              shot_id: '__extras__',
-              area_key: 'existing_uploads',
-              label: 'Additional uploads',
-              min_count: 0,
-              notes: 'Uploaded previously; not tied to a required shot',
-              rules_text: '',
-            },
-          ]);
-          grouped['__extras__'] = misc;
+          // build file model used by UI
+          const file = {
+            name: path.split('/').pop() || 'photo.jpg',
+            url: path,
+            width: null,
+            height: null,
+            shotId: null,
+            preview: null,
+            isFix: !!it.is_fix,
+            cleanerNote: it.cleaner_note || null,
+          };
+
+          let targetShot = shotId;
+          if (!targetShot) {
+            // soft match by area_key if needed
+            const s = shots.find(s => (s.area_key || '').toLowerCase() === (it.area_key || '').toLowerCase());
+            if (s) targetShot = s.shot_id;
+          }
+          if (!targetShot) targetShot = '__extras__';
+
+          file.shotId = targetShot;
+          (byShot[targetShot] ||= []).push(file);
         }
 
-        // Merge into state (avoid dupes by path)
-        setUploadsByShot(prev => {
-          const next = { ...prev };
-          Object.entries(grouped).forEach(([key, arr]) => {
-            const existing = new Set((next[key] || []).map(f => f.url));
-            const merged = (next[key] || []).concat(arr.filter(f => !existing.has(f.url)));
-            next[key] = merged;
-          });
-          return next;
-        });
+        // if extras exist, add a pseudo-shot
+        if (byShot['__extras__'] && !shots.some(s => s.shot_id === '__extras__')) {
+          setShots(prev => [
+            ...(prev || []),
+            { shot_id: '__extras__', area_key: 'existing_uploads', label: 'Additional uploads', min_count: 0, notes: 'Previously uploaded', rules_text: '' }
+          ]);
+        }
+
+        setUploadsByShot(byShot);
+
+        // sign thumbnails for visible files
+        Object.values(byShot).flat().forEach(f => ensureThumb(f.url));
       } catch {
         // ignore
       }
@@ -292,117 +189,43 @@ export default function Capture() {
     loadExisting();
   }, [turnId, shots]);
 
-  // --- Fetch needs-fix notes (overall + per-photo) --- (DEFENSIVE)
+  // --- Fetch needs-fix notes (overall + per-photo) for the banner ---
   useEffect(() => {
     if (!turnId) return;
-
-    let cancelled = false;
-
     (async () => {
       try {
         const r = await fetch(`/api/turns/${turnId}/notes`);
-        if (!r.ok) return; // endpoint may not exist yet; silently ignore
+        if (!r.ok) return;
         const j = await r.json().catch(() => ({}));
-
-        // Accept several shapes
-        // A) { overall_note, items:[{path, note}] }
-        // B) { notes:{overall, items:[{path, note}]} }
-        // C) { photos:[{path, note}], overall?:string }
         const overall =
-          j.overall_note ||
-          j?.notes?.overall ||
-          j.overall ||
-          '';
-
+          j.overall_note || j?.notes?.overall || j.overall || '';
         const list =
           (Array.isArray(j.items) ? j.items :
           Array.isArray(j?.notes?.items) ? j.notes.items :
-          Array.isArray(j.photos) ? j.photos :
-          []);
-
+          Array.isArray(j.photos) ? j.photos : []);
         const byPath = {};
-        list.forEach(it => {
-          if (it?.path && (it.note || it.notes)) {
-            byPath[it.path] = it.note || it.notes;
-          }
-        });
-
-        if (!cancelled) {
-          setFixNotes({
-            byPath,
-            overall: String(overall || ''),
-            count: Object.keys(byPath).length
-          });
-        }
-      } catch {
-        // ignore
-      }
+        list.forEach(it => { if (it?.path && (it.note || it.notes)) byPath[it.path] = it.note || it.notes; });
+        setFixNotes({ byPath, overall: String(overall || ''), count: Object.keys(byPath).length });
+      } catch {}
     })();
-
-    return () => { cancelled = true; };
   }, [turnId]);
 
-  // --- Sign storage paths to show thumbnails for existing uploads ---
-  useEffect(() => {
-    // Collect any file paths that don't have a signed thumbnail yet
-    const pending = [];
-    Object.values(uploadsByShot).forEach(arr => {
-      (arr || []).forEach(f => {
-        const path = f.url;
-        if (!path) return;
-        if (thumbByPath[path]) return;
-        if (requestedThumbsRef.current.has(path)) return;
-        requestedThumbsRef.current.add(path);
-        pending.push(path);
-      });
+  // -------- Add files (upload) + allow per-photo cleaner note --------
+  async function getDims(file) {
+    const img = new Image();
+    return await new Promise((resolve, reject) => {
+      img.onload = () => { resolve({ width: img.naturalWidth, height: img.naturalHeight }); URL.revokeObjectURL(img.src); };
+      img.onerror = reject;
+      img.src = URL.createObjectURL(file);
     });
+  }
 
-    if (pending.length === 0) return;
-
-    let cancelled = false;
-
-    async function worker(paths) {
-      for (const p of paths) {
-        try {
-          const url = await signPath(p);
-          if (!cancelled && url) {
-            setThumbByPath(prev => (prev[p] ? prev : { ...prev, [p]: url }));
-          }
-        } catch {
-          // ignore one-off signing failures
-        }
-      }
-    }
-
-    const PARALLEL = 3;
-    const chunks = Array.from({ length: PARALLEL }, (_, i) =>
-      pending.filter((_, idx) => idx % PARALLEL === i)
-    );
-    chunks.forEach(c => worker(c));
-
-    return () => { cancelled = true; };
-  }, [uploadsByShot, thumbByPath]);
-
-  // -------- Add files (quality + upload to Storage) --------
   async function addFiles(shotId, fileList) {
     const files = Array.from(fileList || []);
-    const uploaded = [];
+    const added = [];
 
     for (const f of files) {
-      const dims = await getDims(f);
-      const longest = Math.max(dims.width, dims.height);
-      const tooSmall = longest < 1024;
-      const tooBig = f.size > 6 * 1024 * 1024;
-
-      if (tooSmall || tooBig) {
-        alert(
-          `Rejected "${f.name}": ` +
-          (tooSmall ? `min longest side is 1024px (got ${dims.width}×${dims.height}). ` : '') +
-          (tooBig ? `file > 6MB.` : '')
-        );
-        continue;
-      }
-
+      const dims = await getDims(f).catch(() => ({ width: 0, height: 0 }));
       const preview = URL.createObjectURL(f);
 
       const up = await fetch('/api/upload-url', {
@@ -411,160 +234,46 @@ export default function Capture() {
         body: JSON.stringify({ turnId, shotId, filename: f.name, mime: f.type })
       }).then(r => r.json());
 
-      if (!up.uploadUrl || !up.path) {
+      if (!up?.signedUploadUrl || !up?.path) {
         URL.revokeObjectURL(preview);
         alert('Could not get upload URL; try again.');
         continue;
       }
 
-      await fetch(up.uploadUrl, {
-        method: 'PUT',
-        headers: { 'Content-Type': up.mime || 'application/octet-stream' },
-        body: f
+      // multipart upload (field name MUST be "file")
+      const fd = new FormData();
+      fd.append('file', f);
+      await fetch(up.signedUploadUrl, { method: 'POST', body: fd });
+
+      // store as a new file (isFix UI highlight locally)
+      added.push({
+        name: f.name,
+        url: up.path,
+        width: dims.width || null,
+        height: dims.height || null,
+        shotId,
+        preview,
+        isFix: true,          // highlight immediately
+        cleanerNote: '',      // editable by cleaner below the card
       });
 
-      // NEW: include note for cleaner fixes, default ''
-      uploaded.push({ name: f.name, shotId, url: up.path, width: dims.width, height: dims.height, preview, note: '' });
+      // prime a signed thumb for it
+      ensureThumb(up.path);
     }
 
-    if (uploaded.length) {
-      setUploadsByShot(prev => ({ ...prev, [shotId]: [ ...(prev[shotId] || []), ...uploaded ] }));
-    }
-  }
-
-  // NEW: edit a per-photo note (for newly added fixes)
-  function setFixNote(shotId, fileUrl, text) {
-    setUploadsByShot(prev => {
-      const next = { ...prev };
-      const arr = (next[shotId] || []).map(f =>
-        f.url === fileUrl ? { ...f, note: text } : f
-      );
-      next[shotId] = arr;
-      return next;
-    });
-  }
-
-  // Cleanup preview URLs on unmount
-  useEffect(() => {
-    return () => {
-      Object.values(uploadsByShot).flat().forEach(f => {
-        if (f.preview) URL.revokeObjectURL(f.preview);
-      });
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // -------- AI Pre-Check (batched) --------
-  async function runPrecheck() {
-    if (prechecking) return;
-    setPrechecking(true);
-
-    const CHUNK_SIZE = 4;
-    const PARALLEL   = 3;
-
-    try {
-      const localFlags = [];
-      const MIN_LONGEST = 1024;
-
-      // Local checks
-      Object.entries(uploadsByShot).forEach(([shotId, files]) => {
-        files.forEach(f => {
-          const longest = Math.max(f.width || 0, f.height || 0);
-          if (longest && longest < MIN_LONGEST) {
-            localFlags.push(`Low-resolution in shot ${shotId}: ${f.name} (${f.width}×${f.height})`);
-          }
-        });
-      });
-
-      // Build items
-      const allItems = [];
-      (shots || []).forEach(s => {
-        (uploadsByShot[s.shot_id] || []).forEach(f => {
-          allItems.push({
-            url: f.url,
-            area_key: s.area_key || s.label || s.shot_id,
-            label: s.label,
-            notes: s.notes || '',
-            shot_rules: s.rules_text || ''
-          });
-        });
-      });
-
-      const toScan = allItems.filter(it => !scannedPaths.has(it.url));
-      setScanProgress({ done: 0, total: toScan.length });
-
-      if (toScan.length === 0) {
-        setAiFlags(prev => [...prev, ...localFlags]);
-        return;
-      }
-
-      const global_rules = {
-        property: (templateRules?.property || ''),
-        template: (templateRules?.template || '')
-      };
-
-      const chunk = (arr, size) =>
-        arr.reduce((acc, _, i) => (i % size ? acc : acc.concat([arr.slice(i, i + size)])), []);
-      const chunks = chunk(toScan, CHUNK_SIZE);
-
-      const results = [];
-      let nextIndex = 0;
-
-      async function worker() {
-        while (nextIndex < chunks.length) {
-          const myIdx = nextIndex++;
-          const items = chunks[myIdx];
-
-          setScanProgress(prev => ({ done: Math.min(prev.done + items.length * 0.5, prev.total), total: prev.total }));
-
-          try {
-            const resp = await fetch('/api/vision-scan', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ items, global_rules })
-            });
-            const json = await resp.json();
-            if (Array.isArray(json.results)) results.push(...json.results);
-          } catch {
-            // continue
-          }
-
-          setScanProgress(prev => ({ done: Math.min(prev.done + items.length * 0.5, prev.total), total: prev.total }));
-        }
-      }
-
-      const workers = Array.from({ length: Math.min(PARALLEL, chunks.length) }, () => worker());
-      await Promise.all(workers);
-
-      const perPhoto = { ...aiByPath };
-      results.forEach(r => { perPhoto[r.path] = Array.isArray(r.issues) ? r.issues : []; });
-      setAiByPath(perPhoto);
-
-      const aiLines = [];
-      results.forEach(r => {
-        (r.issues || []).forEach(issue => {
-          const sev = (issue.severity || 'info').toUpperCase();
-          const conf = typeof issue.confidence === 'number' ? ` (${Math.round(issue.confidence * 100)}%)` : '';
-          aiLines.push(`${sev} in ${r.area_key || 'unknown'}: ${issue.label}${conf}`);
-        });
-      });
-
-      setScannedPaths(prev => {
-        const next = new Set(prev);
-        toScan.forEach(it => next.add(it.url));
+    if (added.length) {
+      setUploadsByShot(prev => {
+        const next = { ...prev };
+        next[shotId] = [ ...(prev[shotId] || []), ...added ];
         return next;
       });
-
-      setAiFlags(prev => [ ...prev, ...localFlags, ...aiLines ]);
-    } finally {
-      setPrechecking(false);
-      setTimeout(() => setScanProgress({ done: 0, total: 0 }), 600);
     }
   }
 
-  // -------- Submit initial turn (enforce min counts per shot) --------
+  // -------- Submit initial turn --------
   async function submitAll() {
     if (submitting) return;
+    // minimal: ensure each shot meets min_count
     const unmet = (shots || []).filter(s => (s.min_count || 1) > (uploadsByShot[s.shot_id]?.length || 0));
     if (unmet.length) {
       alert('Please add required photos before submitting:\n' + unmet.map(a => `• ${a.label}`).join('\n'));
@@ -573,13 +282,14 @@ export default function Capture() {
 
     setSubmitting(true);
     try {
-      const photos = Object.values(uploadsByShot).flat();
+      const photos = Object.values(uploadsByShot).flat().map(f => ({
+        url: f.url, shotId: f.shotId, area_key: null
+      }));
       const resp = await fetch('/api/submit-turn', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ turnId, photos })
       });
-
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({}));
         alert('Submit failed: ' + (err.error || resp.statusText));
@@ -591,18 +301,23 @@ export default function Capture() {
     }
   }
 
-  // -------- Submit fixes (NEEDS-FIX tab only; send only new photos) --------
+  // -------- Submit ONLY fixes (new photos + per-photo notes) --------
   async function submitFixes() {
     if (submitting) return;
 
-    // Only send photos added in this session (they have a preview URL)
+    // new photos are those with preview present
     const newPhotos = Object.values(uploadsByShot)
       .flat()
       .filter(f => !!f.preview)
-      .map(f => ({ url: f.url, shotId: f.shotId, note: f.note || '' })); // include cleaner note
+      .map(f => ({
+        url: f.url,
+        shotId: f.shotId,
+        // send per-photo cleaner note
+        note: (cleanerNoteByNewPath[f.url] || '').trim() || null,
+      }));
 
-    if (!newPhotos.length) {
-      alert('Please add at least one new photo to submit fixes.');
+    if (newPhotos.length === 0 && !reply.trim()) {
+      alert('Add at least one new photo or a note before submitting.');
       return;
     }
 
@@ -611,26 +326,25 @@ export default function Capture() {
       const resp = await fetch('/api/turns/submit-fix', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ turn_id: turnId, reply, photos: newPhotos })
+        body: JSON.stringify({
+          turn_id: turnId,
+          reply: reply || '',
+          photos: newPhotos,   // API will store is_fix + cleaner_note now
+        })
       });
-
       const json = await resp.json().catch(() => ({}));
       if (!resp.ok) {
         alert('Submit fixes failed: ' + (json.error || resp.statusText));
         return;
       }
 
-      if (json?.notify?.testMode) {
-        console.log('[Fix submitted] test mode notify:', json.notify);
-        alert(`Fixes submitted. (Test mode) Would notify: ${json.notify?.to?.join(', ') || 'n/a'}`);
-      } else {
-        alert('Fixes submitted and manager notified.');
-      }
-
-      // Optionally redirect or reload
-      // window.location.href = `/turns/${turnId}/review`;
+      alert('Fixes submitted for review ✅');
+      // Optionally redirect cleaner to their list:
+      // window.location.href = '/cleaner/turns';
+      // Or refresh to fetch persisted is_fix + notes
+      window.location.reload();
     } finally {
-      setTimeout(() => setSubmitting(false), 300);
+      setTimeout(() => setSubmitting(false), 200);
     }
   }
 
@@ -645,12 +359,7 @@ export default function Capture() {
     );
   }
 
-  const pct = scanProgress.total > 0
-    ? Math.round((scanProgress.done / scanProgress.total) * 100)
-    : null;
-
   const hasFixes = (fixNotes?.count || 0) > 0;
-  const isFixTab = tab === 'needs-fix';
 
   return (
     <ChromeDark title="Start Taking Photos">
@@ -665,12 +374,9 @@ export default function Capture() {
           {hasFixes && !hideFixBanner && (
             <div
               style={{
-                marginTop: 10,
-                padding: '10px 12px',
-                border: '1px solid #d97706',
-                background: '#4a2f04',
-                color: '#fcd34d',
-                borderRadius: 10,
+                marginTop: 10, padding: '10px 12px',
+                border: '1px solid #d97706', background: '#4a2f04',
+                color: '#fcd34d', borderRadius: 10,
               }}
             >
               <div style={{ fontWeight: 700, marginBottom: 4 }}>
@@ -691,22 +397,7 @@ export default function Capture() {
             </div>
           )}
 
-          {/* Tips */}
-          <div style={{ ...ui.subtle, color:'#e5e7eb', marginTop: 12 }}>
-            ✅ Tap + inside the box to take a picture
-          </div>
-          <div style={{ ...ui.subtle, color:'#e5e7eb', marginTop: 6 }}>
-            ✅ Run AI Pre-Check before submitting
-          </div>
-
-          {/* Optional Turn ID */}
-          {typeof window !== 'undefined' &&
-            new URLSearchParams(window.location.search).get('showId') === '1' && (
-            <div style={{ ...smallMeta, marginTop: 6 }}>
-              Turn ID: <code style={{ userSelect:'all' }}>{turnId}</code>
-            </div>
-          )}
-
+          {/* Shots */}
           {shots.map(s => {
             const files = uploadsByShot[s.shot_id] || [];
             const required = s.min_count || 1;
@@ -716,10 +407,7 @@ export default function Capture() {
               <div
                 key={s.shot_id}
                 style={{
-                  border: ui.card.border,
-                  borderRadius: 12,
-                  padding: 12,
-                  margin: '12px 0',
+                  border: ui.card.border, borderRadius: 12, padding: 12, margin: '12px 0',
                   background: ui.card.background
                 }}
               >
@@ -740,8 +428,7 @@ export default function Capture() {
                     {s.notes ? <div style={{ ...smallMeta }}>{s.notes}</div> : null}
                     <div
                       style={{
-                        fontSize: 12,
-                        marginTop: 4,
+                        fontSize: 12, marginTop: 4,
                         color: missing > 0 ? '#f59e0b' : '#22c55e'
                       }}
                     >
@@ -754,40 +441,24 @@ export default function Capture() {
                   </ThemedButton>
                 </div>
 
-                {/* File cards + placeholders */}
+                {/* File cards */}
                 <div style={{ marginTop:10, display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(260px,1fr))', gap:16 }}>
-                  {/* Existing + newly uploaded files */}
                   {files.map(f => {
-                    // trigger signing if needed
-                    if (!f.preview && !thumbByPath[f.url]) {
-                      ensureThumb(f.url, setThumbByPath, requestedThumbsRef, signPath);
-                    }
-                    const thumb  = f.preview || thumbByPath[f.url] || null;
-
-                    // DEFENSIVE: read notes safely
-                    const byPath = fixNotes?.byPath || {};
-                    const mgrNote   = byPath[f.url];              // manager's "needs fix" note for this photo (amber)
-                    const flagged   = !!mgrNote;
-
-                    // NEW: is this a NEW fix photo (added this session) on needs-fix tab?
-                    const isNewFix = isFixTab && !!f.preview;
+                    if (!f.preview && !thumbByPath[f.url]) ensureThumb(f.url);
+                    const thumb = f.preview || thumbByPath[f.url] || null;
+                    const managerNote = fixNotes?.byPath?.[f.url];
 
                     return (
                       <div
                         key={f.url}
-                        data-path={f.url}
                         style={{
-                          border: flagged ? '1px solid #d97706'
-                                  : isNewFix ? '1px solid #16a34a'
-                                  : ui.card.border,
+                          border: f.isFix ? '1px solid #065f46' : (managerNote ? '1px solid #d97706' : ui.card.border),
+                          boxShadow: f.isFix
+                            ? '0 0 0 3px rgba(5, 150, 105, 0.20) inset'
+                            : (managerNote ? '0 0 0 3px rgba(217,119,6,0.15)' : 'none'),
                           borderRadius:10,
                           padding:10,
-                          background: isNewFix ? '#052e1f' : '#0b1220',
-                          boxShadow: flagged
-                            ? '0 0 0 3px rgba(217,119,6,0.15)'
-                            : isNewFix
-                              ? '0 0 0 3px rgba(22,163,74,0.20)'
-                              : 'none'
+                          background: f.isFix ? '#071a16' : '#0b1220'
                         }}
                       >
                         <div style={{ position:'relative', marginBottom:8, height:160 }}>
@@ -799,290 +470,90 @@ export default function Capture() {
                               draggable={false}
                             />
                           ) : (
-                            <div
-                              style={{
-                                width:'100%', height:160, borderRadius:8,
-                                background:'linear-gradient(90deg,#0f172a,#111827,#0f172a)',
-                                backgroundSize:'200% 100%'
-                              }}
-                            />
+                            <div style={{ width:'100%', height:160, borderRadius:8, background:'#0f172a' }} />
                           )}
 
-                          {flagged && (
-                            <span
-                              style={{
-                                position:'absolute',
-                                top:8, left:8,
-                                background:'#4a2f04',
-                                color:'#fcd34d',
-                                border:'1px solid #d97706',
-                                borderRadius:999,
-                                fontSize:12,
-                                fontWeight:700,
-                                padding:'2px 8px'
-                              }}
-                            >
+                          {/* badges */}
+                          {managerNote && (
+                            <span style={{
+                              position:'absolute', top:8, left:8,
+                              background:'#4a2f04', color:'#fcd34d',
+                              border:'1px solid #d97706', borderRadius:999,
+                              fontSize:12, fontWeight:700, padding:'2px 8px'
+                            }}>
                               Needs fix
                             </span>
                           )}
-
-                          {isNewFix && (
-                            <span
-                              style={{
-                                position:'absolute',
-                                top:8, left:8,
-                                background:'#bbf7d0',
-                                color:'#065f46',
-                                border:'1px solid #16a34a',
-                                borderRadius:999,
-                                fontSize:12,
-                                fontWeight:700,
-                                padding:'2px 8px'
-                              }}
-                            >
-                              fix
+                          {f.isFix && (
+                            <span style={{
+                              position:'absolute', top:8, right:8,
+                              background:'#064e3b', color:'#86efac',
+                              border:'1px solid #065f46', borderRadius:999,
+                              fontSize:12, fontWeight:700, padding:'2px 8px'
+                            }}>
+                              FIX
                             </span>
                           )}
                         </div>
 
                         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:6 }}>
                           <div style={{ fontSize:13, maxWidth:'70%' }}>
-                            <b title={f.name}>{f.name}</b><br/>
-                            {f.width}×{f.height}
+                            <b title={f.name}>{f.name}</b>
                           </div>
-                          <ThemedButton kind="secondary" onClick={() => viewPhoto(f.url)} ariaLabel={`View ${f.name}`}>
+                          <ThemedButton kind="secondary" onClick={async () => {
+                            try { const url = await signPath(f.url); window.open(url, '_blank'); } catch {}
+                          }} ariaLabel={`View ${f.name}`}>
                             👁️ View
                           </ThemedButton>
                         </div>
 
-                        {/* Per-photo manager note (if flagged) */}
-                        {flagged && (
-                          <div
-                            style={{
-                              marginTop:6,
-                              padding:'8px 10px',
-                              border:'1px dashed #d97706',
-                              background:'#3a2b10',
-                              color:'#fde68a',
-                              borderRadius:8,
-                              fontSize:13,
-                              whiteSpace:'pre-wrap'
-                            }}
-                          >
-                            {mgrNote}
+                        {/* Manager note (if flagged) visible to cleaner */}
+                        {managerNote && (
+                          <div style={{
+                            marginTop:6, padding:'8px 10px',
+                            border:'1px dashed #d97706', background:'#3a2b10',
+                            color:'#fde68a', borderRadius:8, fontSize:13, whiteSpace:'pre-wrap'
+                          }}>
+                            {managerNote}
                           </div>
                         )}
 
-                        {/* NEW: cleaner per-photo note input (only for NEW fixes on needs-fix tab) */}
-                        {isNewFix && (
-                          <div style={{ marginTop: flagged ? 8 : 0 }}>
-                            <div style={{ fontSize:11, color:'#a7f3d0', marginBottom:4, fontWeight:700 }}>
-                              Note to manager (optional)
-                            </div>
+                        {/* Cleaner per-photo note editor ONLY for newly added fixes (with preview) */}
+                        {f.preview && f.isFix && (
+                          <div style={{ marginTop:8 }}>
+                            <div style={{ fontSize:12, color:'#9ca3af', marginBottom:4, fontWeight:700 }}>Note to manager (for this fix)</div>
                             <textarea
-                              value={f.note || ''}
-                              onChange={e => setFixNote(s.shot_id, f.url, e.target.value)}
                               rows={2}
-                              placeholder="What did you fix here?"
-                              style={{
-                                width:'100%', background:'#0b1220', border:'1px solid #16a34a',
-                                borderRadius:8, padding:'8px 10px', color:'#d1fae5', resize:'vertical'
-                              }}
+                              value={cleanerNoteByNewPath[f.url] || ''}
+                              onChange={e => setCleanerNoteByNewPath(prev => ({ ...prev, [f.url]: e.target.value }))}
+                              placeholder="Brief note about the fix…"
+                              style={{ ...ui.input, width:'100%', padding:'8px 10px', background:'#0b1220', resize:'vertical' }}
                             />
                           </div>
                         )}
 
-                        {/* AI flags under each photo */}
-                        {Array.isArray(aiByPath[f.url]) && aiByPath[f.url].length > 0 && (
-                          <div style={{ marginTop: (flagged || isNewFix) ? 8 : 0 }}>
-                            {aiByPath[f.url].map((iss, idx) => (
-                              <div key={idx} style={{ marginBottom:4 }}>
-                                <span style={sevPill(iss.severity)}>{(iss.severity || 'info').toUpperCase()}</span>
-                                <span style={{ fontSize:13 }}>
-                                  {iss.label}
-                                  {typeof iss.confidence === 'number' ? ` (${Math.round(iss.confidence * 100)}%)` : ''}
-                                </span>
-                              </div>
-                            ))}
+                        {/* Persisted cleaner note (when loaded later without preview) */}
+                        {!f.preview && f.isFix && f.cleanerNote && (
+                          <div style={{
+                            marginTop:8, padding:'8px 10px',
+                            background:'#052e2b', border:'1px solid #065f46',
+                            borderRadius:8, color:'#86efac', whiteSpace:'pre-wrap'
+                          }}>
+                            {f.cleanerNote}
                           </div>
                         )}
                       </div>
                     );
                   })}
-
-                  {/* Placeholders for missing photos */}
-                  {Array.from({ length: missing }).map((_, i) => (
-                    <button
-                      key={`ph-${s.shot_id}-${i}`}
-                      onClick={() => openPicker(s.shot_id)}
-                      aria-label={`Add required photo for ${s.label}`}
-                      style={{
-                        border:'2px dashed #334155',
-                        borderRadius:12,
-                        padding:'20px 14px',
-                        background:'transparent',
-                        cursor:'pointer',
-                        display:'flex',
-                        flexDirection:'column',
-                        alignItems:'center',
-                        justifyContent:'center',
-                        minHeight:160,
-                        userSelect:'none',
-                        WebkitTapHighlightColor:'transparent',
-                        color:'#cbd5e1'
-                      }}
-                    >
-                      <div style={{ fontSize:30, lineHeight:1, color:'#94a3b8', marginBottom:8 }}>＋</div>
-                      <div style={{ fontSize:15 }}>Tap to add required photo</div>
-                      <div style={{ fontSize:12, color:'#94a3b8', marginTop:4 }}>{s.label}</div>
-                    </button>
-                  ))}
                 </div>
               </div>
             );
           })}
 
-          {/* Unmatched legacy photos bucket */}
-          {Array.isArray(uploadsByShot._misc) && uploadsByShot._misc.length > 0 && (
-            <div style={{ border:'1px solid #334155', borderRadius:12, padding:12, margin:'12px 0', background:'#0f172a' }}>
-              <div style={{ fontWeight:700, marginBottom:6 }}>Other uploads</div>
-              <div style={{ fontSize:12, color:'#94a3b8', marginBottom:8 }}>
-                These photos were attached to the turn but didn’t match any current shot.
-              </div>
-              <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(260px,1fr))', gap:16 }}>
-                {uploadsByShot._misc.map(f => {
-                  if (!thumbByPath[f.url]) {
-                    ensureThumb(f.url, setThumbByPath, requestedThumbsRef, signPath);
-                  }
-                  const thumb = thumbByPath[f.url] || null;
-
-                  const byPath = fixNotes?.byPath || {};
-                  const note   = byPath[f.url];
-                  const flagged = !!note;
-
-                  return (
-                    <div
-                      key={f.url}
-                      style={{
-                        border: flagged ? '1px solid #d97706' : '1px solid #334155',
-                        borderRadius:10,
-                        padding:10,
-                        background:'#0b1220',
-                        boxShadow: flagged ? '0 0 0 3px rgba(217,119,6,0.15)' : 'none'
-                      }}
-                    >
-                      <div style={{ position:'relative', marginBottom:8, height:160 }}>
-                        {thumb ? (
-                          <img
-                            src={thumb}
-                            alt={f.name}
-                            style={{ width:'100%', height:160, objectFit:'cover', borderRadius:8 }}
-                            draggable={false}
-                          />
-                        ) : (
-                          <div
-                            style={{
-                              width:'100%', height:160, borderRadius:8,
-                              background:'linear-gradient(90deg,#0f172a,#111827,#0f172a)',
-                              backgroundSize:'200% 100%'
-                            }}
-                          />
-                        )}
-                        {flagged && (
-                          <span
-                            style={{
-                              position:'absolute',
-                              top:8, left:8,
-                              background:'#4a2f04',
-                              color:'#fcd34d',
-                              border:'1px solid #d97706',
-                              borderRadius:999,
-                              fontSize:12,
-                              fontWeight:700,
-                              padding:'2px 8px'
-                            }}
-                          >
-                            Needs fix
-                          </span>
-                        )}
-                      </div>
-                      <div style={{ fontSize:13, marginBottom:6, color:'#e5e7eb' }}>
-                        <b title={f.name}>{f.name}</b><br/>
-                        {f.width && f.height ? `${f.width}×${f.height}` : null}
-                      </div>
-                      {flagged && (
-                        <div
-                          style={{
-                            marginTop:6,
-                            padding:'8px 10px',
-                            border:'1px dashed #d97706',
-                            background:'#3a2b10',
-                            color:'#fde68a',
-                            borderRadius:8,
-                            fontSize:13,
-                            whiteSpace:'pre-wrap'
-                          }}
-                        >
-                          {note}
-                        </div>
-                      )}
-                      <div style={{ marginTop:8 }}>
-                        <ThemedButton kind="secondary" onClick={() => viewPhoto(f.url)} ariaLabel={`View ${f.name}`}>
-                          👁️ View
-                        </ThemedButton>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* AI findings summary */}
-          <div style={{ border:'1px dashed #334155', borderRadius:12, padding:12, marginTop:16, background: ui.card.background }}>
-            <div style={{ fontWeight:600, marginBottom:8 }}>AI Findings</div>
-            {aiFlags.length === 0 ? (
-              <div style={ui.subtle}>No findings yet — tap “Run AI Pre-Check”.</div>
-            ) : (
-              <ul style={{ marginLeft:18 }}>
-                {aiFlags.map((f, i) => <li key={i}>{f}</li>)}
-              </ul>
-            )}
-          </div>
-
-          {/* Buttons + progress */}
-          <div style={{ display:'flex', flexDirection:'column', gap:12, marginTop:16, maxWidth:420 }}>
-            <ThemedButton
-              onClick={runPrecheck}
-              loading={prechecking}
-              kind="primary"
-              ariaLabel="Run AI Pre-Check"
-            >
-              {prechecking && scanProgress.total > 0
-                ? `🔎 Scanning ${scanProgress.done}/${scanProgress.total} (${pct}%)`
-                : '🔎 Run AI Pre-Check'}
-            </ThemedButton>
-
-            {prechecking && scanProgress.total > 0 && (
-              <div>
-                <div style={{ height:8, background:'#1f2937', borderRadius:6, overflow:'hidden' }}>
-                  <div
-                    style={{
-                      height:'100%',
-                      width: `${pct}%`,
-                      background: '#0ea5e9',
-                      transition:'width 200ms ease'
-                    }}
-                  />
-                </div>
-                <div style={{ fontSize:12, color:'#94a3b8', marginTop:6 }}>
-                  Scanning {scanProgress.done} of {scanProgress.total}…
-                </div>
-              </div>
-            )}
-
-            {isFixTab ? (
-              <div>
+          {/* Footer: submit buttons */}
+          <div style={{ display:'flex', flexDirection:'column', gap:12, marginTop:16, maxWidth:520 }}>
+            {tab === 'needs-fix' ? (
+              <>
                 <textarea
                   value={reply}
                   onChange={e => setReply(e.target.value)}
@@ -1093,77 +564,18 @@ export default function Capture() {
                     color:'#e5e7eb', background:'#0b1220'
                   }}
                 />
-                <div style={{ height:8 }} />
-                <ThemedButton
-                  onClick={submitFixes}
-                  loading={submitting}
-                  kind="secondary"
-                  ariaLabel="Submit Fixes"
-                  full
-                >
+                <ThemedButton onClick={submitFixes} loading={submitting} kind="secondary" ariaLabel="Submit Fixes" full>
                   🔧 Submit Fixes
                 </ThemedButton>
-              </div>
+              </>
             ) : (
-              <ThemedButton
-                onClick={submitAll}
-                loading={submitting}
-                kind="secondary"
-                ariaLabel="Submit Turn"
-                full
-              >
+              <ThemedButton onClick={submitAll} loading={submitting} kind="secondary" ariaLabel="Submit Turn" full>
                 ✅ Submit Turn
               </ThemedButton>
             )}
           </div>
-
         </div>
       </section>
-
-      {/* --- LIGHTBOX MODAL --- */}
-      {lightboxOpen && (
-        <div
-          onClick={(e) => { if (e.target === e.currentTarget) closeLightbox(); }}
-          style={{
-            position:'fixed', inset:0, background:'rgba(0,0,0,0.75)',
-            display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000, padding:16
-          }}
-        >
-          <div style={{ position:'relative', width:'min(95vw,1100px)', maxHeight:'90vh', background:'#111', borderRadius:12, overflow:'hidden' }}>
-            {/* Toolbar */}
-            <div style={{ display:'flex', gap:8, padding:'8px 10px', alignItems:'center', background:'#0f172a', color:'#fff' }}>
-              <ThemedButton kind="secondary" onClick={closeLightbox}>✖ Close (Esc)</ThemedButton>
-              <div style={{ flex:1 }} />
-              <ThemedButton kind="secondary" onClick={zoomOut}>➖ Zoom</ThemedButton>
-              <ThemedButton kind="secondary" onClick={zoomIn}>➕ Zoom</ThemedButton>
-              <ThemedButton kind="secondary" onClick={rotateLeft}>⟲ Rotate</ThemedButton>
-              <ThemedButton kind="secondary" onClick={rotateRight}>⟳ Rotate</ThemedButton>
-              <ThemedButton kind="secondary" onClick={refreshSignedUrl}>⟳ Refresh URL</ThemedButton>
-              <ThemedButton kind="secondary" onClick={downloadCurrent}>⬇ Download</ThemedButton>
-            </div>
-
-            {/* Image */}
-            <div style={{ display:'flex', alignItems:'center', justifyContent:'center', padding:16, maxHeight:'calc(90vh - 48px)', overflow:'auto' }}>
-              {lightboxUrl ? (
-                <img
-                  src={lightboxUrl}
-                  alt="Photo"
-                  style={{
-                    maxWidth:'100%',
-                    maxHeight:'80vh',
-                    transform: `scale(${zoom}) rotate(${rotation}deg)`,
-                    transformOrigin:'center center',
-                    transition:'transform 120ms ease'
-                  }}
-                  draggable={false}
-                />
-              ) : (
-                <div style={{ color:'#e2e8f0' }}>Loading…</div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
     </ChromeDark>
   );
 }
