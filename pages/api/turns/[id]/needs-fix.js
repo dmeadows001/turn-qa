@@ -1,213 +1,266 @@
 // pages/api/turns/[id]/needs-fix.js
 import { supabaseAdmin as _admin } from '@/lib/supabaseAdmin';
 
-const supa = typeof _admin === 'function' ? _admin() : _admin;
-
-// Optional Twilio (SMS). If not configured, we return testMode with the message.
-let twilioClient = null;
+let sendSmsMinimal = async () => {};
 try {
-  if (
+  ({ sendSmsMinimal } = require('@/lib/sms'));
+} catch {
+  const hasTwilio =
     process.env.TWILIO_ACCOUNT_SID &&
     process.env.TWILIO_AUTH_TOKEN &&
-    process.env.TWILIO_FROM_NUMBER
-  ) {
-    const twilio = (await import('twilio')).default;
-    twilioClient = twilio(
+    process.env.TWILIO_FROM_NUMBER;
+  if (hasTwilio) {
+    const twilio = require('twilio')(
       process.env.TWILIO_ACCOUNT_SID,
       process.env.TWILIO_AUTH_TOKEN
     );
+    sendSmsMinimal = async (to, body) => {
+      try {
+        await twilio.messages.create({
+          to,
+          from: process.env.TWILIO_FROM_NUMBER,
+          body,
+        });
+      } catch (e) {
+        console.error('[needs-fix sms] twilio error', e?.message || e);
+      }
+    };
   }
-} catch (_) {
-  // ignore optional import issues
 }
 
-function getBaseUrl(req) {
-  // Prefer configured public URL; fall back to Origin header or host
-  const envBase =
-    process.env.NEXT_PUBLIC_BASE_URL ||
-    process.env.BASE_URL ||
-    process.env.VERCEL_PROJECT_PRODUCTION_URL; // e.g. project.vercel.app
+// IMPORTANT: supabaseAdmin is a factory function in this repo
+const supa = typeof _admin === 'function' ? _admin() : _admin;
+const nowIso = () => new Date().toISOString();
 
-  if (envBase) {
-    return envBase.startsWith('http') ? envBase : `https://${envBase}`;
-  }
-  const origin = req.headers.origin;
-  if (origin && origin.startsWith('http')) return origin;
-  const host = req.headers['x-forwarded-host'] || req.headers.host || 'localhost:3000';
-  const proto = (req.headers['x-forwarded-proto'] || '').split(',')[0] || 'https';
-  return `${proto}://${host}`;
-}
+// simple id helper (Node 18+ has crypto.randomUUID)
+const mkId = () =>
+  (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function')
+    ? globalThis.crypto.randomUUID()
+    : `id_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
 
 export default async function handler(req, res) {
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', ['POST']);
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
 
   try {
-    const turnId = String(req.query.id || req.query.turn_id || '').trim();
-    if (!turnId) return res.status(400).json({ error: 'missing turn id' });
+    const turnId = String(req.query.id || '').trim();
+    if (!turnId) return res.status(400).json({ error: 'missing id' });
 
-    // Body shape from your UI:
-    // { notes: [{ path, note }], summary: string|null, send_sms: boolean }
-    const body = await safeJson(req);
-    const rawNotes = Array.isArray(body.notes) ? body.notes : [];
-    const summary = typeof body.summary === 'string' ? body.summary.trim() : '';
-    const sendSms = !!body.send_sms;
+    // Support BOTH payload shapes the UI may send:
+    //  - { notes: [{ path, note }], summary?, send_sms? }
+    //  - { photos: [{ id?, path?, note? }], overall_note?, notify? }
+    const b = req.body || {};
+    const summary = (b.summary ?? b.overall_note ?? '').trim();
+    const notify = Boolean(b.send_sms ?? b.notify ?? true);
 
-    // 1) Update turn status + manager note (singular) on the turn
-    await supa
-      .from('turns')
-      .update({
-        status: 'needs_fix',
-        manager_note: summary || null,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', turnId);
+    const normalizedNotes = Array.isArray(b.notes)
+      ? b.notes.map(n => ({ path: String(n?.path || ''), note: String(n?.note || '') }))
+      : Array.isArray(b.photos)
+        ? b.photos.map(p => ({ id: p?.id, path: String(p?.path || ''), note: String(p?.note || '') }))
+        : [];
 
-    // 2) Persist findings (per-photo notes)
-    //    We'll store into a table that your GET /api/turns/:id/findings reads back.
-    //    Common schema we’ve used: turn_findings(turn_id, path, note, severity, created_at)
-    //    Upsert by (turn_id, path) so re-sends overwrite.
-    if (rawNotes.length) {
-      const rows = rawNotes
-        .filter(it => it && it.path && (it.note || '').toString().trim().length)
-        .map(it => ({
-          turn_id: turnId,
-          path: String(it.path),
-          note: String(it.note || '').trim(),
-          severity: 'warn',
-          created_at: new Date().toISOString(),
-        }));
+    const ts = nowIso();
 
-      if (rows.length) {
-        // If your table is named differently, change this name:
-        const { error: fErr } = await supa
-          .from('turn_findings')
-          .upsert(rows, { onConflict: 'turn_id,path' });
-
-        if (fErr) {
-          // Not fatal to the whole request; we still proceed to notify
-          console.warn('[needs-fix] findings upsert failed', fErr.message || fErr);
-        }
-      }
+    // --- 1) Update turn status ---
+    {
+      const { error } = await supa
+        .from('turns')
+        .update({
+          status: 'needs_fix',
+          needs_fix_at: ts,
+          manager_note: summary || null,
+        })
+        .eq('id', turnId);
+      if (error && !/column .* does not exist/i.test(error.message)) throw error;
     }
 
-    // 3) Try to infer the first area_key from the paths provided (for &open=...)
-    let firstAreaKey = null;
+    // --- 2) Best-effort flagging on turn_photos/photos (non-blocking) ---
+    let flagged = 0;
+    const attempted = [];
+    const columns = ['id', 'path', 'storage_path', 'photo_path', 'url', 'file'];
+
+    function filenameOf(p) {
+      const s = String(p || '');
+      const parts = s.split('/');
+      return parts[parts.length - 1] || s;
+    }
+
+    async function updateById(table, id, note) {
+      const payload = { needs_fix: true, needs_fix_at: ts };
+      if (note && String(note).trim()) payload.manager_notes = String(note).trim();
+      const { error, count } = await supa.from(table).update(payload, { count: 'exact' }).eq('id', id);
+      return !error && (count ?? 0) > 0;
+    }
+
+    async function updateByExactPath(table, turnIdParam, col, path, note) {
+      const payload = { needs_fix: true, needs_fix_at: ts };
+      if (note && String(note).trim()) payload.manager_notes = String(note).trim();
+      const { error, count } = await supa
+        .from(table)
+        .update(payload, { count: 'exact' })
+        .match({ turn_id: turnIdParam, [col]: path });
+      return !error && (count ?? 0) > 0;
+    }
+
+    async function updateByFilename(table, turnIdParam, col, pathOrName, note) {
+      const name = filenameOf(pathOrName);
+      const { data, error } = await supa
+        .from(table)
+        .select(`id, ${col}, turn_id`)
+        .eq('turn_id', turnIdParam);
+
+      if (error || !Array.isArray(data)) return false;
+      const matches = data.filter(r => String(r[col] || '').endsWith('/' + name));
+      if (matches.length === 0) return false;
+
+      let ok = false;
+      for (const m of matches) {
+        ok = (await updateById(table, m.id, note)) || ok;
+      }
+      return ok;
+    }
+
+    async function tryFlag(one) {
+      if (one.id) {
+        const ok = (await updateById('turn_photos', one.id, one.note))
+          || (await updateById('photos', one.id, one.note));
+        attempted.push({ via: 'id', id: one.id, ok });
+        return ok;
+      }
+      if (one.path) {
+        for (const table of ['turn_photos', 'photos']) {
+          for (const col of columns.slice(1)) {
+            const ok = await updateByExactPath(table, turnId, col, one.path, one.note);
+            attempted.push({ via: `exact:${table}.${col}`, path: one.path, ok });
+            if (ok) return true;
+          }
+        }
+        for (const table of ['turn_photos', 'photos']) {
+          for (const col of columns.slice(1)) {
+            const ok = await updateByFilename(table, turnId, col, one.path, one.note);
+            attempted.push({ via: `filename:${table}.${col}`, path: one.path, ok });
+            if (ok) return true;
+          }
+        }
+      }
+      attempted.push({ via: 'none', path: one.path || null, ok: false });
+      return false;
+    }
+
+    for (const n of normalizedNotes) {
+      if (await tryFlag(n)) flagged++;
+    }
+
+    // --- 3) Persist findings rows so the cleaner page can highlight ---
+    const findingRowsBase = normalizedNotes
+      .filter(n => (n.path || '').trim().length > 0)
+      .map(n => ({
+        id: mkId(),
+        turn_id: turnId,
+        evidence_url: n.path, // the cleaner UI compares against photo.path
+        note: (n.note || '').trim() || null,
+        created_at: ts,
+      }));
+
+    // First attempt: include severity = 'warn'
+    const rowsWithSeverity = findingRowsBase.map(r => ({ ...r, severity: 'warn' }));
+
+    let findingsInserted = 0;
+    let findingsInsertErr = null;
+    const findingsTriedToInsert = findingRowsBase.length;
+
     try {
-      const paths = rawNotes.map(n => n?.path).filter(Boolean);
-      if (paths.length) {
-        // a) find shot_id(s) for these paths
-        const { data: tpRows } = await supa
-          .from('turn_photos')
-          .select('path, shot_id')
-          .eq('turn_id', turnId)
-          .in('path', [...new Set(paths)]);
+      // Clear previous findings for this turn
+      await supa.from('qa_findings').delete().eq('turn_id', turnId);
 
-        const shotIds = [...new Set((tpRows || []).map(r => r.shot_id).filter(Boolean))];
+      if (rowsWithSeverity.length) {
+        // Try with severity
+        let { data: insData, error: insErr } = await supa
+          .from('qa_findings')
+          .insert(rowsWithSeverity)
+          .select('id');
 
-        if (shotIds.length) {
-          // b) map shot_id -> area_key
-          const { data: tsRows } = await supa
-            .from('template_shots')
-            .select('id, area_key')
-            .in('id', shotIds);
+        // If a CHECK constraint on severity fails, retry without the column
+        if (insErr && /severity|check constraint|violates check constraint/i.test(insErr.message || '')) {
+          const retry = await supa
+            .from('qa_findings')
+            .insert(findingRowsBase) // no severity field
+            .select('id');
 
-          const map = Object.fromEntries((tsRows || []).map(r => [String(r.id), r.area_key || '']));
-          // Pick the area_key of the first note’s path if possible
-          const firstPath = paths[0];
-          const firstShotId = (tpRows || []).find(r => r.path === firstPath)?.shot_id;
-          if (firstShotId && map[firstShotId]) firstAreaKey = map[firstShotId];
+          insData = retry.data;
+          insErr = retry.error;
+        }
+
+        if (insErr) {
+          findingsInsertErr = insErr.message || String(insErr);
+          console.error('[qa_findings insert] error:', insErr);
+        } else {
+          findingsInserted = Array.isArray(insData) ? insData.length : 0;
         }
       }
-    } catch (_) {
-      // Non-blocking
+    } catch (e) {
+      findingsInsertErr = e?.message || String(e);
+      console.error('[qa_findings insert] exception:', e);
     }
 
-    // 4) Build the cleaner link to CAPTURE in needs-fix mode
-    const base = getBaseUrl(req);
-    const captureUrl =
-      `${base}/turns/${encodeURIComponent(turnId)}/capture?tab=needs-fix` +
-      (firstAreaKey ? `&open=${encodeURIComponent(firstAreaKey)}` : '');
+    // --- 4) SMS (optional) ---
+    if (notify) {
+      let cleanerPhone = null;
+      let propertyName = null;
 
-    // 5) (Optional) Send SMS to the cleaner
-    let notify = { sent: false, testMode: false, to: [] };
-    if (sendSms) {
-      // Find cleaner phone number
-      let phone = null;
-      try {
-        // Prefer a direct phone on turns table
-        const { data: turnRow } = await supa
-          .from('turns')
-          .select('id, cleaner_phone, cleaner_user_id')
-          .eq('id', turnId)
-          .single();
+      const { data: t, error: tErr } = await supa
+        .from('turns')
+        .select('id, property_id, cleaner_id, properties(name)')
+        .eq('id', turnId)
+        .maybeSingle();
+      if (tErr) throw tErr;
 
-        phone = turnRow?.cleaner_phone || null;
+      propertyName = t?.properties?.name || null;
 
-        // If not present, try looking up in profiles by cleaner_user_id
-        if (!phone && turnRow?.cleaner_user_id) {
-          const { data: prof } = await supa
-            .from('profiles')
-            .select('id, phone')
-            .eq('id', turnRow.cleaner_user_id)
-            .maybeSingle();
-          phone = prof?.phone || null;
-        }
-      } catch (_) {}
+      if (t?.cleaner_id) {
+        const { data: c } = await supa.from('cleaners').select('phone').eq('id', t.cleaner_id).maybeSingle();
+        cleanerPhone = c?.phone || null;
+      }
+      if (!cleanerPhone && t?.property_id) {
+        const { data: pc } = await supa
+          .from('property_cleaners')
+          .select('cleaners(phone)')
+          .eq('property_id', t.property_id)
+          .limit(1)
+          .maybeSingle();
+        cleanerPhone = pc?.cleaners?.phone || null;
+      }
 
-      const message = [
-        'Manager requested a quick fix.',
-        summary ? `Note: ${summary}` : null,
-        rawNotes.length ? `(${rawNotes.length} photo${rawNotes.length > 1 ? 's' : ''} flagged)` : null,
-        `Open to add the fix photo${rawNotes.length > 1 ? 's' : ''}: ${captureUrl}`,
-      ]
-        .filter(Boolean)
-        .join(' ');
+      if (cleanerPhone) {
+        const base =
+          process.env.APP_BASE_URL ||
+          process.env.NEXT_PUBLIC_APP_BASE_URL ||
+          process.env.NEXT_PUBLIC_SITE_URL ||
+          'https://www.turnqa.com';
 
-      if (!twilioClient || process.env.DISABLE_SMS === '1' || !phone) {
-        notify = {
-          sent: false,
-          testMode: true,
-          to: phone ? [phone] : [],
-          message,
-          url: captureUrl,
-        };
-      } else {
-        try {
-          const sms = await twilioClient.messages.create({
-            to: phone,
-            from: process.env.TWILIO_FROM_NUMBER,
-            body: message,
-          });
-          notify = { sent: true, testMode: false, to: [phone], sid: sms.sid, url: captureUrl };
-        } catch (e) {
-          notify = {
-            sent: false,
-            testMode: true,
-            to: [phone],
-            message,
-            url: captureUrl,
-            error: e?.message || String(e),
-          };
-        }
+        const link = `${base.replace(/\/+$/, '')}/turns/${encodeURIComponent(turnId)}/review`;
+        const msg =
+          `TurnQA: Updates needed${propertyName ? ` at ${propertyName}` : ''}.\n` +
+          (summary ? `Note: ${summary}\n` : '') +
+          (flagged > 0 ? `${flagged} item(s) marked.\n` : '') +
+          `Resume here: ${link}`;
+        await sendSmsMinimal(cleanerPhone, msg);
       }
     }
 
     return res.json({
       ok: true,
-      status: 'needs_fix',
-      url: captureUrl,       // <— useful for clients/tests
-      notify,                // {sent, testMode, to, ...}
+      flagged,
+      findings_tried_to_insert: findingsTriedToInsert,
+      findings_inserted: findingsInserted,
+      findings_insert_error: findingsInsertErr,
+      summary_used: Boolean(summary),
+      // attempted, // uncomment to debug path-matching attempts
     });
   } catch (e) {
-    console.error('[needs-fix]', e);
-    return res.status(500).json({ error: e?.message || 'failed' });
-  }
-}
-
-async function safeJson(req) {
-  try {
-    return typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
-  } catch {
-    return {};
+    console.error('[api/turns/[id]/needs-fix] error', e);
+    return res.status(500).json({ error: e.message || 'needs-fix failed' });
   }
 }
