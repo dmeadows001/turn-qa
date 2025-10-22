@@ -67,11 +67,12 @@ function ThemedButton({ children, onClick, disabled=false, loading=false, kind='
 export default function Capture() {
   const { query } = useRouter();
   const turnId = typeof query.id === 'string' ? query.id : '';
-  const tab = typeof query.tab === 'string' ? query.tab : 'capture'; // <-- NEW
+  const tab = typeof query.tab === 'string' ? query.tab : 'capture'; // 'capture' | 'needs-fix'
 
   // -------- State --------
   const [shots, setShots] = useState(null);
-  const [uploadsByShot, setUploadsByShot] = useState({}); // { [shotId]: [{name,url,width,height,shotId,preview}] }
+  // { [shotId]: [{name,url,width,height,shotId,preview, note?}] }
+  const [uploadsByShot, setUploadsByShot] = useState({});
   const [aiFlags, setAiFlags] = useState([]);             // summary lines
   const [aiByPath, setAiByPath] = useState({});           // { [storagePath]: issues[] }
   const [submitting, setSubmitting] = useState(false);
@@ -98,7 +99,7 @@ export default function Capture() {
   const [lightboxPath, setLightboxPath] = useState(null);
   const [zoom, setZoom] = useState(1);
   const [rotation, setRotation] = useState(0);
-  const [reply, setReply] = useState(''); // cleaner’s optional note back to manager
+  const [reply, setReply] = useState(''); // cleaner’s optional overall note back to manager
 
   // One hidden file input per shot
   const inputRefs = useRef({});
@@ -190,6 +191,7 @@ export default function Capture() {
         width: it.width || null,
         height: it.height || null,
         preview: null,
+        // note: only used for NEW fixes the cleaner adds in this session
       };
 
       // Try in order: exact shot_id, area_key, label (all normalized)
@@ -421,12 +423,25 @@ export default function Capture() {
         body: f
       });
 
-      uploaded.push({ name: f.name, shotId, url: up.path, width: dims.width, height: dims.height, preview });
+      // NEW: include note for cleaner fixes, default ''
+      uploaded.push({ name: f.name, shotId, url: up.path, width: dims.width, height: dims.height, preview, note: '' });
     }
 
     if (uploaded.length) {
       setUploadsByShot(prev => ({ ...prev, [shotId]: [ ...(prev[shotId] || []), ...uploaded ] }));
     }
+  }
+
+  // NEW: edit a per-photo note (for newly added fixes)
+  function setFixNote(shotId, fileUrl, text) {
+    setUploadsByShot(prev => {
+      const next = { ...prev };
+      const arr = (next[shotId] || []).map(f =>
+        f.url === fileUrl ? { ...f, note: text } : f
+      );
+      next[shotId] = arr;
+      return next;
+    });
   }
 
   // Cleanup preview URLs on unmount
@@ -584,7 +599,7 @@ export default function Capture() {
     const newPhotos = Object.values(uploadsByShot)
       .flat()
       .filter(f => !!f.preview)
-      .map(f => ({ url: f.url, shotId: f.shotId, area_key: null }));
+      .map(f => ({ url: f.url, shotId: f.shotId, note: f.note || '' })); // include cleaner note
 
     if (!newPhotos.length) {
       alert('Please add at least one new photo to submit fixes.');
@@ -597,7 +612,6 @@ export default function Capture() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ turn_id: turnId, reply, photos: newPhotos })
-        
       });
 
       const json = await resp.json().catch(() => ({}));
@@ -606,7 +620,6 @@ export default function Capture() {
         return;
       }
 
-      // Show test-mode destination while DISABLE_SMS=1
       if (json?.notify?.testMode) {
         console.log('[Fix submitted] test mode notify:', json.notify);
         alert(`Fixes submitted. (Test mode) Would notify: ${json.notify?.to?.join(', ') || 'n/a'}`);
@@ -614,8 +627,8 @@ export default function Capture() {
         alert('Fixes submitted and manager notified.');
       }
 
-      // Optional: stay on page or navigate somewhere
-      // window.location.reload();
+      // Optionally redirect or reload
+      // window.location.href = `/turns/${turnId}/review`;
     } finally {
       setTimeout(() => setSubmitting(false), 300);
     }
@@ -637,6 +650,7 @@ export default function Capture() {
     : null;
 
   const hasFixes = (fixNotes?.count || 0) > 0;
+  const isFixTab = tab === 'needs-fix';
 
   return (
     <ChromeDark title="Start Taking Photos">
@@ -752,19 +766,28 @@ export default function Capture() {
 
                     // DEFENSIVE: read notes safely
                     const byPath = fixNotes?.byPath || {};
-                    const note   = byPath[f.url];
-                    const flagged = !!note;
+                    const mgrNote   = byPath[f.url];              // manager's "needs fix" note for this photo (amber)
+                    const flagged   = !!mgrNote;
+
+                    // NEW: is this a NEW fix photo (added this session) on needs-fix tab?
+                    const isNewFix = isFixTab && !!f.preview;
 
                     return (
                       <div
                         key={f.url}
                         data-path={f.url}
                         style={{
-                          border: flagged ? '1px solid #d97706' : ui.card.border,
+                          border: flagged ? '1px solid #d97706'
+                                  : isNewFix ? '1px solid #16a34a'
+                                  : ui.card.border,
                           borderRadius:10,
                           padding:10,
-                          background: '#0b1220',
-                          boxShadow: flagged ? '0 0 0 3px rgba(217,119,6,0.15)' : 'none'
+                          background: isNewFix ? '#052e1f' : '#0b1220',
+                          boxShadow: flagged
+                            ? '0 0 0 3px rgba(217,119,6,0.15)'
+                            : isNewFix
+                              ? '0 0 0 3px rgba(22,163,74,0.20)'
+                              : 'none'
                         }}
                       >
                         <div style={{ position:'relative', marginBottom:8, height:160 }}>
@@ -802,6 +825,24 @@ export default function Capture() {
                               Needs fix
                             </span>
                           )}
+
+                          {isNewFix && (
+                            <span
+                              style={{
+                                position:'absolute',
+                                top:8, left:8,
+                                background:'#bbf7d0',
+                                color:'#065f46',
+                                border:'1px solid #16a34a',
+                                borderRadius:999,
+                                fontSize:12,
+                                fontWeight:700,
+                                padding:'2px 8px'
+                              }}
+                            >
+                              fix
+                            </span>
+                          )}
                         </div>
 
                         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:6 }}>
@@ -828,13 +869,32 @@ export default function Capture() {
                               whiteSpace:'pre-wrap'
                             }}
                           >
-                            {note}
+                            {mgrNote}
+                          </div>
+                        )}
+
+                        {/* NEW: cleaner per-photo note input (only for NEW fixes on needs-fix tab) */}
+                        {isNewFix && (
+                          <div style={{ marginTop: flagged ? 8 : 0 }}>
+                            <div style={{ fontSize:11, color:'#a7f3d0', marginBottom:4, fontWeight:700 }}>
+                              Note to manager (optional)
+                            </div>
+                            <textarea
+                              value={f.note || ''}
+                              onChange={e => setFixNote(s.shot_id, f.url, e.target.value)}
+                              rows={2}
+                              placeholder="What did you fix here?"
+                              style={{
+                                width:'100%', background:'#0b1220', border:'1px solid #16a34a',
+                                borderRadius:8, padding:'8px 10px', color:'#d1fae5', resize:'vertical'
+                              }}
+                            />
                           </div>
                         )}
 
                         {/* AI flags under each photo */}
                         {Array.isArray(aiByPath[f.url]) && aiByPath[f.url].length > 0 && (
-                          <div style={{ marginTop: flagged ? 8 : 0 }}>
+                          <div style={{ marginTop: (flagged || isNewFix) ? 8 : 0 }}>
                             {aiByPath[f.url].map((iss, idx) => (
                               <div key={idx} style={{ marginBottom:4 }}>
                                 <span style={sevPill(iss.severity)}>{(iss.severity || 'info').toUpperCase()}</span>
@@ -992,70 +1052,70 @@ export default function Capture() {
 
           {/* Buttons + progress */}
           <div style={{ display:'flex', flexDirection:'column', gap:12, marginTop:16, maxWidth:420 }}>
-  <ThemedButton
-    onClick={runPrecheck}
-    loading={prechecking}
-    kind="primary"
-    ariaLabel="Run AI Pre-Check"
-  >
-    {prechecking && scanProgress.total > 0
-      ? `🔎 Scanning ${scanProgress.done}/${scanProgress.total} (${pct}%)`
-      : '🔎 Run AI Pre-Check'}
-  </ThemedButton>
+            <ThemedButton
+              onClick={runPrecheck}
+              loading={prechecking}
+              kind="primary"
+              ariaLabel="Run AI Pre-Check"
+            >
+              {prechecking && scanProgress.total > 0
+                ? `🔎 Scanning ${scanProgress.done}/${scanProgress.total} (${pct}%)`
+                : '🔎 Run AI Pre-Check'}
+            </ThemedButton>
 
-  {prechecking && scanProgress.total > 0 && (
-    <div>
-      <div style={{ height:8, background:'#1f2937', borderRadius:6, overflow:'hidden' }}>
-        <div
-          style={{
-            height:'100%',
-            width: `${pct}%`,
-            background: '#0ea5e9',
-            transition:'width 200ms ease'
-          }}
-        />
-      </div>
-      <div style={{ fontSize:12, color:'#94a3b8', marginTop:6 }}>
-        Scanning {scanProgress.done} of {scanProgress.total}…
-      </div>
-    </div>
-  )}
+            {prechecking && scanProgress.total > 0 && (
+              <div>
+                <div style={{ height:8, background:'#1f2937', borderRadius:6, overflow:'hidden' }}>
+                  <div
+                    style={{
+                      height:'100%',
+                      width: `${pct}%`,
+                      background: '#0ea5e9',
+                      transition:'width 200ms ease'
+                    }}
+                  />
+                </div>
+                <div style={{ fontSize:12, color:'#94a3b8', marginTop:6 }}>
+                  Scanning {scanProgress.done} of {scanProgress.total}…
+                </div>
+              </div>
+            )}
 
-  {tab === 'needs-fix' ? (
-    <div>
-      <textarea
-        value={reply}
-        onChange={e => setReply(e.target.value)}
-        placeholder="Message to manager (optional)"
-        style={{
-          width:'100%', minHeight:80, padding:10,
-          borderRadius:8, border:'1px solid #334155',
-          color:'#e5e7eb', background:'#0b1220'
-        }}
-      />
-      <div style={{ height:8 }} />
-      <ThemedButton
-        onClick={submitFixes}
-        loading={submitting}
-        kind="secondary"
-        ariaLabel="Submit Fixes"
-        full
-      >
-        🔧 Submit Fixes
-      </ThemedButton>
-    </div>
-  ) : (
-    <ThemedButton
-      onClick={submitAll}
-      loading={submitting}
-      kind="secondary"
-      ariaLabel="Submit Turn"
-      full
-    >
-      ✅ Submit Turn
-    </ThemedButton>
-  )}
-</div>
+            {isFixTab ? (
+              <div>
+                <textarea
+                  value={reply}
+                  onChange={e => setReply(e.target.value)}
+                  placeholder="Message to manager (optional)"
+                  style={{
+                    width:'100%', minHeight:80, padding:10,
+                    borderRadius:8, border:'1px solid #334155',
+                    color:'#e5e7eb', background:'#0b1220'
+                  }}
+                />
+                <div style={{ height:8 }} />
+                <ThemedButton
+                  onClick={submitFixes}
+                  loading={submitting}
+                  kind="secondary"
+                  ariaLabel="Submit Fixes"
+                  full
+                >
+                  🔧 Submit Fixes
+                </ThemedButton>
+              </div>
+            ) : (
+              <ThemedButton
+                onClick={submitAll}
+                loading={submitting}
+                kind="secondary"
+                ariaLabel="Submit Turn"
+                full
+              >
+                ✅ Submit Turn
+              </ThemedButton>
+            )}
+          </div>
 
         </div>
       </section>
