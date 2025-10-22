@@ -12,16 +12,7 @@ function parseBody(raw:any){
   catch { return {}; }
 }
 
-type IncomingPhoto = {
-  path?: string;
-  url?: string;
-  shotId?: string;
-  shot_id?: string;
-  area_key?: string | null;
-  note?: string | null;     // <-- per-photo note from cleaner (optional)
-};
-
-function buildRows(turnId:string, photos:IncomingPhoto[], overallNote:string){
+function buildRows(turnId:string, photos:any[]){
   return (photos || [])
     .map((p:any) => {
       const storagePath = (p.path || p.url || '').toString().trim();
@@ -31,9 +22,9 @@ function buildRows(turnId:string, photos:IncomingPhoto[], overallNote:string){
         _path_value: storagePath,
         shot_id: p.shotId || p.shot_id || null,
         area_key: p.area_key || '',
-        is_fix: true,                                   // <-- persist “this is a fix” ✅
-        cleaner_note: (p.note ?? '').toString().trim() || null, // per-photo note
         created_at: nowIso(),
+        is_fix: true,                              // NEW
+        cleaner_note: (p.note || '').trim() || null, // NEW
       };
     })
     .filter(Boolean) as any[];
@@ -44,16 +35,15 @@ async function tolerantInsertTurnPhotos(supa:any, rows:any[]){
   if (!rows.length) return { ok:true, tried:0 };
 
   const shapes: Array<(r:any)=>Record<string, any>> = [
-    // Full shape with is_fix + cleaner_note
-    (r:any)=>({ turn_id:r.turn_id, storage_path:r._path_value, shot_id:r.shot_id, area_key:r.area_key, is_fix:r.is_fix, cleaner_note:r.cleaner_note, created_at:r.created_at }),
-    (r:any)=>({ turn_id:r.turn_id, path:         r._path_value, shot_id:r.shot_id, area_key:r.area_key, is_fix:r.is_fix, cleaner_note:r.cleaner_note, created_at:r.created_at }),
-    (r:any)=>({ turn_id:r.turn_id, photo_path:   r._path_value, shot_id:r.shot_id, area_key:r.area_key, is_fix:r.is_fix, cleaner_note:r.cleaner_note, created_at:r.created_at }),
-    (r:any)=>({ turn_id:r.turn_id, url:          r._path_value, shot_id:r.shot_id, area_key:r.area_key, is_fix:r.is_fix, cleaner_note:r.cleaner_note, created_at:r.created_at }),
-    (r:any)=>({ turn_id:r.turn_id, file:         r._path_value, shot_id:r.shot_id, area_key:r.area_key, is_fix:r.is_fix, cleaner_note:r.cleaner_note, created_at:r.created_at }),
-
-    // Fallbacks without the extra columns
-    (r:any)=>({ turn_id:r.turn_id, storage_path: r._path_value }),
-    (r:any)=>({ turn_id:r.turn_id, path:         r._path_value }),
+    // full shape when all columns exist
+    (r:any)=>({ turn_id:r.turn_id, storage_path:r._path_value, shot_id:r.shot_id, area_key:r.area_key, created_at:r.created_at, is_fix:r.is_fix, cleaner_note:r.cleaner_note }),
+    (r:any)=>({ turn_id:r.turn_id, path:         r._path_value, shot_id:r.shot_id, area_key:r.area_key, created_at:r.created_at, is_fix:r.is_fix, cleaner_note:r.cleaner_note }),
+    (r:any)=>({ turn_id:r.turn_id, photo_path:   r._path_value, shot_id:r.shot_id, area_key:r.area_key, created_at:r.created_at, is_fix:r.is_fix, cleaner_note:r.cleaner_note }),
+    (r:any)=>({ turn_id:r.turn_id, url:          r._path_value, shot_id:r.shot_id, area_key:r.area_key, created_at:r.created_at, is_fix:r.is_fix, cleaner_note:r.cleaner_note }),
+    (r:any)=>({ turn_id:r.turn_id, file:         r._path_value, shot_id:r.shot_id, area_key:r.area_key, created_at:r.created_at, is_fix:r.is_fix, cleaner_note:r.cleaner_note }),
+    // fallbacks for schemas without the new columns
+    (r:any)=>({ turn_id:r.turn_id, storage_path:r._path_value, shot_id:r.shot_id, area_key:r.area_key, created_at:r.created_at }),
+    (r:any)=>({ turn_id:r.turn_id, path:         r._path_value, shot_id:r.shot_id, area_key:r.area_key, created_at:r.created_at }),
   ];
 
   let lastErr:any = null;
@@ -80,9 +70,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     const body = parseBody(req.body);
     const turnId = String(body.turnId || body.turn_id || '').trim();
-    const photos = Array.isArray(body.photos) ? (body.photos as IncomingPhoto[]) : [];
-    const overallReply: string = String(body.reply || body.message || '').trim(); // cleaner’s overall message
-
+    const photos = Array.isArray(body.photos) ? body.photos : [];
     if (!turnId) return res.status(400).json({ error: 'turnId is required' });
 
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
@@ -91,19 +79,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const supa = createClient(url, key);
 
-    // 1) Store the fix photos
+    // 1) Store the fix photos (+ note), tolerant to schema
     if (photos.length){
-      const rows = buildRows(turnId, photos, overallReply);
+      const rows = buildRows(turnId, photos);
       const ins = await tolerantInsertTurnPhotos(supa, rows);
       if (!ins.ok) return res.status(500).json({ error: ins.error?.message || 'could not save fix photos' });
     }
 
-    // 2) Update the turn: mark “submitted” and save the overall cleaner note (if provided)
-    try {
-      const updatePayload: any = { last_fix_submitted_at: nowIso(), status: 'submitted' };
-      if (overallReply) updatePayload.cleaner_note = overallReply;
-      await supa.from('turns').update(updatePayload).eq('id', turnId);
-    } catch {}
+    // 2) Persist the cleaner's overall reply if the column exists
+    const cleanerReply = (body.reply || '').toString().trim();
+    if (cleanerReply) {
+      try { await supa.from('turns').update({ cleaner_reply: cleanerReply, last_fix_submitted_at: nowIso() }).eq('id', turnId); }
+      catch { await supa.from('turns').update({ last_fix_submitted_at: nowIso() }).eq('id', turnId); }
+    } else {
+      try { await supa.from('turns').update({ last_fix_submitted_at: nowIso() }).eq('id', turnId); } catch {}
+    }
 
     // 3) Notify the manager (kind = 'fix'); returns test info if DISABLE_SMS=1
     const notify = await notifyManagerForTurn(turnId, 'fix');
