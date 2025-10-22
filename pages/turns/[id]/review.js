@@ -20,10 +20,7 @@ async function fetchPhotos(turnId) {
     area_key: p.area_key || '',
     created_at: p.created_at,
     url: p.signedUrl || '',
-    path: p.path || '',
-    // NEW: persist fix state + note coming from API
-    is_fix: !!p.is_fix,
-    cleaner_note: p.cleaner_note || null,
+    path: p.path || ''
   }));
 }
 
@@ -59,19 +56,17 @@ function badgeStyle(status) {
   };
 }
 
-// Highlight styles
+// Highlight style for flagged photos
 const flaggedCardStyle = {
   border: '1px solid #d97706',
   boxShadow: '0 0 0 3px rgba(217,119,6,0.25) inset',
   background: '#0b1220'
 };
 
-// NEW: green style for FIX photos
-const fixCardStyle = {
-  border: '1px solid #065f46',
-  boxShadow: '0 0 0 3px rgba(5, 150, 105, 0.25) inset',
-  background: '#071a16'
-};
+// --- NEW: stable per-photo key (prevents “all check at once” when paths collide)
+function keyFor(p) {
+  return p?.id || `${p?.path || ''}#${p?.created_at || ''}`;
+}
 
 export default function Review() {
   const router = useRouter();
@@ -92,14 +87,14 @@ export default function Review() {
   const [managerNote, setManagerNote] = useState('');
   const [acting, setActing] = useState(false);
 
-  // Per-photo state:
-  const [notesByPath, setNotesByPath] = useState({});          // { [path]: string }
-  const [selectedPaths, setSelectedPaths] = useState(new Set()); // Set<string>
+  // --- CHANGED: key all per-photo state by a stable photo key (id preferred)
+  const [notesByKey, setNotesByKey] = useState({});            // { [photoKey]: string }
+  const [selectedKeys, setSelectedKeys] = useState(new Set());  // Set<string>
 
-  // Findings for highlight + prefill
-  const [findingsByPath, setFindingsByPath] = useState({});    // { [path]: {note, severity?} }
+  // Findings for highlight + prefill (keyed by photoKey)
+  const [findingsByKey, setFindingsByKey] = useState({});       // { [photoKey]: {note, severity?} }
 
-  // Cleaner “fix & resubmit” (when viewing as cleaner)
+  // Cleaner “fix & resubmit” state
   const [cleanerReply, setCleanerReply] = useState('');
   const [staged, setStaged] = useState([]); // [{name, preview, path, area_key?}]
   const [uploadingFix, setUploadingFix] = useState(false);
@@ -129,23 +124,37 @@ export default function Review() {
 
         setPhotos(ph);
 
-        // Load findings and prefill
+        // --- Prefill findings keyed by photoKey (not raw path)
         const f = await fetchFindings(turnId);
         if (f.length) {
+          // Build a quick index from path -> array of photo keys that currently display that path
+          const pathToKeys = ph.reduce((acc, p) => {
+            const k = keyFor(p);
+            const path = p.path || '';
+            if (!acc[path]) acc[path] = [];
+            acc[path].push(k);
+            return acc;
+          }, {});
+
           const map = {};
           const sel = new Set();
           const notes = {};
+
           f.forEach(it => {
-            if (!it?.path) return;
-            map[it.path] = { note: it.note || '', severity: it.severity || 'warn' };
-            sel.add(it.path);
-            notes[it.path] = it.note || '';
+            const path = it?.path || '';
+            const keys = pathToKeys[path] || [];
+            keys.forEach(k => {
+              map[k] = { note: it.note || '', severity: it.severity || 'warn' };
+              if (isManagerMode) sel.add(k);            // managers see pre-checked boxes
+              notes[k] = it.note || '';
+            });
           });
-          setFindingsByPath(map);
-          if (isManagerMode) setSelectedPaths(sel); // managers see the boxes pre-checked
-          setNotesByPath(prev => ({ ...notes, ...prev }));
+
+          setFindingsByKey(map);
+          if (isManagerMode) setSelectedKeys(sel);
+          setNotesByKey(prev => ({ ...notes, ...prev }));
         } else {
-          setFindingsByPath({});
+          setFindingsByKey({});
         }
       } catch (e) {
         setLoadErr(e.message || 'load failed');
@@ -166,17 +175,19 @@ export default function Review() {
     return Array.from(set);
   }, [photos]);
 
-  // --- Helpers to toggle/check per-photo selection ---
-  function togglePath(path) {
-    setSelectedPaths(prev => {
+  // --- Helpers to toggle/check per-photo selection (keyed by photoKey)
+  function toggleKey(p) {
+    const k = keyFor(p);
+    setSelectedKeys(prev => {
       const next = new Set(prev);
-      if (next.has(path)) next.delete(path);
-      else next.add(path);
+      if (next.has(k)) next.delete(k);
+      else next.add(k);
       return next;
     });
   }
-  function setNote(path, text) {
-    setNotesByPath(prev => ({ ...prev, [path]: text }));
+  function setNoteFor(p, text) {
+    const k = keyFor(p);
+    setNotesByKey(prev => ({ ...prev, [k]: text }));
   }
 
   // --- Approve ---
@@ -207,14 +218,14 @@ export default function Review() {
     if (!turnId) return;
     setActing(true);
     try {
-      const selected = new Set(selectedPaths);
       const payloadNotes = [];
 
       photos.forEach(p => {
-        const path = p.path || '';
-        const note = (notesByPath[path] || '').trim();
-        if (selected.has(path) || note.length > 0) {
-          payloadNotes.push({ path, note });
+        const k = keyFor(p);
+        const selected = selectedKeys.has(k);
+        const note = (notesByKey[k] || '').trim();
+        if (selected || note.length > 0) {
+          payloadNotes.push({ path: p.path || '', note });
         }
       });
 
@@ -238,18 +249,22 @@ export default function Review() {
 
       setStatus('needs_fix');
 
-      // Update local highlight immediately
+      // Update local highlight immediately (by key)
       const newMap = {};
       const sel = new Set();
       const newNotes = {};
       payloadNotes.forEach(it => {
-        newMap[it.path] = { note: it.note || '', severity: 'warn' };
-        sel.add(it.path);
-        newNotes[it.path] = it.note || '';
+        // mark every photo currently showing that path
+        photos.filter(p => (p.path || '') === it.path).forEach(p => {
+          const k = keyFor(p);
+          newMap[k] = { note: it.note || '', severity: 'warn' };
+          sel.add(k);
+          newNotes[k] = it.note || '';
+        });
       });
-      setFindingsByPath(newMap);
-      setSelectedPaths(sel);
-      setNotesByPath(prev => ({ ...prev, ...newNotes }));
+      setFindingsByKey(newMap);
+      setSelectedKeys(sel);
+      setNotesByKey(prev => ({ ...prev, ...newNotes }));
 
       alert('Marked Needs Fix. Cleaner notified via SMS.');
     } catch (e) {
@@ -290,10 +305,14 @@ export default function Review() {
           continue;
         }
 
-        // Using signed multipart upload (your backend supports this)
-        const fd = new FormData();
-        fd.append('file', f);
-        await fetch(meta.signedUploadUrl, { method: 'POST', body: fd });
+        // IMPORTANT: your upload-url endpoint now returns signedUploadUrl for POST form-data
+        if (meta.signedUploadUrl) {
+          const fd = new FormData();
+          fd.append('file', f);
+          await fetch(meta.signedUploadUrl, { method: 'POST', body: fd });
+        } else {
+          await fetch(meta.uploadUrl, { method: 'PUT', headers: { 'Content-Type': meta.mime || 'application/octet-stream' }, body: f });
+        }
 
         uploaded.push({ name: f.name, preview, path: meta.path });
       }
@@ -346,22 +365,20 @@ export default function Review() {
 
   // ---------- Small helper to render one photo card ----------
   function PhotoCard({ p }) {
-    const path = p.path || '';
-    const selected = selectedPaths.has(path);
-    const noteVal = notesByPath[path] || '';
-    const flagged = !!findingsByPath[path];
-    const isFix = !!p.is_fix;
+    const k = keyFor(p);
+    const selected = selectedKeys.has(k);
+    const noteVal = notesByKey[k] || '';
+    const flagged = !!findingsByKey[k];
 
     return (
       <div
-        key={p.id}
+        key={p.id || k}
         style={{
           border: '1px solid #334155',
           borderRadius: 12,
           overflow: 'hidden',
           background:'#0b1220',
-          ...(flagged ? flaggedCardStyle : null),
-          ...(isFix ? fixCardStyle : null),
+          ...(flagged ? flaggedCardStyle : null)
         }}
       >
         <a href={p.url} target="_blank" rel="noreferrer">
@@ -389,19 +406,6 @@ export default function Review() {
                   needs fix
                 </span>
               )}
-              {isFix && (
-                <span style={{
-                  padding:'2px 8px',
-                  borderRadius:999,
-                  fontSize:11,
-                  fontWeight:700,
-                  color:'#86efac',
-                  background:'#064e3b',
-                  border:'1px solid #065f46'
-                }}>
-                  FIX
-                </span>
-              )}
             </div>
 
             {isManagerMode && (
@@ -409,7 +413,7 @@ export default function Review() {
                 <input
                   type="checkbox"
                   checked={selected}
-                  onChange={() => togglePath(path)}
+                  onChange={() => toggleKey(p)}
                   style={{ transform:'scale(1.1)' }}
                 />
                 <span>Needs fix</span>
@@ -420,12 +424,12 @@ export default function Review() {
           <div style={{ color: '#9ca3af' }}>{new Date(p.created_at).toLocaleString()}</div>
           <div style={{ color: '#64748b', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{p.path}</div>
 
-          {/* Per-photo note (manager only, when composing) */}
+          {/* Per-photo note (manager only) */}
           {isManagerMode && (
             <div style={{ marginTop:8 }}>
               <textarea
                 value={noteVal}
-                onChange={e => setNote(path, e.target.value)}
+                onChange={e => setNoteFor(p, e.target.value)}
                 rows={2}
                 placeholder="Note for this photo (optional)…"
                 style={{ ...ui.input, width:'100%', padding:'8px 10px', resize:'vertical', background:'#0b1220' }}
@@ -433,23 +437,8 @@ export default function Review() {
             </div>
           )}
 
-          {/* Manager view of the cleaner's FIX note (persistent) */}
-          {isFix && p.cleaner_note && (
-            <div style={{
-              marginTop:8,
-              padding:'8px 10px',
-              background:'#052e2b',
-              border:'1px solid #065f46',
-              borderRadius:8,
-              color:'#86efac'
-            }}>
-              <div style={{ fontSize:11, color:'#86efac', marginBottom:4, fontWeight:700 }}>Cleaner note</div>
-              <div style={{ whiteSpace:'pre-wrap' }}>{p.cleaner_note}</div>
-            </div>
-          )}
-
           {/* Cleaner view: show manager note, if any */}
-          {!isManagerMode && flagged && findingsByPath[path]?.note && (
+          {!isManagerMode && flagged && findingsByKey[k]?.note && (
             <div style={{
               marginTop:8,
               padding:'8px 10px',
@@ -459,7 +448,7 @@ export default function Review() {
               color:'#cbd5e1'
             }}>
               <div style={{ fontSize:11, color:'#94a3b8', marginBottom:4, fontWeight:700 }}>Manager note</div>
-              <div style={{ whiteSpace:'pre-wrap' }}>{findingsByPath[path].note}</div>
+              <div style={{ whiteSpace:'pre-wrap' }}>{findingsByKey[k].note}</div>
             </div>
           )}
         </div>
@@ -605,7 +594,7 @@ export default function Review() {
                   return acc;
                 }, {});
 
-                // Sort photos newest first inside each area
+                // Sort photos newest first inside each area (optional)
                 Object.values(byArea).forEach(list =>
                   list.sort((a,b) => new Date(b.created_at) - new Date(a.created_at))
                 );
@@ -629,7 +618,7 @@ export default function Review() {
 
                     <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(220px,1fr))', gap:12 }}>
                       {byArea[areaKey].map(p => (
-                        <PhotoCard key={p.id} p={p} />
+                        <PhotoCard key={p.id || keyFor(p)} p={p} />
                       ))}
                     </div>
                   </div>
