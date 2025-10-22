@@ -8,62 +8,18 @@ const BUCKET =
   process.env.SUPABASE_STORAGE_BUCKET ||
   'photos';
 
-// quick helper: does a path look like a real file (has a dot/extension)?
-function looksLikeFile(p) {
-  return /\.[a-z0-9]+$/i.test(p || '');
-}
+function looksLikeFile(p) { return /\.[a-z0-9]+$/i.test(p || ''); }
+function cleanPath(p) { return String(p || '').replace(/^\/+/, ''); }
 
-// normalize strip leading slashes
-function cleanPath(p) {
-  return String(p || '').replace(/^\/+/, '');
-}
-
-// storage.list wrapper to fetch the latest file in a folder
 async function findOneFileUnderPrefix(prefix) {
   const folder = cleanPath(prefix).replace(/^\/+/, '');
-  // Supabase expects the *folder path relative to the bucket*,
-  // without a trailing slash for listing
   const { data, error } = await supa.storage.from(BUCKET).list(folder, {
     limit: 100,
-    sortBy: { column: 'name', order: 'desc' }, // pick latest-looking name first
+    sortBy: { column: 'name', order: 'desc' },
   });
   if (error || !Array.isArray(data) || data.length === 0) return null;
-
-  // Prefer image-like files
   const file = data.find(f => /\.(jpe?g|png|webp|heic|heif|gif)$/i.test(f.name)) || data[0];
   return file ? `${folder}/${file.name}` : null;
-}
-
-// Try to select turn_photos including optional columns (e.g., is_fix).
-// If a column doesn't exist, we retry without it.
-async function selectTurnPhotosFlexible(turnId) {
-  // Attempt 1: include optional columns
-  const baseCols = 'id, turn_id, shot_id, path, created_at, area_key';
-  const optionalCols = ', is_fix'; // add more optional columns here if needed later
-  let { data, error } = await supa
-    .from('turn_photos')
-    .select(baseCols + optionalCols)
-    .eq('turn_id', turnId)
-    .order('created_at', { ascending: true });
-
-  if (!error) {
-    return { rows: Array.isArray(data) ? data : [] };
-  }
-
-  // If the error is about a missing column, retry without optional
-  if (/column .* does not exist/i.test(error.message || '')) {
-    const r2 = await supa
-      .from('turn_photos')
-      .select(baseCols)
-      .eq('turn_id', turnId)
-      .order('created_at', { ascending: true });
-
-    if (r2.error) throw r2.error;
-    return { rows: Array.isArray(r2.data) ? r2.data : [] };
-  }
-
-  // Other errors: bubble up
-  throw error;
 }
 
 export default async function handler(req, res) {
@@ -71,10 +27,17 @@ export default async function handler(req, res) {
     const turnId = String(req.query.id || req.query.turn_id || '').trim();
     if (!turnId) return res.status(400).json({ error: 'missing turn id' });
 
-    // 1) Pull photos for this turn, flexibly (will include is_fix if present)
-    const { rows } = await selectTurnPhotosFlexible(turnId);
+    // NOTE: added is_fix, cleaner_note in select
+    const { data: tpRows, error: tpErr } = await supa
+      .from('turn_photos')
+      .select('id, turn_id, shot_id, path, created_at, area_key, is_fix, cleaner_note')
+      .eq('turn_id', turnId)
+      .order('created_at', { ascending: true });
 
-    // 2) For any rows that are missing area_key, fetch from template_shots by shot_id.
+    if (tpErr) throw tpErr;
+
+    const rows = Array.isArray(tpRows) ? tpRows : [];
+
     const missingShotIds = Array.from(
       new Set(
         rows
@@ -98,17 +61,12 @@ export default async function handler(req, res) {
       }
     }
 
-    // 3) Normalize + sign URLs (with folder -> file fallback).
     const out = [];
-
-    // We'll collect any DB updates we want to perform (folder->file backfill)
     const updates = [];
 
     for (const r of rows) {
       const areaKey = r.area_key || tsMap[String(r.shot_id)] || '';
 
-      // Prefer the DB path; if missing, construct a folder prefix we expect
-      // e.g. turns/<turn_id>/<shot_id>
       let objPath = cleanPath(r.path);
       if (!objPath) {
         objPath = `turns/${turnId}/${r.shot_id || ''}`.replace(/\/+$/, '');
@@ -119,15 +77,12 @@ export default async function handler(req, res) {
 
       try {
         if (!looksLikeFile(finalPath)) {
-          // It's a folder prefix — list to find a file under it
           const found = await findOneFileUnderPrefix(finalPath);
           if (found) {
             finalPath = found;
-            // Remember to backfill this onto the row so next time is faster
             updates.push({ id: r.id, path: finalPath });
           }
         }
-
         if (looksLikeFile(finalPath)) {
           const { data: s, error: sErr } = await supa.storage
             .from(BUCKET)
@@ -142,16 +97,18 @@ export default async function handler(req, res) {
         id: r.id,
         turn_id: r.turn_id,
         shot_id: r.shot_id,
-        path: finalPath,         // may be folder OR the discovered file key
+        path: finalPath,
         created_at: r.created_at,
         area_key: areaKey,
+
+        // NEW: surface persistent fix state + note
+        is_fix: !!r.is_fix,
+        cleaner_note: r.cleaner_note || null,
+
         signedUrl,
-        // NEW: include is_fix if the column exists (else false)
-        is_fix: Boolean(r.is_fix),
       });
     }
 
-    // 4) Best-effort path backfill (folder -> actual file key), non-blocking
     if (updates.length) {
       try {
         await Promise.all(
