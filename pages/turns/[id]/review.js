@@ -20,7 +20,8 @@ async function fetchPhotos(turnId) {
     area_key: p.area_key || '',
     created_at: p.created_at,
     url: p.signedUrl || '',
-    path: p.path || ''
+    path: p.path || '',
+    is_fix: Boolean(p.is_fix || false),   // <-- NEW
   }));
 }
 
@@ -60,6 +61,13 @@ function badgeStyle(status) {
 const flaggedCardStyle = {
   border: '1px solid #d97706',
   boxShadow: '0 0 0 3px rgba(217,119,6,0.25) inset',
+  background: '#0b1220'
+};
+
+// NEW: subtle green highlight for "fix" photos
+const fixCardStyle = {
+  border: '1px solid #065f46',
+  boxShadow: '0 0 0 3px rgba(16,185,129,0.18) inset',
   background: '#0b1220'
 };
 
@@ -282,12 +290,11 @@ export default function Review() {
 
         // NEW: upload to Supabase signed upload URL via multipart/form-data
         const fd = new FormData();
-        fd.append('file', f);              // field name MUST be "file"
+        fd.append('file', f);
         await fetch(meta.signedUploadUrl, {
           method: 'POST',
-          body: fd                          // do NOT set Content-Type; the browser will
+          body: fd
         });
-
 
         uploaded.push({ name: f.name, preview, path: meta.path });
       }
@@ -344,18 +351,19 @@ export default function Review() {
     const selected = selectedPaths.has(path);
     const noteVal = notesByPath[path] || '';
     const flagged = !!findingsByPath[path];
+    const isFix = Boolean(p.is_fix); // <-- NEW
+
+    const cardStyle = {
+      border: '1px solid #334155',
+      borderRadius: 12,
+      overflow: 'hidden',
+      background:'#0b1220',
+      ...(flagged ? flaggedCardStyle : null),
+      ...(isFix ? fixCardStyle : null),   // <-- add green inset if fix
+    };
 
     return (
-      <div
-        key={p.id}
-        style={{
-          border: '1px solid #334155',
-          borderRadius: 12,
-          overflow: 'hidden',
-          background:'#0b1220',
-          ...(flagged ? flaggedCardStyle : null)
-        }}
-      >
+      <div key={p.id} style={cardStyle}>
         <a href={p.url} target="_blank" rel="noreferrer">
           <img
             src={p.url}
@@ -366,8 +374,9 @@ export default function Review() {
 
         <div style={{ padding: 10, fontSize: 12 }}>
           <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:8 }}>
-            <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+            <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap' }}>
               <b>{p.area_key || '—'}</b>
+
               {flagged && (
                 <span style={{
                   padding:'2px 8px',
@@ -379,6 +388,20 @@ export default function Review() {
                   border:'1px solid #d97706'
                 }}>
                   needs fix
+                </span>
+              )}
+
+              {isFix && (
+                <span style={{
+                  padding:'2px 8px',
+                  borderRadius:999,
+                  fontSize:11,
+                  fontWeight:700,
+                  color:'#86efac',
+                  background:'#064e3b',
+                  border:'1px solid #065f46'
+                }}>
+                  fix
                 </span>
               )}
             </div>
