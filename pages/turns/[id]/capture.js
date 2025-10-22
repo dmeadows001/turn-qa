@@ -216,6 +216,7 @@ async function addFiles(shotId, fileList) {
   const uploaded = [];
 
   for (const f of files) {
+    // 1) Local validation
     const dims = await getDims(f);
     const longest = Math.max(dims.width, dims.height);
     const tooSmall = longest < 1024;
@@ -232,39 +233,60 @@ async function addFiles(shotId, fileList) {
 
     const preview = URL.createObjectURL(f);
 
-    // Ask backend for upload target
-    const up = await fetch('/api/upload-url', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ turnId, shotId, filename: f.name, mime: f.type })
-    }).then(r => r.json()).catch(() => ({}));
-
-    // backend may return { path } or { storage_path }
-    const finalPath = up.path || up.storage_path || '';
-
+    // 2) Ask backend for upload target
+    let meta = {};
     try {
-      if (up.signedUploadUrl) {
-        // New style: POST multipart/form-data to a presigned endpoint
+      const resp = await fetch('/api/upload-url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ turnId, shotId, filename: f.name, mime: f.type || 'image/jpeg' })
+      });
+      meta = await resp.json();
+    } catch {
+      URL.revokeObjectURL(preview);
+      alert('Could not get upload URL; try again.');
+      continue;
+    }
+
+    const finalPath = meta.path || meta.storage_path || '';
+    if (!finalPath) {
+      URL.revokeObjectURL(preview);
+      alert('Upload target missing (no storage path).');
+      continue;
+    }
+
+    // 3) Upload using whichever shape the API returned
+    try {
+      if (meta.signedUploadUrl) {
+        // Supabase createSignedUploadUrl requires token + file (multipart/form-data)
         const fd = new FormData();
-        fd.append('file', f); // field name must be "file"
-        await fetch(up.signedUploadUrl, { method: 'POST', body: fd });
-      } else if (up.uploadUrl) {
-        // Legacy style: PUT directly to signed URL
-        await fetch(up.uploadUrl, {
+        fd.append('file', f);
+        if (meta.token) fd.append('token', meta.token); // <-- REQUIRED by Supabase
+        const up = await fetch(meta.signedUploadUrl, { method: 'POST', body: fd });
+        if (!up.ok) {
+          const txt = await up.text().catch(() => '');
+          throw new Error(`Signed upload failed (${up.status}). ${txt}`);
+        }
+      } else if (meta.uploadUrl) {
+        // Legacy/generic signed PUT
+        const up = await fetch(meta.uploadUrl, {
           method: 'PUT',
-          headers: { 'Content-Type': up.mime || 'application/octet-stream' },
+          headers: { 'Content-Type': meta.mime || 'application/octet-stream' },
           body: f
         });
+        if (!up.ok) {
+          const txt = await up.text().catch(() => '');
+          throw new Error(`PUT upload failed (${up.status}). ${txt}`);
+        }
       } else {
-        throw new Error('no upload URL');
+        throw new Error('No signedUploadUrl or uploadUrl provided');
       }
 
-      if (!finalPath) throw new Error('no storage path');
-
+      // 4) Success → add to UI
       uploaded.push({
         name: f.name,
         shotId,
-        url: finalPath,           // always store the storage object key here
+        url: finalPath,           // store the object key (used later for signing/preview)
         width: dims.width,
         height: dims.height,
         preview
@@ -272,13 +294,19 @@ async function addFiles(shotId, fileList) {
     } catch (e) {
       URL.revokeObjectURL(preview);
       console.warn('[capture addFiles] upload error:', e?.message || e);
-      alert('Could not get upload URL; try again.');
+      alert('Upload failed. Please try again.');
     }
   }
 
   if (uploaded.length) {
     setUploadsByShot(prev => ({ ...prev, [shotId]: [ ...(prev[shotId] || []), ...uploaded ] }));
   }
+
+  // Allow selecting the same file again if needed
+  try {
+    const el = inputRefs.current[shotId];
+    if (el) el.value = '';
+  } catch {}
 }
 
   // -------- Submit initial turn --------
