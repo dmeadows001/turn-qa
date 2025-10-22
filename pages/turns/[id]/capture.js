@@ -210,65 +210,76 @@ export default function Capture() {
     })();
   }, [turnId]);
 
-  // -------- Add files (upload) + allow per-photo cleaner note --------
-  async function getDims(file) {
-    const img = new Image();
-    return await new Promise((resolve, reject) => {
-      img.onload = () => { resolve({ width: img.naturalWidth, height: img.naturalHeight }); URL.revokeObjectURL(img.src); };
-      img.onerror = reject;
-      img.src = URL.createObjectURL(file);
-    });
-  }
+// -------- Add files (quality + upload to Storage) --------
+async function addFiles(shotId, fileList) {
+  const files = Array.from(fileList || []);
+  const uploaded = [];
 
-  async function addFiles(shotId, fileList) {
-    const files = Array.from(fileList || []);
-    const added = [];
+  for (const f of files) {
+    const dims = await getDims(f);
+    const longest = Math.max(dims.width, dims.height);
+    const tooSmall = longest < 1024;
+    const tooBig = f.size > 6 * 1024 * 1024;
 
-    for (const f of files) {
-      const dims = await getDims(f).catch(() => ({ width: 0, height: 0 }));
-      const preview = URL.createObjectURL(f);
+    if (tooSmall || tooBig) {
+      alert(
+        `Rejected "${f.name}": ` +
+        (tooSmall ? `min longest side is 1024px (got ${dims.width}×${dims.height}). ` : '') +
+        (tooBig ? `file > 6MB.` : '')
+      );
+      continue;
+    }
 
-      const up = await fetch('/api/upload-url', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ turnId, shotId, filename: f.name, mime: f.type })
-      }).then(r => r.json());
+    const preview = URL.createObjectURL(f);
 
-      if (!up?.signedUploadUrl || !up?.path) {
-        URL.revokeObjectURL(preview);
-        alert('Could not get upload URL; try again.');
-        continue;
+    // Ask backend for upload target
+    const up = await fetch('/api/upload-url', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ turnId, shotId, filename: f.name, mime: f.type })
+    }).then(r => r.json()).catch(() => ({}));
+
+    // backend may return { path } or { storage_path }
+    const finalPath = up.path || up.storage_path || '';
+
+    try {
+      if (up.signedUploadUrl) {
+        // New style: POST multipart/form-data to a presigned endpoint
+        const fd = new FormData();
+        fd.append('file', f); // field name must be "file"
+        await fetch(up.signedUploadUrl, { method: 'POST', body: fd });
+      } else if (up.uploadUrl) {
+        // Legacy style: PUT directly to signed URL
+        await fetch(up.uploadUrl, {
+          method: 'PUT',
+          headers: { 'Content-Type': up.mime || 'application/octet-stream' },
+          body: f
+        });
+      } else {
+        throw new Error('no upload URL');
       }
 
-      // multipart upload (field name MUST be "file")
-      const fd = new FormData();
-      fd.append('file', f);
-      await fetch(up.signedUploadUrl, { method: 'POST', body: fd });
+      if (!finalPath) throw new Error('no storage path');
 
-      // store as a new file (isFix UI highlight locally)
-      added.push({
+      uploaded.push({
         name: f.name,
-        url: up.path,
-        width: dims.width || null,
-        height: dims.height || null,
         shotId,
-        preview,
-        isFix: true,          // highlight immediately
-        cleanerNote: '',      // editable by cleaner below the card
+        url: finalPath,           // always store the storage object key here
+        width: dims.width,
+        height: dims.height,
+        preview
       });
-
-      // prime a signed thumb for it
-      ensureThumb(up.path);
-    }
-
-    if (added.length) {
-      setUploadsByShot(prev => {
-        const next = { ...prev };
-        next[shotId] = [ ...(prev[shotId] || []), ...added ];
-        return next;
-      });
+    } catch (e) {
+      URL.revokeObjectURL(preview);
+      console.warn('[capture addFiles] upload error:', e?.message || e);
+      alert('Could not get upload URL; try again.');
     }
   }
+
+  if (uploaded.length) {
+    setUploadsByShot(prev => ({ ...prev, [shotId]: [ ...(prev[shotId] || []), ...uploaded ] }));
+  }
+}
 
   // -------- Submit initial turn --------
   async function submitAll() {
