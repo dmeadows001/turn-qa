@@ -240,7 +240,9 @@ export default async function handler(req, res) {
           process.env.NEXT_PUBLIC_SITE_URL ||
           'https://www.turnqa.com';
 
-        const link = `${base.replace(/\/+$/, '')}/turns/${encodeURIComponent(turnId)}/review`;
+        // CHANGED: point the cleaner to Capture in needs-fix mode (not the review page)
+        const link = `${base.replace(/\/+$/, '')}/turns/${encodeURIComponent(turnId)}/capture?tab=needs-fix`;
+
         const msg =
           `TurnQA: Updates needed${propertyName ? ` at ${propertyName}` : ''}.\n` +
           (summary ? `Note: ${summary}\n` : '') +
