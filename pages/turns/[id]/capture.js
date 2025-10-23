@@ -166,6 +166,18 @@ export default function Capture() {
         const j = await r.json();
         const items = Array.isArray(j.photos) ? j.photos : [];
 
+        function uniqueByStableKeyPhotos(list) {
+          const seen = new Set();
+          const out = [];
+          for (const p of list) {
+            const k = p.id ? `id:${p.id}` : `p:${p.path}|t:${p.created_at}`;
+            if (seen.has(k)) continue;
+            seen.add(k);
+            out.push(p);
+          }
+          return out;
+          }
+
         // group by shot_id when present; otherwise fall back to area_key/label matching
           const byShot = {};
             for (const it of deduped) {
