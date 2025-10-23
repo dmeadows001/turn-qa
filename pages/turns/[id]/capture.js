@@ -348,7 +348,9 @@ export default function Capture() {
           url: finalPath,           // store the object key (used later for signing/preview)
           width: dims.width,
           height: dims.height,
-          preview
+          preview,
+          // New uploads during the needs-fix flow should be highlighted as FIX
+          isFix: (tab === 'needs-fix'),
         });
       } catch (e) {
         URL.revokeObjectURL(preview);
