@@ -8,17 +8,9 @@ const BUCKET =
   process.env.SUPABASE_STORAGE_BUCKET ||
   'photos';
 
-// quick helper: does a path look like a real file (has a dot/extension)?
-function looksLikeFile(p) {
-  return /\.[a-z0-9]+$/i.test(p || '');
-}
+function looksLikeFile(p) { return /\.[a-z0-9]+$/i.test(p || ''); }
+function cleanPath(p) { return String(p || '').replace(/^\/+/, ''); }
 
-// normalize strip leading slashes
-function cleanPath(p) {
-  return String(p || '').replace(/^\/+/, '');
-}
-
-// storage.list wrapper to fetch the latest file in a folder
 async function findOneFileUnderPrefix(prefix) {
   const folder = cleanPath(prefix).replace(/^\/+/, '');
   const { data, error } = await supa.storage.from(BUCKET).list(folder, {
@@ -26,7 +18,6 @@ async function findOneFileUnderPrefix(prefix) {
     sortBy: { column: 'name', order: 'desc' },
   });
   if (error || !Array.isArray(data) || data.length === 0) return null;
-
   const file = data.find(f => /\.(jpe?g|png|webp|heic|heif|gif)$/i.test(f.name)) || data[0];
   return file ? `${folder}/${file.name}` : null;
 }
@@ -36,10 +27,10 @@ export default async function handler(req, res) {
     const turnId = String(req.query.id || req.query.turn_id || '').trim();
     if (!turnId) return res.status(400).json({ error: 'missing turn id' });
 
-    // 1) Pull photos for this turn (no join).
+    // NOTE: added is_fix, cleaner_note
     const { data: tpRows, error: tpErr } = await supa
       .from('turn_photos')
-      .select('id, turn_id, shot_id, path, created_at, area_key')
+      .select('id, turn_id, shot_id, path, created_at, area_key, is_fix, cleaner_note')
       .eq('turn_id', turnId)
       .order('created_at', { ascending: true });
 
@@ -47,7 +38,6 @@ export default async function handler(req, res) {
 
     const rows = Array.isArray(tpRows) ? tpRows : [];
 
-    // 2) For any rows that are missing area_key, fetch from template_shots by shot_id.
     const missingShotIds = Array.from(
       new Set(
         rows
@@ -71,29 +61,23 @@ export default async function handler(req, res) {
       }
     }
 
-    // 3) Normalize + sign URLs (with folder -> file fallback).
     const out = [];
     const updates = [];
 
     for (const r of rows) {
       const areaKey = r.area_key || tsMap[String(r.shot_id)] || '';
 
-      // Prefer the DB path; if missing, construct a folder prefix we expect
       let objPath = cleanPath(r.path);
-      if (!objPath) {
-        objPath = `turns/${turnId}/${r.shot_id || ''}`.replace(/\/+$/, '');
-      }
+      if (!objPath) objPath = `turns/${turnId}/${r.shot_id || ''}`.replace(/\/+$/, '');
 
       let signedUrl = '';
       let finalPath = objPath;
 
       try {
         if (!looksLikeFile(finalPath)) {
-          // It's a folder prefix — list to find a file under it
           const found = await findOneFileUnderPrefix(finalPath);
           if (found) {
             finalPath = found;
-            // backfill onto the row so next time is faster
             updates.push({ id: r.id, path: finalPath });
           }
         }
@@ -112,44 +96,27 @@ export default async function handler(req, res) {
         id: r.id,
         turn_id: r.turn_id,
         shot_id: r.shot_id,
-        path: finalPath,         // may be folder OR the discovered file key
+        path: finalPath,
         created_at: r.created_at,
         area_key: areaKey,
         signedUrl,
+        // expose these so cleaner + manager UIs can persist highlights/notes
+        is_fix: !!r.is_fix,
+        cleaner_note: r.cleaner_note || null,
       });
     }
 
-    // 3.5) DE-DUPE by final *file* path (keep the newest created_at)
-    // This prevents the same image showing multiple times, and also prevents
-    // findings (which are keyed by path) from lighting up multiple cards.
-    const byPath = new Map(); // key = path (or empty), val = photo obj
-    for (const p of out) {
-      const key = p.path || ''; // if still blank, key on '' so we don't crash
-      const prev = byPath.get(key);
-      if (!prev) {
-        byPath.set(key, p);
-      } else {
-        // keep the newest
-        const newer = new Date(p.created_at) > new Date(prev.created_at) ? p : prev;
-        byPath.set(key, newer);
-      }
-    }
-    const deduped = Array.from(byPath.values());
-
-    // 4) Best-effort path backfill (folder -> actual file key), non-blocking
     if (updates.length) {
       try {
         await Promise.all(
-          updates.map(u =>
-            supa.from('turn_photos').update({ path: u.path }).eq('id', u.id)
-          )
+          updates.map(u => supa.from('turn_photos').update({ path: u.path }).eq('id', u.id))
         );
       } catch (e) {
         console.warn('[list-turn-photos] backfill update failed', e?.message || e);
       }
     }
 
-    return res.json({ photos: deduped });
+    return res.json({ photos: out });
   } catch (e) {
     console.error('[list-turn-photos] error', e);
     return res.status(500).json({ error: e?.message || 'failed' });
