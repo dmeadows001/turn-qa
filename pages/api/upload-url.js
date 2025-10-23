@@ -39,32 +39,43 @@ export default async function handler(req, res) {
 
     if (!tId) return res.status(400).json({ error: 'turnId required' });
 
-    // Your canonical object key (this is what the UI stores/uses later)
+    // Canonical object key (what the UI stores later).
     const key = `turns/${tId}/${sId}/${mkId()}_${name}`.replace(/\/+/g, '/');
 
-    // Create a signed *upload* URL (multipart/form-data) + token.
-    // NOTE: This does NOT write the object yet; client will POST file + token.
-    const { data, error } = await supa.storage
-      .from(BUCKET)
-      .createSignedUploadUrl(key);
+    // 1) Primary: Supabase "signed upload" (multipart/form-data)
+    //    Client must POST { file, token } to signedUploadUrl.
+    let signedUploadUrl = null;
+    let token = null;
 
-    if (error) {
-      console.error('[upload-url] createSignedUploadUrl error:', error.message || error);
-      return res.status(500).json({ error: 'Failed to create signed upload URL' });
+    try {
+      const { data, error } = await supa.storage
+        .from(BUCKET)
+        .createSignedUploadUrl(key);
+
+      if (error) {
+        console.error('[upload-url] createSignedUploadUrl error:', error.message || error);
+      } else {
+        signedUploadUrl = data?.signedUrl || null;
+        token = data?.token || null;
+      }
+    } catch (e) {
+      console.error('[upload-url] createSignedUploadUrl exception:', e?.message || e);
     }
 
-    // Respond with everything the client needs.
-    // - path: the object key to persist with the photo row
-    // - signedUploadUrl: where to POST the file
-    // - token: must be included in the multipart/form-data along with 'file'
+    // 2) Fallback: a proxy endpoint you host that writes using service role.
+    //    Your capture.js prefers `uploadUrl` first; it will PUT the raw bytes there.
+    //    (See pages/api/upload-proxy.js below.)
+    const uploadUrl = `/api/upload-proxy?path=${encodeURIComponent(key)}&bucket=${encodeURIComponent(BUCKET)}`;
+
     return res.json({
       ok: true,
       bucket: BUCKET,
       path: key,
       mime: mime || 'image/jpeg',
-      signedUploadUrl: data?.signedUrl || null,
-      token: data?.token || null,
-      // optional metadata for debugging:
+      // Give the client *both* options; it will choose what it supports.
+      uploadUrl,            // <-- proxy PUT (service role; bypasses RLS)
+      signedUploadUrl,      // <-- Supabase signed form-data POST
+      token,                // <-- must be included in the form when using signedUploadUrl
       created_at: nowIso(),
     });
   } catch (e) {
