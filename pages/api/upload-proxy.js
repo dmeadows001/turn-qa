@@ -1,35 +1,53 @@
 // pages/api/upload-proxy.js
 import { supabaseAdmin as _admin } from '@/lib/supabaseAdmin';
 
-export const config = { api: { bodyParser: true, sizeLimit: '10mb' } }; // up to ~10MB payloads
+export const config = {
+  api: {
+    bodyParser: false, // we stream the raw body
+    sizeLimit: '10mb', // adjust if you allow larger photos
+  },
+};
 
-const BUCKET =
-  process.env.NEXT_PUBLIC_SUPABASE_STORAGE_BUCKET ||
-  process.env.SUPABASE_STORAGE_BUCKET ||
-  'photos';
-
-// supabaseAdmin is a factory in your repo
 const supa = typeof _admin === 'function' ? _admin() : _admin;
 
+function readRawBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    req.on('data', c => chunks.push(c));
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
+
 export default async function handler(req, res) {
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+  if (req.method !== 'PUT') {
+    res.setHeader('Allow', ['PUT']);
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
 
   try {
-    const { path, mime, dataBase64 } = req.body || {};
-    if (!path || !dataBase64) return res.status(400).json({ error: 'path and dataBase64 are required' });
+    const bucket = String(req.query.bucket || '').trim();
+    const path = String(req.query.path || '').trim();
+    if (!bucket || !path) {
+      return res.status(400).json({ error: 'bucket and path are required' });
+    }
 
-    // Decode base64 (dataBase64 should be raw base64, no data: URL)
-    const buf = Buffer.from(dataBase64, 'base64');
+    const contentType = req.headers['content-type'] || 'application/octet-stream';
+    const body = await readRawBody(req);
 
-    const { error } = await supa.storage
-      .from(BUCKET)
-      .upload(path, buf, { upsert: false, contentType: mime || 'application/octet-stream' });
+    const { error } = await supa.storage.from(bucket).upload(path, body, {
+      contentType,
+      upsert: false,
+    });
 
-    if (error) return res.status(500).json({ error: error.message || 'upload failed' });
+    if (error) {
+      console.error('[upload-proxy] storage.upload error:', error.message || error);
+      return res.status(500).json({ error: 'upload failed' });
+    }
 
-    return res.json({ ok: true, path });
+    return res.status(200).json({ ok: true, path });
   } catch (e) {
-    console.error('[upload-proxy] error', e);
-    return res.status(500).json({ error: e?.message || 'upload failed' });
+    console.error('[upload-proxy] fatal error:', e?.message || e);
+    return res.status(500).json({ error: e?.message || 'upload-proxy failed' });
   }
 }
