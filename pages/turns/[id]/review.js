@@ -11,6 +11,18 @@ async function fetchTurn(turnId) {
   return j.turn;
 }
 
+function uniqueByStableKey(list) {
+  const seen = new Set();
+  const out = [];
+  for (const p of list) {
+    const k = p.id ? `id:${p.id}` : `p:${p.path}|t:${p.created_at}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(p);
+  }
+  return out;
+}
+
 async function fetchPhotos(turnId) {
   const r = await fetch(`/api/list-turn-photos?id=${turnId}`);
   if (!r.ok) throw new Error((await r.json()).error || 'list-turn-photos failed');
@@ -25,6 +37,7 @@ async function fetchPhotos(turnId) {
     is_fix: !!p.is_fix,
     cleaner_note: p.cleaner_note || ''
   }));
+  return uniqueByStableKey(raw);
 }
 
 // Load existing findings for this turn: { findings: [{ path, note, severity? }] }
