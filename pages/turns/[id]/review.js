@@ -27,18 +27,18 @@ async function fetchPhotos(turnId) {
   const r = await fetch(`/api/list-turn-photos?id=${turnId}`);
   if (!r.ok) throw new Error((await r.json()).error || 'list-turn-photos failed');
   const j = await r.json();
-  // ⬇️ Minimal addition: include is_fix and cleaner_note for manager rendering
-  return (j.photos || []).map(p => ({
-    id: p.id,
-    area_key: p.area_key || '',
-    created_at: p.created_at,
-    url: p.signedUrl || '',
-    path: p.path || '',
-    is_fix: !!p.is_fix,
-    cleaner_note: p.cleaner_note || ''
-  }));
-  return uniqueByStableKey(raw);
-}
+ const mapped = (j.photos || []).map(p => ({
+  id: p.id,
+  area_key: p.area_key || '',
+  created_at: p.created_at,
+  url: p.signedUrl || '',
+  path: p.path || '',
+  is_fix: !!p.is_fix,
+  cleaner_note: p.cleaner_note || null,
+}));
+
+// dedupe by final path
+return Array.from(new Map(mapped.map(x => [x.path || '', x])).values());
 
 // Load existing findings for this turn: { findings: [{ path, note, severity? }] }
 async function fetchFindings(turnId) {
