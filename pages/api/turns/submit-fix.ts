@@ -114,8 +114,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
     newStatus = upd?.status || null;
 
-    // 3) Notify the manager (kind = 'fix'); returns test info if DISABLE_SMS=1
-    const notify = await notifyManagerForTurn(turnId, 'fix');
+        // 3) Notify the manager (kind = 'fix'); DO NOT fail the request if SMS/email errors out
+    let notify: any = null;
+    try {
+      notify = await notifyManagerForTurn(turnId, 'fix');
+    } catch (e:any) {
+      console.warn('[submit-fix] notify failed (non-fatal):', e?.message || e);
+    }
 
     return res.json({
       ok: true,
@@ -123,8 +128,4 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       testMode: process.env.DISABLE_SMS === '1',
       newStatus,
     });
-  } catch (e:any) {
-    console.error('[submit-fix] error', e);
-    return res.status(500).json({ error: e.message || 'submit-fix failed' });
-  }
-}
+
