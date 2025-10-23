@@ -11,34 +11,25 @@ async function fetchTurn(turnId) {
   return j.turn;
 }
 
-function uniqueByStableKey(list) {
-  const seen = new Set();
-  const out = [];
-  for (const p of list) {
-    const k = p.id ? `id:${p.id}` : `p:${p.path}|t:${p.created_at}`;
-    if (seen.has(k)) continue;
-    seen.add(k);
-    out.push(p);
-  }
-  return out;
-}
-
 async function fetchPhotos(turnId) {
   const r = await fetch(`/api/list-turn-photos?id=${turnId}`);
   if (!r.ok) throw new Error((await r.json()).error || 'list-turn-photos failed');
   const j = await r.json();
- const mapped = (j.photos || []).map(p => ({
-  id: p.id,
-  area_key: p.area_key || '',
-  created_at: p.created_at,
-  url: p.signedUrl || '',
-  path: p.path || '',
-  is_fix: !!p.is_fix,
-  cleaner_note: p.cleaner_note || null,
-}));
 
-// dedupe by final path
-return Array.from(new Map(mapped.map(x => [x.path || '', x])).values());
+  // Map and include persisted is_fix/cleaner_note if present (undefined-safe).
+  const mapped = (j.photos || []).map(p => ({
+    id: p.id,
+    area_key: p.area_key || '',
+    created_at: p.created_at,
+    url: p.signedUrl || '',
+    path: p.path || '',
+    is_fix: !!p.is_fix,
+    cleaner_note: p.cleaner_note || '',
+  }));
+
+  // Dedupe by final resolved storage path to prevent UI duplicates.
+  return Array.from(new Map(mapped.map(x => [x.path || '', x])).values());
+}
 
 // Load existing findings for this turn: { findings: [{ path, note, severity? }] }
 async function fetchFindings(turnId) {
@@ -72,16 +63,23 @@ function badgeStyle(status) {
   };
 }
 
-// Highlight style for flagged photos
+// Amber “needs fix” highlight (manager findings)
 const flaggedCardStyle = {
   border: '1px solid #d97706',
   boxShadow: '0 0 0 3px rgba(217,119,6,0.25) inset',
   background: '#0b1220'
 };
 
-// --- Stable per-photo key (prevents “all check at once” when paths collide)
+// Green “FIX” highlight (cleaner resubmitted photo)
+const fixCardStyle = {
+  border: '1px solid #065f46',
+  boxShadow: '0 0 0 3px rgba(5,150,105,0.20) inset',
+  background: '#071a16'
+};
+
+// Stable per-photo key
 function keyFor(p) {
-  return p?.id || `${p?.path || ''}#${p?.created_at || ''}`;
+  return p && (p.id || `${p.path || ''}#${p.created_at || ''}`);
 }
 
 export default function Review() {
@@ -103,17 +101,17 @@ export default function Review() {
   const [managerNote, setManagerNote] = useState('');
   const [acting, setActing] = useState(false);
 
-  // Key all per-photo state by a stable photo key (id preferred)
-  const [notesByKey, setNotesByKey] = useState({});            // { [photoKey]: string }
-  const [selectedKeys, setSelectedKeys] = useState(new Set());  // Set<string>
+  // Per-photo state (keyed by stable key)
+  const [notesByKey, setNotesByKey] = useState({});
+  const [selectedKeys, setSelectedKeys] = useState(new Set());
 
   // Findings for highlight + prefill (keyed by photoKey)
-  const [findingsByKey, setFindingsByKey] = useState({});       // { [photoKey]: {note, severity?} }
+  const [findingsByKey, setFindingsByKey] = useState({});
 
-  // Cleaner “fix & resubmit” state
+  // Cleaner “fix & resubmit” (only used on cleaner view, kept for parity)
   const [cleanerReply, setCleanerReply] = useState('');
-  const [staged, setStaged] = useState([]); // [{name, preview, path, area_key?}]
-  const [uploadingFix, setUploadingFix] = useState(false);
+  const [staged, setStaged] = useState([]);
+  const [uploadingFix] = useState(false);
   const [submittingFixes, setSubmittingFixes] = useState(false);
   const fileInputRef = useRef(null);
 
@@ -128,22 +126,21 @@ export default function Review() {
       try {
         const [t, ph] = await Promise.all([fetchTurn(turnId), fetchPhotos(turnId)]);
         setTurn(t);
-        setStatus(t?.status || 'in_progress');
+        setStatus(t && t.status ? t.status : 'in_progress');
 
         const cleanerNote =
-          t?.cleaner_note ?? t?.cleaner_reply ?? t?.cleaner_message ?? '';
+          (t && (t.cleaner_note ?? t.cleaner_reply ?? t.cleaner_message)) || '';
         setLastCleanerNote(cleanerNote);
         setCleanerReply('');
 
-        // server uses `manager_note` (singular)
-        setManagerNote(t?.manager_note || '');
+        setManagerNote((t && t.manager_note) || '');
 
         setPhotos(ph);
 
-        // Prefill findings keyed by photoKey (not raw path)
+        // Prefill findings keyed by photo key
         const f = await fetchFindings(turnId);
         if (f.length) {
-          // Build a quick index from path -> array of photo keys that currently display that path
+          // Build index: path -> keys currently shown
           const pathToKeys = ph.reduce((acc, p) => {
             const k = keyFor(p);
             const path = p.path || '';
@@ -157,13 +154,13 @@ export default function Review() {
           const notes = {};
 
           f.forEach(it => {
-            const path = it?.path || '';
+            const path = (it && it.path) || '';
             const keys = pathToKeys[path] || [];
-            keys.forEach(k => {
-              map[k] = { note: it.note || '', severity: it.severity || 'warn' };
-              if (isManagerMode) sel.add(k);            // managers see pre-checked boxes
-              notes[k] = it.note || '';
-            });
+            for (const k of keys) {
+              map[k] = { note: (it && it.note) || '', severity: (it && it.severity) || 'warn' };
+              if (isManagerMode) sel.add(k);
+              notes[k] = (it && it.note) || '';
+            }
           });
 
           setFindingsByKey(map);
@@ -181,17 +178,11 @@ export default function Review() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [turnId, isManagerMode]);
 
-  // Cleanup local object URLs
-  useEffect(() => {
-    return () => { staged.forEach(s => s.preview && URL.revokeObjectURL(s.preview)); };
-  }, [staged]);
-
   const uniqueAreas = useMemo(() => {
     const set = new Set((photos || []).map(p => p.area_key).filter(Boolean));
     return Array.from(set);
   }, [photos]);
 
-  // Helpers to toggle/check per-photo selection (keyed by photoKey)
   function toggleKey(p) {
     const k = keyFor(p);
     setSelectedKeys(prev => {
@@ -206,7 +197,7 @@ export default function Review() {
     setNotesByKey(prev => ({ ...prev, [k]: text }));
   }
 
-  // Approve
+  // --- Approve ---
   async function markApproved() {
     if (!turnId) return;
     setActing(true);
@@ -229,7 +220,7 @@ export default function Review() {
     }
   }
 
-  // Needs Fix (with notes)
+  // --- Needs Fix (with notes) ---
   async function sendNeedsFix() {
     if (!turnId) return;
     setActing(true);
@@ -245,7 +236,7 @@ export default function Review() {
         }
       });
 
-      if (payloadNotes.length === 0 && !managerNote.trim()) {
+      if (payloadNotes.length === 0 && !(managerNote || '').trim()) {
         alert('Select at least one photo or add a summary note before sending “Needs fix”.');
         setActing(false);
         return;
@@ -256,7 +247,7 @@ export default function Review() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           notes: payloadNotes,                 // [{ path, note }]
-          summary: managerNote?.trim() || null,
+          summary: (managerNote || '').trim() || null,
           send_sms: true
         })
       });
@@ -270,7 +261,6 @@ export default function Review() {
       const sel = new Set();
       const newNotes = {};
       payloadNotes.forEach(it => {
-        // mark every photo currently showing that path
         photos.filter(p => (p.path || '') === it.path).forEach(p => {
           const k = keyFor(p);
           newMap[k] = { note: it.note || '', severity: 'warn' };
@@ -290,115 +280,16 @@ export default function Review() {
     }
   }
 
-  function openFilePicker() {
-    fileInputRef.current?.click();
-  }
-
-  async function addFixFiles(fileList) {
-    const files = Array.from(fileList || []);
-    if (files.length === 0) return;
-
-    setUploadingFix(true);
-    try {
-      const uploaded = [];
-      for (const f of files) {
-        const preview = URL.createObjectURL(f);
-
-        const meta = await fetch('/api/upload-url', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            turnId,
-            shotId: 'fixes',
-            filename: f.name,
-            mime: f.type || 'image/jpeg'
-          })
-        }).then(r => r.json());
-
-        if (!meta?.uploadUrl && !meta?.signedUploadUrl) {
-          URL.revokeObjectURL(preview);
-          alert(`Could not get upload URL for ${f.name}; skipping.`);
-          continue;
-        }
-
-        if (meta.uploadUrl) {
-          await fetch(meta.uploadUrl, {
-            method: 'PUT',
-            headers: { 'Content-Type': meta.mime || 'application/octet-stream' },
-            body: f
-          });
-        } else {
-          const fd = new FormData();
-          fd.append('file', f);
-          if (meta.token) fd.append('token', meta.token);
-          await fetch(meta.signedUploadUrl, { method: 'POST', body: fd });
-        }
-
-        uploaded.push({ name: f.name, preview, path: meta.path });
-      }
-
-      if (uploaded.length) setStaged(prev => [...prev, ...uploaded]);
-    } finally {
-      setUploadingFix(false);
-    }
-  }
-
-  async function submitFixes() {
-    if (!turnId) return;
-    if (staged.length === 0 && !cleanerReply.trim()) {
-      alert('Add at least one photo or a note before submitting.');
-      return;
-    }
-    setSubmittingFixes(true);
-    try {
-      const payload = {
-        turn_id: turnId,
-        reply: cleanerReply || '',
-        photos: staged.map(s => ({ path: s.path }))
-      };
-      const r = await fetch('/api/resubmit-turn', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(j.error || 'Resubmit failed');
-
-      staged.forEach(s => s.preview && URL.revokeObjectURL(s.preview));
-      setStaged([]);
-      setCleanerReply('');
-      const ph = await fetchPhotos(turnId);
-      setPhotos(ph);
-      setStatus('submitted');
-
-      alert('Submitted fixes for review ✅');
-
-      if (!isManagerMode) {
-        window.location.href = '/cleaner/turns';
-      }
-    } catch (e) {
-      alert(e.message || 'Could not resubmit fixes.');
-    } finally {
-      setSubmittingFixes(false);
-    }
-  }
-
-  // ---------- Small helper to render one photo card ----------
   function PhotoCard({ p }) {
     const k = keyFor(p);
     const selected = selectedKeys.has(k);
     const noteVal = notesByKey[k] || '';
     const flagged = !!findingsByKey[k];
-
-    // ⬇️ Minimal addition: green style when the photo is a submitted fix
     const isFix = !!p.is_fix;
-    const fixCardStyle = isFix
-      ? {
-          border: '1px solid #065f46',
-          boxShadow: '0 0 0 3px rgba(5,150,105,0.20) inset',
-          background: '#071a16'
-        }
-      : {};
+
+    // choose card style: green for FIX, else amber when flagged
+    const styleCard =
+      isFix ? fixCardStyle : (flagged ? flaggedCardStyle : null);
 
     return (
       <div
@@ -407,9 +298,8 @@ export default function Review() {
           border: '1px solid #334155',
           borderRadius: 12,
           overflow: 'hidden',
-          background:'#0b1220',
-          ...(flagged ? flaggedCardStyle : null),
-          ...fixCardStyle
+          background: '#0b1220',
+          ...(styleCard || {})
         }}
       >
         <a href={p.url} target="_blank" rel="noreferrer">
@@ -425,7 +315,6 @@ export default function Review() {
             <div style={{ display:'flex', alignItems:'center', gap:8 }}>
               <b>{p.area_key || '—'}</b>
 
-              {/* Yellow “needs fix” when manager flagged */}
               {flagged && (
                 <span style={{
                   padding:'2px 8px',
@@ -440,7 +329,6 @@ export default function Review() {
                 </span>
               )}
 
-              {/* ⬇️ Green “FIX” tag when cleaner submitted a fix */}
               {isFix && (
                 <span style={{
                   padding:'2px 8px',
@@ -485,8 +373,8 @@ export default function Review() {
             </div>
           )}
 
-          {/* ⬇️ Manager view: show cleaner's fix note (if present) */}
-          {isManagerMode && isFix && p.cleaner_note && (
+          {/* Show cleaner's persisted note under FIX photos (manager view) */}
+          {isFix && !!p.cleaner_note && (
             <div style={{
               marginTop:8,
               padding:'8px 10px',
@@ -496,13 +384,12 @@ export default function Review() {
               color:'#86efac',
               whiteSpace:'pre-wrap'
             }}>
-              <div style={{ fontSize:11, fontWeight:700, color:'#6ee7b7', marginBottom:4 }}>Cleaner note</div>
               {p.cleaner_note}
             </div>
           )}
 
           {/* Cleaner view: show manager note, if any */}
-          {!isManagerMode && flagged && findingsByKey[k]?.note && (
+          {!isManagerMode && flagged && findingsByKey[k] && findingsByKey[k].note && (
             <div style={{
               marginTop:8,
               padding:'8px 10px',
@@ -658,7 +545,7 @@ export default function Review() {
                   return acc;
                 }, {});
 
-                // Sort photos newest first inside each area (optional)
+                // Sort newest first inside each area (optional)
                 Object.values(byArea).forEach(list =>
                   list.sort((a,b) => new Date(b.created_at) - new Date(a.created_at))
                 );
@@ -691,68 +578,6 @@ export default function Review() {
             </>
           )}
         </div>
-
-        {/* Cleaner Fix & Resubmit */}
-        {!isManagerMode && (
-          <div style={ui.card}>
-            <h3 style={{ marginTop:0 }}>Fix & resubmit</h3>
-            <p style={ui.muted}>If your manager requested changes, add the new photo(s) and a quick note, then submit for review.</p>
-
-            <div style={{ marginTop: 10 }}>
-              <div style={{ fontSize:12, fontWeight:700, color:'#9ca3af', marginBottom:6 }}>Optional note to manager</div>
-              <textarea
-                value={cleanerReply}
-                onChange={e=>setCleanerReply(e.target.value)}
-                rows={3}
-                placeholder="What did you fix?"
-                style={{ ...ui.input, width:'100%', padding:'10px 12px', resize:'vertical', background:'#0b1220' }}
-              />
-            </div>
-
-            {/* Hidden file input */}
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*"
-              multiple
-              style={{ display:'none' }}
-              onChange={(e)=>addFixFiles(e.target.files)}
-            />
-
-            <div style={{ display:'flex', gap:10, marginTop:12, flexWrap:'wrap' }}>
-              <button onClick={openFilePicker} disabled={uploadingFix} style={ui.btnSecondary}>
-                {uploadingFix ? 'Uploading…' : '➕ Add photos'}
-              </button>
-              <button onClick={submitFixes} disabled={submittingFixes || (staged.length === 0 && !cleanerReply.trim())} style={ui.btnPrimary}>
-                {submittingFixes ? 'Submitting…' : '✅ Submit fixes for review'}
-              </button>
-            </div>
-
-            {staged.length > 0 && (
-              <div style={{ marginTop:12 }}>
-                <div style={{ fontWeight:700, marginBottom:6 }}>Staged photos (not yet submitted)</div>
-                <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(180px,1fr))', gap:12 }}>
-                  {staged.map((s, i) => (
-                    <div key={i} style={{ border:'1px solid #334155', borderRadius:10, overflow:'hidden', background:'#0b1220' }}>
-                      {s.preview ? (
-                        <img
-                          src={s.preview}
-                          alt={s.name}
-                          style={{ width:'100%', display:'block', aspectRatio:'4/3', objectFit:'cover' }}
-                        />
-                      ) : (
-                        <div style={{ padding:10, color:'#cbd5e1' }}>{s.name}</div>
-                      )}
-                      <div style={{ padding:8, fontSize:12, color:'#9ca3af' }}>
-                        {s.name}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
 
         {uniqueAreas.length > 1 && (
           <div style={{ ...ui.subtle }}>
