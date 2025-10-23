@@ -80,15 +80,20 @@ export default function Capture() {
   const smallMeta = { fontSize: 12, color: '#94a3b8' };
 
   async function signPath(path) {
-    const resp = await fetch('/api/sign-photo', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path, expires: 600 })
-    });
-    if (!resp.ok) throw new Error('sign failed');
-    const json = await resp.json();
-    return json.url;
-  }
+  const resp = await fetch('/api/sign-photo', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      // NEW: pass anon key so your API’s header validator is happy
+      Authorization: `Bearer ${process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''}`,
+    },
+    body: JSON.stringify({ path, expires: 600 })
+  });
+  if (!resp.ok) throw new Error('sign failed');
+  const json = await resp.json();
+  return json.url;
+}
+
 
   // --- Image dimension helper (safe if load fails) ---
   async function getDims(file) {
