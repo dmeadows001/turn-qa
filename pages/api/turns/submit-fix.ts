@@ -22,6 +22,9 @@ function buildRows(turnId:string, photos:any[]){
         _path_value: storagePath,
         shot_id: p.shotId || p.shot_id || null,
         area_key: p.area_key || '',
+        // try to persist fix metadata if your schema supports it
+        is_fix: true,
+        cleaner_note: p.note || p.cleaner_note || null,
         created_at: nowIso(),
       };
     })
@@ -33,11 +36,13 @@ async function tolerantInsertTurnPhotos(supa:any, rows:any[]){
   if (!rows.length) return { ok:true, tried:0 };
 
   const shapes: Array<(r:any)=>Record<string, any>> = [
-    (r:any)=>({ turn_id:r.turn_id, storage_path:r._path_value, shot_id:r.shot_id, area_key:r.area_key, created_at:r.created_at }),
-    (r:any)=>({ turn_id:r.turn_id, path:         r._path_value, shot_id:r.shot_id, area_key:r.area_key, created_at:r.created_at }),
-    (r:any)=>({ turn_id:r.turn_id, photo_path:   r._path_value, shot_id:r.shot_id, area_key:r.area_key, created_at:r.created_at }),
-    (r:any)=>({ turn_id:r.turn_id, url:          r._path_value, shot_id:r.shot_id, area_key:r.area_key, created_at:r.created_at }),
-    (r:any)=>({ turn_id:r.turn_id, file:         r._path_value, shot_id:r.shot_id, area_key:r.area_key, created_at:r.created_at }),
+    // prefer full shape if columns exist
+    (r:any)=>({ turn_id:r.turn_id, storage_path:r._path_value, shot_id:r.shot_id, area_key:r.area_key, is_fix:r.is_fix, cleaner_note:r.cleaner_note, created_at:r.created_at }),
+    (r:any)=>({ turn_id:r.turn_id, path:         r._path_value, shot_id:r.shot_id, area_key:r.area_key, is_fix:r.is_fix, cleaner_note:r.cleaner_note, created_at:r.created_at }),
+    (r:any)=>({ turn_id:r.turn_id, photo_path:   r._path_value, shot_id:r.shot_id, area_key:r.area_key, is_fix:r.is_fix, cleaner_note:r.cleaner_note, created_at:r.created_at }),
+    (r:any)=>({ turn_id:r.turn_id, url:          r._path_value, shot_id:r.shot_id, area_key:r.area_key, is_fix:r.is_fix, cleaner_note:r.cleaner_note, created_at:r.created_at }),
+    (r:any)=>({ turn_id:r.turn_id, file:         r._path_value, shot_id:r.shot_id, area_key:r.area_key, is_fix:r.is_fix, cleaner_note:r.cleaner_note, created_at:r.created_at }),
+    // minimal fallbacks (older schemas)
     (r:any)=>({ turn_id:r.turn_id, storage_path: r._path_value }),
     (r:any)=>({ turn_id:r.turn_id, path:         r._path_value }),
   ];
@@ -67,6 +72,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const body = parseBody(req.body);
     const turnId = String(body.turnId || body.turn_id || '').trim();
     const photos = Array.isArray(body.photos) ? body.photos : [];
+    // optional overall cleaner reply (we keep same shape, even if unused)
+    const _reply: string = String(body.reply || body.cleaner_reply || '').trim();
+
     if (!turnId) return res.status(400).json({ error: 'turnId is required' });
 
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
@@ -75,46 +83,36 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const supa = createClient(url, key);
 
-    // 1) Store the fix photos (don’t change final approval state)
+    // 1) Store the fix photos (don’t change approval state here)
     if (photos.length){
       const rows = buildRows(turnId, photos);
       const ins = await tolerantInsertTurnPhotos(supa, rows);
       if (!ins.ok) return res.status(500).json({ error: ins.error?.message || 'could not save fix photos' });
     }
 
-    // 2) Try to set last_fix_submitted_at + flip status to 'submitted'
-    let newStatus: string | null = null;
-
-    // Attempt with timestamp column
-    let { data: upd, error: updErr } = await supa
-      .from('turns')
-      .update({
-        last_fix_submitted_at: nowIso(), // may not exist in some envs
-        status: 'submitted',
-      })
-      .eq('id', turnId)
-      .select('id,status')
-      .single();
-
-    // If the column doesn't exist, retry with only status
-    if (updErr && /column .* does not exist/i.test(updErr.message || '')) {
-      const retry = await supa
+    // 2) Mark last_fix_submitted_at and set status -> 'submitted' (with tolerant fallbacks)
+    const when = nowIso();
+    let newStatus = 'submitted';
+    try {
+      const { error: e1 } = await supa
         .from('turns')
-        .update({ status: 'submitted' })
-        .eq('id', turnId)
-        .select('id,status')
-        .single();
-      upd = retry.data;
-      updErr = retry.error;
+        .update({ status: newStatus, last_fix_submitted_at: when })
+        .eq('id', turnId);
+      if (e1) throw e1;
+    } catch (e:any) {
+      // fallback: some installs may not have both columns; try independent updates
+      try {
+        await supa.from('turns').update({ last_fix_submitted_at: when }).eq('id', turnId);
+      } catch {}
+      try {
+        await supa.from('turns').update({ status: newStatus }).eq('id', turnId);
+      } catch (e2:any) {
+        console.warn('[submit-fix] could not set status=submitted:', e2?.message || e2);
+        // don’t hard-fail the request; keep newStatus best-effort
+      }
     }
 
-    if (updErr) {
-      console.error('[submit-fix] status update error:', updErr.message || updErr);
-      return res.status(500).json({ error: 'could not set status=submitted' });
-    }
-    newStatus = upd?.status || null;
-
-        // 3) Notify the manager (kind = 'fix'); DO NOT fail the request if SMS/email errors out
+    // 3) Notify the manager (kind = 'fix'); DO NOT fail the request if SMS/email errors out
     let notify: any = null;
     try {
       notify = await notifyManagerForTurn(turnId, 'fix');
@@ -122,10 +120,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       console.warn('[submit-fix] notify failed (non-fatal):', e?.message || e);
     }
 
-    return res.json({
-      ok: true,
-      notify,
-      testMode: process.env.DISABLE_SMS === '1',
-      newStatus,
-    });
-
+    return res.json({ ok:true, notify, testMode: process.env.DISABLE_SMS === '1', newStatus });
+  } catch (e:any) {
+    console.error('[submit-fix] error', e);
+    return res.status(500).json({ error: e.message || 'submit-fix failed' });
+  }
+}
