@@ -82,21 +82,37 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (!ins.ok) return res.status(500).json({ error: ins.error?.message || 'could not save fix photos' });
     }
 
-    // 2) Update timestamps AND toggle status back to 'submitted' (return the new status to verify)
-    const { data: upd, error: updErr } = await supa
+    // 2) Try to set last_fix_submitted_at + flip status to 'submitted'
+    let newStatus: string | null = null;
+
+    // Attempt with timestamp column
+    let { data: upd, error: updErr } = await supa
       .from('turns')
       .update({
-        last_fix_submitted_at: nowIso(),
+        last_fix_submitted_at: nowIso(), // may not exist in some envs
         status: 'submitted',
       })
       .eq('id', turnId)
       .select('id,status')
       .single();
 
+    // If the column doesn't exist, retry with only status
+    if (updErr && /column .* does not exist/i.test(updErr.message || '')) {
+      const retry = await supa
+        .from('turns')
+        .update({ status: 'submitted' })
+        .eq('id', turnId)
+        .select('id,status')
+        .single();
+      upd = retry.data;
+      updErr = retry.error;
+    }
+
     if (updErr) {
       console.error('[submit-fix] status update error:', updErr.message || updErr);
       return res.status(500).json({ error: 'could not set status=submitted' });
     }
+    newStatus = upd?.status || null;
 
     // 3) Notify the manager (kind = 'fix'); returns test info if DISABLE_SMS=1
     const notify = await notifyManagerForTurn(turnId, 'fix');
@@ -105,7 +121,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       ok: true,
       notify,
       testMode: process.env.DISABLE_SMS === '1',
-      newStatus: upd?.status || null,  // <-- visibility for you to confirm
+      newStatus,
     });
   } catch (e:any) {
     console.error('[submit-fix] error', e);
