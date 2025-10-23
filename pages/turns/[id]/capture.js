@@ -278,26 +278,8 @@ export default function Capture() {
 
       // 3) Upload using whichever shape the API returned
       try {
-        if (meta.signedUploadUrl) {
-          // Supabase createSignedUploadUrl requires token + file (multipart/form-data)
-          const fd = new FormData();
-          fd.append('file', f);
-          if (meta.token) fd.append('token', meta.token); // REQUIRED by Supabase
-
-          // >>> PATCH: include Authorization header with public anon key <<<
-          const up = await fetch(meta.signedUploadUrl, {
-            method: 'POST',
-            headers: {
-              Authorization: `Bearer ${process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY}`,
-            },
-            body: fd,
-          });
-          if (!up.ok) {
-            const txt = await up.text().catch(() => '');
-            throw new Error(`Signed upload failed (${up.status}). ${txt}`);
-          }
-        } else if (meta.uploadUrl) {
-          // Legacy/generic signed PUT
+        // PREFER legacy signed PUT (works with your existing policies)
+        if (meta.uploadUrl) {
           const up = await fetch(meta.uploadUrl, {
             method: 'PUT',
             headers: { 'Content-Type': meta.mime || 'application/octet-stream' },
@@ -306,6 +288,16 @@ export default function Capture() {
           if (!up.ok) {
             const txt = await up.text().catch(() => '');
             throw new Error(`PUT upload failed (${up.status}). ${txt}`);
+          }
+        } else if (meta.signedUploadUrl) {
+          // Fallback: Supabase signed upload (multipart/form-data)
+          const fd = new FormData();
+          fd.append('file', f);
+          if (meta.token) fd.append('token', meta.token); // required by Supabase when provided
+          const up = await fetch(meta.signedUploadUrl, { method: 'POST', body: fd });
+          if (!up.ok) {
+            const txt = await up.text().catch(() => '');
+            throw new Error(`Signed upload failed (${up.status}). ${txt}`);
           }
         } else {
           throw new Error('No signedUploadUrl or uploadUrl provided');
