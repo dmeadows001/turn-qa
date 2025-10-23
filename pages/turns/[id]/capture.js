@@ -167,8 +167,8 @@ export default function Capture() {
         const items = Array.isArray(j.photos) ? j.photos : [];
 
         // group by shot_id when present; otherwise fall back to area_key/label matching
-        const byShot = {};
-        for (const it of items) {
+          const byShot = {};
+            for (const it of deduped) {
           const path = it.path || '';
           const shotId = it.shot_id || null;
 
@@ -183,6 +183,19 @@ export default function Capture() {
             isFix: !!it.is_fix,
             cleanerNote: it.cleaner_note || null,
           };
+
+          // --- NEW: de-dupe by storage path (keep newest)
+          const latestByPath = {};
+          for (const it of items) {
+            const p = it.path || '';
+            if (!p) continue;
+            const t = new Date(it.created_at || 0).getTime();
+            if (!latestByPath[p] || t > latestByPath[p]._t) {
+              latestByPath[p] = { ...it, _t: t };
+            }
+          }
+          const deduped = Object.values(latestByPath);
+
 
           let targetShot = shotId;
           if (!targetShot) {
