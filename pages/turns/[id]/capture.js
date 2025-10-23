@@ -164,7 +164,10 @@ export default function Capture() {
       try {
         const r = await fetch(`/api/list-turn-photos?id=${turnId}`);
         const j = await r.json();
-        const items = Array.isArray(j.photos) ? j.photos : [];
+        const items = Array.isArray(j.photos)
+          ? Array.from(new Map(j.photos.map(p => [p.path || '', p])).values())
+          : [];
+
 
         function uniqueByStableKeyPhotos(list) {
           const seen = new Set();
