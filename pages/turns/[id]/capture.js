@@ -90,26 +90,26 @@ export default function Capture() {
     return json.url;
   }
 
-// --- Image dimension helper (safe if load fails) ---
-async function getDims(file) {
-  return new Promise((resolve) => {
-    try {
-      const img = new Image();
-      img.onload = () => {
-        const dims = { width: img.naturalWidth || 0, height: img.naturalHeight || 0 };
-        URL.revokeObjectURL(img.src);
-        resolve(dims);
-      };
-      img.onerror = () => {
-        // If we can't read dimensions (e.g., HEIC on some desktops), don't block upload
+  // --- Image dimension helper (safe if load fails) ---
+  async function getDims(file) {
+    return new Promise((resolve) => {
+      try {
+        const img = new Image();
+        img.onload = () => {
+          const dims = { width: img.naturalWidth || 0, height: img.naturalHeight || 0 };
+          URL.revokeObjectURL(img.src);
+          resolve(dims);
+        };
+        img.onerror = () => {
+          // If we can't read dimensions (e.g., HEIC on some desktops), don't block upload
+          resolve({ width: 0, height: 0 });
+        };
+        img.src = URL.createObjectURL(file);
+      } catch {
         resolve({ width: 0, height: 0 });
-      };
-      img.src = URL.createObjectURL(file);
-    } catch {
-      resolve({ width: 0, height: 0 });
-    }
-  });
-}
+      }
+    });
+  }
   
   function ensureThumb(path) {
     if (!path || requestedThumbsRef.current.has(path) || thumbByPath[path]) return;
@@ -231,104 +231,112 @@ async function getDims(file) {
     })();
   }, [turnId]);
 
-// -------- Add files (quality + upload to Storage) --------
-async function addFiles(shotId, fileList) {
-  const files = Array.from(fileList || []);
-  const uploaded = [];
+  // -------- Add files (quality + upload to Storage) --------
+  async function addFiles(shotId, fileList) {
+    const files = Array.from(fileList || []);
+    const uploaded = [];
 
-  for (const f of files) {
-    // 1) Local validation
-    const dims = await getDims(f);
-    const longest = Math.max(dims.width, dims.height);
-    const tooSmall = longest < 1024;
-    const tooBig = f.size > 6 * 1024 * 1024;
+    for (const f of files) {
+      // 1) Local validation
+      const dims = await getDims(f);
+      const longest = Math.max(dims.width, dims.height);
+      const tooSmall = longest < 1024;
+      const tooBig = f.size > 6 * 1024 * 1024;
 
-    if (tooSmall || tooBig) {
-      alert(
-        `Rejected "${f.name}": ` +
-        (tooSmall ? `min longest side is 1024px (got ${dims.width}×${dims.height}). ` : '') +
-        (tooBig ? `file > 6MB.` : '')
-      );
-      continue;
-    }
-
-    const preview = URL.createObjectURL(f);
-
-    // 2) Ask backend for upload target
-    let meta = {};
-    try {
-      const resp = await fetch('/api/upload-url', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ turnId, shotId, filename: f.name, mime: f.type || 'image/jpeg' })
-      });
-      meta = await resp.json();
-    } catch {
-      URL.revokeObjectURL(preview);
-      alert('Could not get upload URL; try again.');
-      continue;
-    }
-
-    const finalPath = meta.path || meta.storage_path || '';
-    if (!finalPath) {
-      URL.revokeObjectURL(preview);
-      alert('Upload target missing (no storage path).');
-      continue;
-    }
-
-    // 3) Upload using whichever shape the API returned
-    try {
-      if (meta.signedUploadUrl) {
-        // Supabase createSignedUploadUrl requires token + file (multipart/form-data)
-        const fd = new FormData();
-        fd.append('file', f);
-        if (meta.token) fd.append('token', meta.token); // <-- REQUIRED by Supabase
-        const up = await fetch(meta.signedUploadUrl, { method: 'POST', body: fd });
-        if (!up.ok) {
-          const txt = await up.text().catch(() => '');
-          throw new Error(`Signed upload failed (${up.status}). ${txt}`);
-        }
-      } else if (meta.uploadUrl) {
-        // Legacy/generic signed PUT
-        const up = await fetch(meta.uploadUrl, {
-          method: 'PUT',
-          headers: { 'Content-Type': meta.mime || 'application/octet-stream' },
-          body: f
-        });
-        if (!up.ok) {
-          const txt = await up.text().catch(() => '');
-          throw new Error(`PUT upload failed (${up.status}). ${txt}`);
-        }
-      } else {
-        throw new Error('No signedUploadUrl or uploadUrl provided');
+      if (tooSmall || tooBig) {
+        alert(
+          `Rejected "${f.name}": ` +
+          (tooSmall ? `min longest side is 1024px (got ${dims.width}×${dims.height}). ` : '') +
+          (tooBig ? `file > 6MB.` : '')
+        );
+        continue;
       }
 
-      // 4) Success → add to UI
-      uploaded.push({
-        name: f.name,
-        shotId,
-        url: finalPath,           // store the object key (used later for signing/preview)
-        width: dims.width,
-        height: dims.height,
-        preview
-      });
-    } catch (e) {
-      URL.revokeObjectURL(preview);
-      console.warn('[capture addFiles] upload error:', e?.message || e);
-      alert('Upload failed. Please try again.');
+      const preview = URL.createObjectURL(f);
+
+      // 2) Ask backend for upload target
+      let meta = {};
+      try {
+        const resp = await fetch('/api/upload-url', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ turnId, shotId, filename: f.name, mime: f.type || 'image/jpeg' })
+        });
+        meta = await resp.json();
+      } catch {
+        URL.revokeObjectURL(preview);
+        alert('Could not get upload URL; try again.');
+        continue;
+      }
+
+      const finalPath = meta.path || meta.storage_path || '';
+      if (!finalPath) {
+        URL.revokeObjectURL(preview);
+        alert('Upload target missing (no storage path).');
+        continue;
+      }
+
+      // 3) Upload using whichever shape the API returned
+      try {
+        if (meta.signedUploadUrl) {
+          // Supabase createSignedUploadUrl requires token + file (multipart/form-data)
+          const fd = new FormData();
+          fd.append('file', f);
+          if (meta.token) fd.append('token', meta.token); // REQUIRED by Supabase
+
+          // >>> PATCH: include Authorization header with public anon key <<<
+          const up = await fetch(meta.signedUploadUrl, {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY}`,
+            },
+            body: fd,
+          });
+          if (!up.ok) {
+            const txt = await up.text().catch(() => '');
+            throw new Error(`Signed upload failed (${up.status}). ${txt}`);
+          }
+        } else if (meta.uploadUrl) {
+          // Legacy/generic signed PUT
+          const up = await fetch(meta.uploadUrl, {
+            method: 'PUT',
+            headers: { 'Content-Type': meta.mime || 'application/octet-stream' },
+            body: f
+          });
+          if (!up.ok) {
+            const txt = await up.text().catch(() => '');
+            throw new Error(`PUT upload failed (${up.status}). ${txt}`);
+          }
+        } else {
+          throw new Error('No signedUploadUrl or uploadUrl provided');
+        }
+
+        // 4) Success → add to UI
+        uploaded.push({
+          name: f.name,
+          shotId,
+          url: finalPath,           // store the object key (used later for signing/preview)
+          width: dims.width,
+          height: dims.height,
+          preview
+        });
+      } catch (e) {
+        URL.revokeObjectURL(preview);
+        console.warn('[capture addFiles] upload error:', e?.message || e);
+        alert('Upload failed. Please try again.');
+      }
     }
-  }
 
-  if (uploaded.length) {
-    setUploadsByShot(prev => ({ ...prev, [shotId]: [ ...(prev[shotId] || []), ...uploaded ] }));
-  }
+    if (uploaded.length) {
+      setUploadsByShot(prev => ({ ...prev, [shotId]: [ ...(prev[shotId] || []), ...uploaded ] }));
+    }
 
-  // Allow selecting the same file again if needed
-  try {
-    const el = inputRefs.current[shotId];
-    if (el) el.value = '';
-  } catch {}
-}
+    // Allow selecting the same file again if needed
+    try {
+      const el = inputRefs.current[shotId];
+      if (el) el.value = '';
+    } catch {}
+  }
 
   // -------- Submit initial turn --------
   async function submitAll() {
