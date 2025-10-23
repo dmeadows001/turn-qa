@@ -110,7 +110,7 @@ export default function Capture() {
       }
     });
   }
-  
+
   function ensureThumb(path) {
     if (!path || requestedThumbsRef.current.has(path) || thumbByPath[path]) return;
     requestedThumbsRef.current.add(path);
@@ -231,6 +231,15 @@ export default function Capture() {
     })();
   }, [turnId]);
 
+  // ---------- PATCH helper: convert File -> base64 for proxy fallback ----------
+  async function fileToBase64(file) {
+    const arrayBuf = await file.arrayBuffer();
+    let binary = '';
+    const bytes = new Uint8Array(arrayBuf);
+    for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+    return btoa(binary);
+  }
+
   // -------- Add files (quality + upload to Storage) --------
   async function addFiles(shotId, fileList) {
     const files = Array.from(fileList || []);
@@ -278,24 +287,48 @@ export default function Capture() {
 
       // 3) Upload using whichever shape the API returned
       try {
-        // PREFER legacy signed PUT (works with your existing policies)
+        let ok = false;
+
+        // Prefer legacy PUT if you have it
         if (meta.uploadUrl) {
           const up = await fetch(meta.uploadUrl, {
             method: 'PUT',
             headers: { 'Content-Type': meta.mime || 'application/octet-stream' },
             body: f
           });
-          if (!up.ok) {
+          ok = up.ok;
+          if (!ok) {
             const txt = await up.text().catch(() => '');
             throw new Error(`PUT upload failed (${up.status}). ${txt}`);
           }
         } else if (meta.signedUploadUrl) {
-          // Fallback: Supabase signed upload (multipart/form-data)
+          // Try Supabase signed upload first
           const fd = new FormData();
           fd.append('file', f);
-          if (meta.token) fd.append('token', meta.token); // required by Supabase when provided
+          if (meta.token) fd.append('token', meta.token); // Supabase requires when provided
           const up = await fetch(meta.signedUploadUrl, { method: 'POST', body: fd });
-          if (!up.ok) {
+          ok = up.ok;
+
+          // If blocked by RLS (401/403), fall back to server proxy (service role)
+          if (!ok && (up.status === 401 || up.status === 403)) {
+            const dataBase64 = await fileToBase64(f);
+            const proxy = await fetch('/api/upload-proxy', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                path: finalPath,
+                mime: meta.mime || f.type || 'image/jpeg',
+                dataBase64
+              })
+            });
+            ok = proxy.ok;
+            if (!ok) {
+              const j = await proxy.json().catch(() => ({}));
+              throw new Error(`Proxy upload failed: ${j.error || proxy.statusText}`);
+            }
+          }
+
+          if (!ok) {
             const txt = await up.text().catch(() => '');
             throw new Error(`Signed upload failed (${up.status}). ${txt}`);
           }
