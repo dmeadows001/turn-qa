@@ -90,6 +90,27 @@ export default function Capture() {
     return json.url;
   }
 
+// --- Image dimension helper (safe if load fails) ---
+async function getDims(file) {
+  return new Promise((resolve) => {
+    try {
+      const img = new Image();
+      img.onload = () => {
+        const dims = { width: img.naturalWidth || 0, height: img.naturalHeight || 0 };
+        URL.revokeObjectURL(img.src);
+        resolve(dims);
+      };
+      img.onerror = () => {
+        // If we can't read dimensions (e.g., HEIC on some desktops), don't block upload
+        resolve({ width: 0, height: 0 });
+      };
+      img.src = URL.createObjectURL(file);
+    } catch {
+      resolve({ width: 0, height: 0 });
+    }
+  });
+}
+  
   function ensureThumb(path) {
     if (!path || requestedThumbsRef.current.has(path) || thumbByPath[path]) return;
     requestedThumbsRef.current.add(path);
