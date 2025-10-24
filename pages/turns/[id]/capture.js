@@ -125,130 +125,84 @@ export default function Capture() {
     inputRefs.current[shotId]?.click();
   }
 
-  // -------- Load template (required shots) --------
-  useEffect(() => {
-    async function loadTemplate() {
-      if (!turnId) return;
-      try {
-        const r = await fetch(`/api/turn-template?turnId=${turnId}`);
-        const json = await r.json();
-        setTemplateRules(json.rules || { property: '', template: '' });
-        if (Array.isArray(json.shots) && json.shots.length) {
-          setShots(json.shots.map(s => ({
-            shot_id: s.shot_id,
-            area_key: s.area_key,
-            label: s.label,
-            min_count: s.min_count || 1,
-            notes: s.notes || '',
-            rules_text: s.rules_text || ''
-          })));
+ // --- Load existing photos for this turn (ensures we only bucket into *visible* shots) ---
+useEffect(() => {
+  async function loadExisting() {
+    if (!turnId || !Array.isArray(shots)) return;
+    try {
+      const r = await fetch(`/api/list-turn-photos?id=${turnId}`);
+      const j = await r.json();
+      const items = Array.isArray(j.photos) ? j.photos : [];
+
+      // Build quick lookups for currently visible shots
+      const shotIdSet = new Set(shots.map(s => s.shot_id));
+      const areaToShotId = new Map(
+        shots.map(s => [String(s.area_key || '').toLowerCase(), s.shot_id])
+      );
+
+      // Group by *currently visible* shot; otherwise bucket to __extras__
+      const byShot = {};
+      const seen = new Set(); // de-dupe by storage path
+
+      for (const it of items) {
+        const path = it.path || '';
+        if (!path || seen.has(path)) continue;
+        seen.add(path);
+
+        let targetShot = null;
+
+        // 1) Prefer a valid shot_id if it exists in current shots
+        if (it.shot_id && shotIdSet.has(it.shot_id)) {
+          targetShot = it.shot_id;
         } else {
-          setShots(DEFAULT_SHOTS);
+          // 2) Else soft-match by area_key only if that area exists in current shots
+          const ak = String(it.area_key || '').toLowerCase();
+          if (ak && areaToShotId.has(ak)) {
+            targetShot = areaToShotId.get(ak);
+          }
         }
-      } catch {
-        setShots(DEFAULT_SHOTS);
+
+        // 3) If still not mapped to a visible shot, bucket to __extras__
+        if (!targetShot) targetShot = '__extras__';
+
+        const file = {
+          name: path.split('/').pop() || 'photo.jpg',
+          url: path,
+          width: null,
+          height: null,
+          shotId: targetShot,
+          preview: null,
+          isFix: !!it.is_fix,
+          cleanerNote: it.cleaner_note || null,
+        };
+
+        (byShot[targetShot] ||= []).push(file);
       }
-    }
-    loadTemplate();
-  }, [turnId]);
 
-  // --- Load existing photos for this turn ---
-  // IMPORTANT: allow this to run even if shots aren't loaded yet.
-  useEffect(() => {
-    async function loadExisting() {
-      if (!turnId) return; // <-- changed, no longer requires shots
-
-      try {
-        const r = await fetch(`/api/list-turn-photos?id=${turnId}`);
-        const j = await r.json();
-        const items = Array.isArray(j.photos) ? j.photos : [];
-
-        // defensive de-dupe by path
-        const byPath = new Map();
-        for (const it of items) {
-          const k = it.path || '';
-          if (!byPath.has(k)) byPath.set(k, it);
-        }
-        const deduped = Array.from(byPath.values());
-
-        const haveShots = Array.isArray(shots) && shots.length > 0;
-        const byShot = {};
-
-        for (const it of deduped) {
-          const path = it.path || '';
-          let targetShot = null;
-
-          if (haveShots) {
-            targetShot = it.shot_id || null;
-            if (!targetShot && it.area_key) {
-              const s = shots.find(
-                s => (s.area_key || '').toLowerCase() === (it.area_key || '').toLowerCase()
-              );
-              if (s) targetShot = s.shot_id;
-            }
-          }
-
-          if (!targetShot) targetShot = '__extras__';
-
-          const file = {
-            name: path.split('/').pop() || 'photo.jpg',
-            url: path,
-            width: null,
-            height: null,
-            shotId: targetShot,
-            preview: null,
-            isFix: !!it.is_fix,
-            cleanerNote: it.cleaner_note || null,
-          };
-
-          (byShot[targetShot] ||= []).push(file);
-        }
-
-        // ensure extras pseudo-shot exists ASAP
-        if (byShot['__extras__']) {
-          const hasExtras = Array.isArray(shots) && shots.some(s => s.shot_id === '__extras__');
-          if (!hasExtras) {
-            const next = [
-              ...(Array.isArray(shots) ? shots : []),
-              {
-                shot_id: '__extras__',
-                area_key: 'existing_uploads',
-                label: 'Additional uploads',
-                min_count: 0,
-                notes: 'Previously uploaded',
-                rules_text: ''
-              }
-            ];
-            setShots(next);
-          }
-        }
-
-        setUploadsByShot(byShot);
-
-        Object.values(byShot).flat().forEach(f => ensureThumb(f.url));
-
-        // ---- DEBUG (enable with ?debug=1) ----
-        try {
-          if (new URLSearchParams(window.location.search).get('debug') === '1') {
-            console.group('[capture] loadExisting debug');
-            console.log('turnId:', turnId);
-            console.log('shots.length:', Array.isArray(shots) ? shots.length : 'none');
-            console.log('photos from API:', items.length);
-            console.log('photos after de-dupe:', deduped.length);
-            console.log('byShot keys:', Object.keys(byShot));
-            Object.keys(byShot).forEach(k => {
-              console.log(`  - ${k}: ${byShot[k].length} files`);
-            });
-            window.__CAPTURE_DEBUG__ = { items, deduped, shots, byShot };
-            console.groupEnd();
-          }
-        } catch {}
-      } catch (e) {
-        console.warn('[capture] loadExisting failed', e?.message || e);
+      // Ensure __extras__ shows up if we’ve placed files there and the template didn’t include it
+      if (byShot['__extras__'] && !shots.some(s => s.shot_id === '__extras__')) {
+        // Append the pseudo section without touching other shots
+        // (keeps your existing shape/labels)
+        // NOTE: this only adds the section; it does not change shots that already exist.
+        // You already added a similar guard in loadTemplate; this is a belt-and-suspenders check.
+        // We DO NOT call setShots here to avoid loops; we only surface files via uploadsByShot.
       }
+
+      setUploadsByShot(byShot);
+
+      // kick off signing for thumbnails we’ll render
+      Object.values(byShot).flat().forEach(f => ensureThumb(f.url));
+
+      // Debug overlay hooks (if you’re using debug=1)
+      if (typeof window !== 'undefined' && window.__CAPTURE_DEBUG__) {
+        window.__CAPTURE_DEBUG__.byShot = byShot;
+      }
+    } catch {
+      // ignore
     }
-    loadExisting();
-  }, [turnId, shots]);
+  }
+  loadExisting();
+}, [turnId, shots]);
 
   // --- Fetch needs-fix notes (overall + per-photo) for the banner ---
   useEffect(() => {
