@@ -80,20 +80,15 @@ export default function Capture() {
   const smallMeta = { fontSize: 12, color: '#94a3b8' };
 
   async function signPath(path) {
-  const resp = await fetch('/api/sign-photo', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      // NEW: pass anon key so your API’s header validator is happy
-      Authorization: `Bearer ${process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''}`,
-    },
-    body: JSON.stringify({ path, expires: 600 })
-  });
-  if (!resp.ok) throw new Error('sign failed');
-  const json = await resp.json();
-  return json.url;
-}
-
+    const resp = await fetch('/api/sign-photo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path, expires: 600 })
+    });
+    if (!resp.ok) throw new Error('sign failed');
+    const json = await resp.json();
+    return json.url;
+  }
 
   // --- Image dimension helper (safe if load fails) ---
   async function getDims(file) {
@@ -115,7 +110,7 @@ export default function Capture() {
       }
     });
   }
-
+  
   function ensureThumb(path) {
     if (!path || requestedThumbsRef.current.has(path) || thumbByPath[path]) return;
     requestedThumbsRef.current.add(path);
@@ -157,97 +152,99 @@ export default function Capture() {
     loadTemplate();
   }, [turnId]);
 
-  // --- Load existing photos for this turn (NOW via list-turn-photos so we get is_fix & cleaner_note) ---
+  // --- Load existing photos for this turn ---
+  // IMPORTANT: allow this to run even if shots aren't loaded yet.
   useEffect(() => {
     async function loadExisting() {
-      if (!turnId || !Array.isArray(shots)) return;
+      if (!turnId) return; // <-- changed, no longer requires shots
+
       try {
         const r = await fetch(`/api/list-turn-photos?id=${turnId}`);
         const j = await r.json();
-        const items = Array.isArray(j.photos)
-          ? Array.from(new Map(j.photos.map(p => [p.path || '', p])).values())
-          : [];
+        const items = Array.isArray(j.photos) ? j.photos : [];
 
+        // defensive de-dupe by path
+        const byPath = new Map();
+        for (const it of items) {
+          const k = it.path || '';
+          if (!byPath.has(k)) byPath.set(k, it);
+        }
+        const deduped = Array.from(byPath.values());
 
-        function uniqueByStableKeyPhotos(list) {
-          const seen = new Set();
-          const out = [];
-          for (const p of list) {
-            const k = p.id ? `id:${p.id}` : `p:${p.path}|t:${p.created_at}`;
-            if (seen.has(k)) continue;
-            seen.add(k);
-            out.push(p);
-          }
-          return out;
-          }
+        const haveShots = Array.isArray(shots) && shots.length > 0;
+        const byShot = {};
 
-        // group by shot_id when present; otherwise fall back to area_key/label matching
-          const byShot = {};
-            for (const it of deduped) {
+        for (const it of deduped) {
           const path = it.path || '';
-          const shotId = it.shot_id || null;
+          let targetShot = null;
 
-          // build file model used by UI
+          if (haveShots) {
+            targetShot = it.shot_id || null;
+            if (!targetShot && it.area_key) {
+              const s = shots.find(
+                s => (s.area_key || '').toLowerCase() === (it.area_key || '').toLowerCase()
+              );
+              if (s) targetShot = s.shot_id;
+            }
+          }
+
+          if (!targetShot) targetShot = '__extras__';
+
           const file = {
             name: path.split('/').pop() || 'photo.jpg',
             url: path,
             width: null,
             height: null,
-            shotId: null,
+            shotId: targetShot,
             preview: null,
             isFix: !!it.is_fix,
             cleanerNote: it.cleaner_note || null,
           };
 
-          // --- NEW: de-dupe by storage path (keep newest)
-          const latestByPath = {};
-          for (const it of items) {
-            const p = it.path || '';
-            if (!p) continue;
-            const t = new Date(it.created_at || 0).getTime();
-            if (!latestByPath[p] || t > latestByPath[p]._t) {
-              latestByPath[p] = { ...it, _t: t };
-            }
-          }
-          const deduped = Object.values(latestByPath);
-
-
-          let targetShot = shotId;
-          if (!targetShot) {
-            // soft match by area_key if needed
-            const s = shots.find(s => (s.area_key || '').toLowerCase() === (it.area_key || '').toLowerCase());
-            if (s) targetShot = s.shot_id;
-          }
-          if (!targetShot) targetShot = '__extras__';
-
-          file.shotId = targetShot;
           (byShot[targetShot] ||= []).push(file);
         }
 
-        // if extras exist, make sure the pseudo-shot is present *before* we set uploads
-        if (byShot['__extras__'] && !shots.some(s => s.shot_id === '__extras__')) {
-          // add synchronously so the following render has the section ready
-          const next = [
-            ...(Array.isArray(shots) ? shots : []),
-            {
-              shot_id: '__extras__',
-              area_key: 'existing_uploads',
-              label: 'Additional uploads',
-              min_count: 0,
-              notes: 'Previously uploaded',
-              rules_text: ''
-            }
-          ];
-          setShots(next);
+        // ensure extras pseudo-shot exists ASAP
+        if (byShot['__extras__']) {
+          const hasExtras = Array.isArray(shots) && shots.some(s => s.shot_id === '__extras__');
+          if (!hasExtras) {
+            const next = [
+              ...(Array.isArray(shots) ? shots : []),
+              {
+                shot_id: '__extras__',
+                area_key: 'existing_uploads',
+                label: 'Additional uploads',
+                min_count: 0,
+                notes: 'Previously uploaded',
+                rules_text: ''
+              }
+            ];
+            setShots(next);
+          }
         }
 
         setUploadsByShot(byShot);
 
-
-        // sign thumbnails for visible files
         Object.values(byShot).flat().forEach(f => ensureThumb(f.url));
-      } catch {
-        // ignore
+
+        // ---- DEBUG (enable with ?debug=1) ----
+        try {
+          if (new URLSearchParams(window.location.search).get('debug') === '1') {
+            console.group('[capture] loadExisting debug');
+            console.log('turnId:', turnId);
+            console.log('shots.length:', Array.isArray(shots) ? shots.length : 'none');
+            console.log('photos from API:', items.length);
+            console.log('photos after de-dupe:', deduped.length);
+            console.log('byShot keys:', Object.keys(byShot));
+            Object.keys(byShot).forEach(k => {
+              console.log(`  - ${k}: ${byShot[k].length} files`);
+            });
+            window.__CAPTURE_DEBUG__ = { items, deduped, shots, byShot };
+            console.groupEnd();
+          }
+        } catch {}
+      } catch (e) {
+        console.warn('[capture] loadExisting failed', e?.message || e);
       }
     }
     loadExisting();
@@ -273,15 +270,6 @@ export default function Capture() {
       } catch {}
     })();
   }, [turnId]);
-
-  // ---------- PATCH helper: convert File -> base64 for proxy fallback ----------
-  async function fileToBase64(file) {
-    const arrayBuf = await file.arrayBuffer();
-    let binary = '';
-    const bytes = new Uint8Array(arrayBuf);
-    for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
-    return btoa(binary);
-  }
 
   // -------- Add files (quality + upload to Storage) --------
   async function addFiles(shotId, fileList) {
@@ -330,48 +318,24 @@ export default function Capture() {
 
       // 3) Upload using whichever shape the API returned
       try {
-        let ok = false;
-
-        // Prefer legacy PUT if you have it
+        // PREFER legacy signed PUT (works with your existing policies)
         if (meta.uploadUrl) {
           const up = await fetch(meta.uploadUrl, {
             method: 'PUT',
             headers: { 'Content-Type': meta.mime || 'application/octet-stream' },
             body: f
           });
-          ok = up.ok;
-          if (!ok) {
+          if (!up.ok) {
             const txt = await up.text().catch(() => '');
             throw new Error(`PUT upload failed (${up.status}). ${txt}`);
           }
         } else if (meta.signedUploadUrl) {
-          // Try Supabase signed upload first
+          // Fallback: Supabase signed upload (multipart/form-data)
           const fd = new FormData();
           fd.append('file', f);
-          if (meta.token) fd.append('token', meta.token); // Supabase requires when provided
+          if (meta.token) fd.append('token', meta.token); // required by Supabase when provided
           const up = await fetch(meta.signedUploadUrl, { method: 'POST', body: fd });
-          ok = up.ok;
-
-          // If blocked by RLS (401/403), fall back to server proxy (service role)
-          if (!ok && (up.status === 401 || up.status === 403)) {
-            const dataBase64 = await fileToBase64(f);
-            const proxy = await fetch('/api/upload-proxy', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                path: finalPath,
-                mime: meta.mime || f.type || 'image/jpeg',
-                dataBase64
-              })
-            });
-            ok = proxy.ok;
-            if (!ok) {
-              const j = await proxy.json().catch(() => ({}));
-              throw new Error(`Proxy upload failed: ${j.error || proxy.statusText}`);
-            }
-          }
-
-          if (!ok) {
+          if (!up.ok) {
             const txt = await up.text().catch(() => '');
             throw new Error(`Signed upload failed (${up.status}). ${txt}`);
           }
@@ -387,8 +351,7 @@ export default function Capture() {
           width: dims.width,
           height: dims.height,
           preview,
-          // New uploads during the needs-fix flow should be highlighted as FIX
-          isFix: (tab === 'needs-fix'),
+          isFix: true               // new uploads on needs-fix flow are fixes (keeps green tag)
         });
       } catch (e) {
         URL.revokeObjectURL(preview);
@@ -477,9 +440,7 @@ export default function Capture() {
       }
 
       alert('Fixes submitted for review ✅');
-      // Optionally redirect cleaner to their list:
-      // window.location.href = '/cleaner/turns';
-      // Or refresh to fetch persisted is_fix + notes
+      // Refresh to fetch persisted is_fix + notes (and manager status change)
       window.location.reload();
     } finally {
       setTimeout(() => setSubmitting(false), 200);
@@ -487,7 +448,12 @@ export default function Capture() {
   }
 
   // -------- Render --------
-  if (!turnId || shots === null) {
+  const debugOn = (() => {
+    try { return new URLSearchParams(window.location.search).get('debug') === '1'; }
+    catch { return false; }
+  })();
+
+  if (!turnId) {
     return (
       <ChromeDark title="Start Taking Photos">
         <section style={ui.sectionGrid}>
@@ -498,6 +464,7 @@ export default function Capture() {
   }
 
   const hasFixes = (fixNotes?.count || 0) > 0;
+  const renderShots = Array.isArray(shots) ? shots : [];
 
   return (
     <ChromeDark title="Start Taking Photos">
@@ -536,7 +503,7 @@ export default function Capture() {
           )}
 
           {/* Shots */}
-          {shots.map(s => {
+          {renderShots.map(s => {
             const files = uploadsByShot[s.shot_id] || [];
             const required = s.min_count || 1;
             const missing = Math.max(0, required - files.length);
@@ -713,6 +680,21 @@ export default function Capture() {
             )}
           </div>
         </div>
+
+        {/* Debug widget (only if ?debug=1) */}
+        {debugOn && (
+          <div style={{
+            position:'fixed', bottom:12, right:12, zIndex:9999,
+            background:'#0b1220', border:'1px solid #334155', borderRadius:8,
+            padding:'8px 10px', color:'#cbd5e1', fontSize:12
+          }}>
+            <div style={{fontWeight:700, marginBottom:4}}>Debug</div>
+            <div>shots: {Array.isArray(shots) ? shots.length : '—'}</div>
+            <div>sections with files: {
+              Object.entries(uploadsByShot || {}).filter(([,list]) => (list||[]).length>0).length
+            }</div>
+          </div>
+        )}
       </section>
     </ChromeDark>
   );
