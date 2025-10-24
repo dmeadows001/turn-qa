@@ -224,15 +224,25 @@ export default function Capture() {
           (byShot[targetShot] ||= []).push(file);
         }
 
-        // if extras exist, add a pseudo-shot
+        // if extras exist, make sure the pseudo-shot is present *before* we set uploads
         if (byShot['__extras__'] && !shots.some(s => s.shot_id === '__extras__')) {
-          setShots(prev => [
-            ...(prev || []),
-            { shot_id: '__extras__', area_key: 'existing_uploads', label: 'Additional uploads', min_count: 0, notes: 'Previously uploaded', rules_text: '' }
-          ]);
+          // add synchronously so the following render has the section ready
+          const next = [
+            ...(Array.isArray(shots) ? shots : []),
+            {
+              shot_id: '__extras__',
+              area_key: 'existing_uploads',
+              label: 'Additional uploads',
+              min_count: 0,
+              notes: 'Previously uploaded',
+              rules_text: ''
+            }
+          ];
+          setShots(next);
         }
 
         setUploadsByShot(byShot);
+
 
         // sign thumbnails for visible files
         Object.values(byShot).flat().forEach(f => ensureThumb(f.url));
