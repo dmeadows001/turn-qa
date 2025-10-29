@@ -72,7 +72,7 @@ export default function TemplateBuilder() {
         // 3) Load template shots
         const { data: s, error: sErr } = await supabase
           .from('template_shots')
-          .select('id, template_id, label, required, area_key, created_at')
+          .select('id, template_id, label, min_count, area_key, created_at')
           .eq('template_id', tpl.id)
           .order('created_at', { ascending: true });
         if (sErr) throw sErr;
@@ -101,9 +101,9 @@ export default function TemplateBuilder() {
           template_id: template.id,
           label,
           area_key: newArea,
-          required
+          min_count: required
         })
-        .select('id, template_id, label, required, area_key, created_at')
+        .select('id, template_id, label, min_count, area_key, created_at')
         .single();
       if (error) throw error;
 
@@ -141,8 +141,8 @@ export default function TemplateBuilder() {
   async function updateRequired(id, val) {
     const required = Math.max(1, parseInt(val || 1, 10));
     try {
-      setShots(prev => prev.map(s => s.id === id ? { ...s, required } : s));
-      const { error } = await supabase.from('template_shots').update({ required }).eq('id', id);
+      setShots(prev => prev.map(s => s.id === id ? { ...s, min_count: required } : s));
+      const { error } = await supabase.from('template_shots').update({ min_count: required }).eq('id', id);
       if (error) throw error;
     } catch (e) {
       setMsg(e.message || 'Update failed');
@@ -274,7 +274,7 @@ export default function TemplateBuilder() {
                           type="number"
                           min={1}
                           step={1}
-                          value={s.required || 1}
+                          value={s.min_count || 1}
                           onChange={e => updateRequired(s.id, e.target.value)}
                           style={{ ...ui.input }}
                         />
