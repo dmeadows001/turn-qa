@@ -8,7 +8,7 @@ export default async function handler(req, res) {
       typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
     const flags = [];
 
-     // Prefer per-turn required list; fallback to global REQUIRED_AREAS
+    // Prefer per-turn required list from the client; fall back to global defaults
     const REQUIRED = Array.isArray(requiredOverride) && requiredOverride.length
       ? requiredOverride
       : REQUIRED_AREAS;
