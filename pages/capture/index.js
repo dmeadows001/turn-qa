@@ -57,6 +57,29 @@ export default function Capture() {
 
   const [activeTab, setActiveTab] = useState(tabParam || 'fix'); // default to fix
 
+   // If a specific turn is provided (?turn=...), route directly to the correct capture view.
+  // - in_progress  -> /turns/:id/capture?from=capture      (initial capture)
+  // - needs_fix    -> /turns/:id/capture?tab=needs-fix     (fix flow)
+  useEffect(() => {
+    if (!turnParam) return;
+    (async () => {
+      try {
+        const r = await fetch(`/api/get-turn?id=${encodeURIComponent(turnParam)}`);
+        const j = await r.json().catch(() => ({}));
+        const t = j?.turn;
+        if (!t) return;
+        if (t.status === 'in_progress') {
+          window.location.replace(`/turns/${turnParam}/capture?from=capture`);
+          return;
+        }
+        if (t.status === 'needs_fix') {
+          window.location.replace(`/turns/${turnParam}/capture?tab=needs-fix`);
+          return;
+        }
+      } catch {}
+    })();
+  }, [turnParam]);
+
   // ------------------------------------------------------------------
   // 1) Check cookie; if logged in as cleaner, preload properties + needs_fix
   // ------------------------------------------------------------------
@@ -164,7 +187,7 @@ export default function Capture() {
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || 'start failed');
       if (!j.turn_id) throw new Error('No turn id returned');
-      window.location.href = `/turns/${j.turn_id}/capture`;
+      window.location.href = `/turns/${j.turn_id}/capture?from=capture`;
     } catch (e) {
       setMsg(e.message || 'Start failed');
     } finally {
@@ -267,7 +290,7 @@ export default function Capture() {
                       </div>
                     </div>
                     <a
-                      href={`/turns/${t.id}/capture`}
+                      href={`/turns/${t.id}/capture?tab=needs-fix`}
                       style={{ ...ui.btnPrimary, display: 'inline-block' }}
                     >
                       Resume
