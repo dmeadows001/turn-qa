@@ -220,10 +220,15 @@ export default function Capture() {
       setPrecheckBusy(true);
       setPrecheckFlags([]);
       const uploadsByArea = buildUploadsByArea();
+      const required = (Array.isArray(shots) ? shots : []).map(s => ({
+        key: s.area_key,
+        title: s.label,
+        minPhotos: s.min_count || 1,
+      }));
       const r = await fetch('/api/vision-precheck', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ uploadsByArea })
+        body: JSON.stringify({ uploadsByArea, required }),
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error || 'pre-check failed');
