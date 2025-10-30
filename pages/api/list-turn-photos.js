@@ -38,8 +38,11 @@ export default async function handler(req, res) {
     let tpErr = null;
 
     const trySelect = async (withOptional) => {
-      const base = 'id, turn_id, shot_id, path, created_at, area_key';
-      const opt  = withOptional ? ', is_fix, cleaner_note' : '';
+      // include all plausible path columns so we can normalize later
+      const base =
+        'id, turn_id, shot_id, created_at, area_key, ' +
+        'path, storage_path, photo_path, url, file';
+      const opt = withOptional ? ', is_fix, cleaner_note' : '';
       return await supa
         .from('turn_photos')
         .select(base + opt)
@@ -95,7 +98,15 @@ export default async function handler(req, res) {
     for (const r of tpRows) {
       const areaKey = r.area_key || tsMap[String(r.shot_id)] || '';
 
-      let objPath = cleanPath(r.path);
+      // Normalize across multiple possible column names
+      const rawPath =
+        r.path ||
+        r.storage_path ||
+        r.photo_path ||
+        r.url ||
+        r.file ||
+        '';
+      let objPath = cleanPath(rawPath);
       if (!objPath) {
         objPath = `turns/${turnId}/${r.shot_id || ''}`.replace(/\/+$/, '');
       }
