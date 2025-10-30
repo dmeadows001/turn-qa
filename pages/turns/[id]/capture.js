@@ -52,6 +52,21 @@ export default function Capture() {
   const turnId = typeof query.id === 'string' ? query.id : '';
   const tab = typeof query.tab === 'string' ? query.tab : 'capture'; // 'needs-fix' when coming from SMS
 
+  // --- Guard: define isFixMode so incidental references don't crash (e.g., in alerts/traces) ---
+  const isFixMode = (() => {
+    try {
+      const sp = new URLSearchParams(window.location.search);
+      const t = String(sp.get('tab') || '').toLowerCase();
+      return t === 'needs-fix' || t === 'needs_fix' || t === 'fix';
+    } catch {
+      return false;
+    }
+  })();
+  if (typeof window !== 'undefined') {
+    window.__CAPTURE_DEBUG__ = window.__CAPTURE_DEBUG__ || {};
+    window.__CAPTURE_DEBUG__.isFixMode = isFixMode;
+  }
+
   useEffect(() => {
     if (!turnId) return;
     if (tab === 'needs-fix') return; // allow fix flow to use this page
