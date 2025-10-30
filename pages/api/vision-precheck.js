@@ -4,11 +4,17 @@ export default async function handler(req, res) {
   try {
     if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-    const { uploadsByArea = {} } = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+    const { uploadsByArea = {}, required: requiredOverride } =
+      typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
     const flags = [];
 
-    // Enforce minimum photos per required area
-    REQUIRED_AREAS.forEach(a => {
+     // Prefer per-turn required list; fallback to global REQUIRED_AREAS
+    const REQUIRED = Array.isArray(requiredOverride) && requiredOverride.length
+      ? requiredOverride
+      : REQUIRED_AREAS;
+
+    // Enforce minimum photos per required area (scoped to this turn)
+    REQUIRED.forEach(a => {
       const count = (uploadsByArea[a.key] || []).length;
       if (count < a.minPhotos) flags.push(`Add ${a.minPhotos - count} more photo(s) for: ${a.title}`);
     });
