@@ -441,29 +441,59 @@ useEffect(() => {
 
       // 3) Upload using whichever shape the API returned
       try {
-        // PREFER legacy signed PUT (works with your existing policies)
-        if (meta.uploadUrl) {
+        // Tiny trace id for this file attempt
+        const traceId = Math.random().toString(36).slice(2, 8);
+        let done = false;
+        const tried = [];
+
+        // Helper to expose what happened when ?debug=1
+        const trace = (obj) => {
+          try {
+            if (typeof window !== 'undefined' && window.__CAPTURE_DEBUG__) {
+              window.__CAPTURE_DEBUG__.lastUpload = {
+                ...(window.__CAPTURE_DEBUG__.lastUpload || {}),
+                [traceId]: { name: f.name, path: finalPath, ...obj },
+              };
+            }
+          } catch {}
+          console.debug('[capture upload]', traceId, obj);
+        };
+
+        // Try proxy PUT first (keeps existing preference)
+        if (meta.uploadUrl && !done) {
           const up = await fetch(meta.uploadUrl, {
             method: 'PUT',
             headers: { 'Content-Type': meta.mime || 'application/octet-stream' },
-            body: f
+            body: f,
           });
-          if (!up.ok) {
+          tried.push(`proxy:${up.status}`);
+          if (up.ok) {
+            done = true;
+            trace({ via: 'proxy', status: up.status });
+          } else {
             const txt = await up.text().catch(() => '');
-            throw new Error(`PUT upload failed (${up.status}). ${txt}`);
+            trace({ via: 'proxy', status: up.status, err: txt.slice(0, 200) });
           }
-        } else if (meta.signedUploadUrl) {
-          // Fallback: Supabase signed upload (multipart/form-data)
+        }
+
+        // Fallback: Supabase signed upload (multipart/form-data)
+        if (!done && meta.signedUploadUrl) {
           const fd = new FormData();
           fd.append('file', f);
-          if (meta.token) fd.append('token', meta.token); // required by Supabase when provided
-          const up = await fetch(meta.signedUploadUrl, { method: 'POST', body: fd });
-          if (!up.ok) {
-            const txt = await up.text().catch(() => '');
-            throw new Error(`Signed upload failed (${up.status}). ${txt}`);
+          if (meta.token) fd.append('token', meta.token);
+          const up2 = await fetch(meta.signedUploadUrl, { method: 'POST', body: fd });
+          tried.push(`signed:${up2.status}`);
+          if (up2.ok) {
+            done = true;
+            trace({ via: 'signed', status: up2.status });
+          } else {
+            const txt2 = await up2.text().catch(() => '');
+            trace({ via: 'signed', status: up2.status, err: txt2.slice(0, 200) });
           }
-        } else {
-          throw new Error('No signedUploadUrl or uploadUrl provided');
+        }
+
+        if (!done) {
+          throw new Error(`All upload paths failed (${tried.join(', ')}).`);
         }
 
         // 4) Success → add to UI
@@ -479,7 +509,7 @@ useEffect(() => {
       } catch (e) {
         URL.revokeObjectURL(preview);
         console.warn('[capture addFiles] upload error:', e?.message || e);
-        alert('Upload failed. Please try again.');
+        alert(`Upload failed. Please try again.\n(${e?.message || 'unknown error'})`);
       }
     }
 
