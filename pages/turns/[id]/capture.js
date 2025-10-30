@@ -62,6 +62,11 @@ export default function Capture() {
         const j = await r.json().catch(() => ({}));
         const t = j && (j.turn || null);
         if (t && t.status === 'in_progress') {
+          // If launcher initiated this visit, do NOT bounce (prevents loop).
+          try {
+            const sp = new URLSearchParams(window.location.search);
+            if (sp.get('from') === 'capture') return;
+          } catch {}
           let dest = `/capture?turn=${encodeURIComponent(turnId)}`;
           try {
             const sp = new URLSearchParams(window.location.search);
