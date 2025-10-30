@@ -62,10 +62,10 @@ export default function Capture() {
         const j = await r.json().catch(() => ({}));
         const t = j && (j.turn || null);
         if (t && t.status === 'in_progress') {
-          let dest = '/capture';
+          let dest = `/capture?turn=${encodeURIComponent(turnId)}`;
           try {
             const sp = new URLSearchParams(window.location.search);
-            if (sp.get('debug') === '1') dest = '/capture?debug=1';
+            if (sp.get('debug') === '1') dest += '&debug=1';
           } catch {}
           try { console.log('[TurnQA][capture] guard redirect ->', dest); } catch {}
           window.location.replace(dest);
