@@ -52,6 +52,28 @@ export default function Capture() {
   const turnId = typeof query.id === 'string' ? query.id : '';
   const tab = typeof query.tab === 'string' ? query.tab : 'capture'; // 'needs-fix' when coming from SMS
 
+  useEffect(() => {
+    if (!turnId) return;
+    if (tab === 'needs-fix') return; // allow fix flow to use this page
+    (async () => {
+      try {
+        const r = await fetch(`/api/get-turn?id=${turnId}`);
+        if (!r.ok) return;
+        const j = await r.json().catch(() => ({}));
+        const t = j && (j.turn || null);
+        if (t && t.status === 'in_progress') {
+          let dest = '/capture';
+          try {
+            const sp = new URLSearchParams(window.location.search);
+            if (sp.get('debug') === '1') dest = '/capture?debug=1';
+          } catch {}
+          try { console.log('[TurnQA][capture] guard redirect ->', dest); } catch {}
+          window.location.replace(dest);
+        }
+      } catch {}
+    })();
+  }, [turnId, tab]);
+
   // -------- State --------
   const [shots, setShots] = useState(null);
   // files we render per-shot; each file: {name, url (storage path), width, height, shotId, preview?, isFix?, cleanerNote?}
