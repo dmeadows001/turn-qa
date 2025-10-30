@@ -469,7 +469,6 @@ useEffect(() => {
           width: dims.width,
           height: dims.height,
           preview,
-          isFix: true               // new uploads on needs-fix flow are fixes (keeps green tag)
           isFix: isFixMode
         });
       } catch (e) {
