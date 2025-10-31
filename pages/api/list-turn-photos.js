@@ -150,16 +150,16 @@ export default async function handler(req, res) {
       });
     }
 
-    // 4) **Dedupe by final path** (this collapses multiple rows that resolved to same file)
-    const seenByPath = new Set();
-    const finalOut = [];
+    // 4) **Dedupe by final path but keep the NEWEST row**
+    // Because the SELECT is ordered by created_at ASC, we overwrite on each seen path.
+    const byPath = new Map(); // path -> latest row
     for (const row of out) {
-      const key = row.path || ''; // final resolved key
+      const key = row.path || '';
       if (!key) continue;
-      if (seenByPath.has(key)) continue;
-      seenByPath.add(key);
-      finalOut.push(row);
+      // last write wins (newest), so this overwrites earlier duplicates
+      byPath.set(key, row);
     }
+    const finalOut = Array.from(byPath.values());
 
     // 5) Best-effort backfill
     if (updates.length) {
