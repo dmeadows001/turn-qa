@@ -165,7 +165,6 @@ export default function Review() {
   const [status, setStatus] = useState(null);
   const [photos, setPhotos] = useState([]);
   const [templateShots, setTemplateShots] = useState([]);
-  const [sections, setSections] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadErr, setLoadErr] = useState('');
 
@@ -260,6 +259,12 @@ export default function Review() {
     return Array.from(set);
   }, [photos]);
 
+  // Build the same sections structure the cleaner page uses
+    const sections = useMemo(
+      () => buildSections(photos, templateShots),
+      [photos, templateShots]
+  );
+  
   function toggleKey(p) {
     const k = keyFor(p);
     setSelectedKeys(prev => {
@@ -628,29 +633,60 @@ export default function Review() {
 
         {/* Photos (grouped like cleaner: by shot label, then leftovers) */}
         <div style={ui.card}>
-          {loading ? (
-            <div>Loading photos…</div>
-          ) : (sections || []).length === 0 ? (    
-            <div style={ui.muted}>No photos yet.</div>
-          ) : (
-            (sections || []).map(sec => (
-              <div key={sec.key} style={{ marginBottom: 18 }}>
-                <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between', margin:'6px 4px 10px' }}>
-                  <h3 style={{ margin:0 }}>{sec.title || 'Section'}</h3>
-                  <div style={{ fontSize:12, color:'#94a3b8' }}>
-                    {sec.photos.length} photo{sec.photos.length === 1 ? '' : 's'}
-                  </div>
-                </div>
-
-                <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(220px,1fr))', gap:12 }}>
-                  {sec.photos.map(p => (
-                    <PhotoCard key={p.id || `${p.path}#${p.created_at}`} p={p} />
-                  ))}
-                </div>
-              </div>
-            ))
-          )}
+  {loading ? (
+    <div>Loading photos…</div>
+  ) : (sections || []).length > 0 ? (
+    (sections || []).map(sec => (
+      <div key={sec.key} style={{ marginBottom: 18 }}>
+        <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between', margin:'6px 4px 10px' }}>
+          <h3 style={{ margin:0 }}>{sec.title || 'Section'}</h3>
+          <div style={{ fontSize:12, color:'#94a3b8' }}>
+            {sec.photos.length} photo{sec.photos.length === 1 ? '' : 's'}
+          </div>
         </div>
+
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(220px,1fr))', gap:12 }}>
+          {sec.photos.map(p => (
+            <PhotoCard key={p.id || `${p.path}#${p.created_at}`} p={p} />
+          ))}
+        </div>
+      </div>
+    ))
+  ) : (photos || []).length > 0 ? (
+    (() => {
+      // Fallback: group by area_key so managers still see everything
+      const byArea = (photos || []).reduce((acc, p) => {
+        const k = (p.area_key || '').trim() || '__UNCAT__';
+        (acc[k] ||= []).push(p);
+        return acc;
+      }, {});
+      Object.values(byArea).forEach(list =>
+        list.sort((a,b) => new Date(b.created_at) - new Date(a.created_at))
+      );
+      const areas = Object.keys(byArea)
+        .filter(k => k !== '__UNCAT__')
+        .sort((a,b) => a.localeCompare(b, undefined, { numeric:true }))
+        .concat(byArea['__UNCAT__'] ? ['__UNCAT__'] : []);
+      return areas.map(areaKey => (
+        <div key={areaKey} style={{ marginBottom: 18 }}>
+          <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between', margin:'6px 4px 10px' }}>
+            <h3 style={{ margin:0 }}>{areaKey === '__UNCAT__' ? 'Additional uploads' : areaKey}</h3>
+            <div style={{ fontSize:12, color:'#94a3b8' }}>
+              {byArea[areaKey].length} photo{byArea[areaKey].length === 1 ? '' : 's'}
+            </div>
+          </div>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(220px,1fr))', gap:12 }}>
+            {byArea[areaKey].map(p => (
+              <PhotoCard key={p.id || `${p.path}#${p.created_at}`} p={p} />
+            ))}
+          </div>
+        </div>
+      ));
+    })()
+  ) : (
+    <div style={ui.muted}>No photos yet.</div>
+  )}
+</div>
 
         {uniqueAreas.length > 1 && (
           <div style={{ ...ui.subtle }}>
