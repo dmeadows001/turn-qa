@@ -150,16 +150,22 @@ export default async function handler(req, res) {
       });
     }
 
-    // 4) **Dedupe by final path but keep the NEWEST row**
-    // Because the SELECT is ordered by created_at ASC, we overwrite on each seen path.
-    const byPath = new Map(); // path -> latest row
-    for (const row of out) {
-      const key = row.path || '';
-      if (!key) continue;
-      // last write wins (newest), so this overwrites earlier duplicates
-      byPath.set(key, row);
-    }
-    const finalOut = Array.from(byPath.values());
+    // 4) Dedupe by final path, but KEEP THE NEWEST row (latest created_at)
+    const bestByPath = new Map(); // path -> row
+      for (const row of out) {
+        const key = row.path || '';
+        if (!key) continue;
+        const prev = bestByPath.get(key);
+        if (!prev) {
+          bestByPath.set(key, row);
+        } else {
+          // Compare by created_at; fallback to id if needed
+          const prevTime = new Date(prev.created_at || 0).getTime();
+          const curTime  = new Date(row.created_at || 0).getTime();
+          if (curTime >= prevTime) bestByPath.set(key, row);
+        }
+      }
+const finalOut = Array.from(bestByPath.values());
 
     // 5) Best-effort backfill
     if (updates.length) {
