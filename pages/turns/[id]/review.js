@@ -641,16 +641,15 @@ export default function Review() {
           </div>
         </div>
 
-        {/* Photos (grouped like cleaner: by shot label, then leftovers) */}
-        <div style={ui.card}>
+       {/* Photos (grouped like cleaner: by shot label, then leftovers) */}
+<div style={ui.card}>
   {loading ? (
     <div>Loading photos…</div>
-  ) : (sections || []).length > 0 ? (
-    (sections || []).map(sec => (
-      (sections || []).map(sec => (
-        <div key={sec.key} style={sectionWrapStyle}>
-          <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between', margin:'2px 4px 10px' }}>
-            <h3 style={{ margin:0 }}>{sec.title || 'Section'}</h3>
+  ) : (sections && sections.length > 0) ? (
+    sections.map(sec => (
+      <div key={sec.key} style={sectionWrapStyle}>
+        <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between', margin:'2px 4px 10px' }}>
+          <h3 style={{ margin:0 }}>{sec.title || 'Section'}</h3>
           <div style={{ fontSize:12, color:'#94a3b8' }}>
             {sec.photos.length} photo{sec.photos.length === 1 ? '' : 's'}
           </div>
@@ -663,7 +662,7 @@ export default function Review() {
         </div>
       </div>
     ))
-  ) : (photos || []).length > 0 ? (
+  ) : (photos && photos.length > 0) ? (
     (() => {
       // Fallback: group by area_key so managers still see everything
       const byArea = (photos || []).reduce((acc, p) => {
@@ -678,14 +677,18 @@ export default function Review() {
         .filter(k => k !== '__UNCAT__')
         .sort((a,b) => a.localeCompare(b, undefined, { numeric:true }))
         .concat(byArea['__UNCAT__'] ? ['__UNCAT__'] : []);
+
       return areas.map(areaKey => (
         <div key={areaKey} style={sectionWrapStyle}>
           <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between', margin:'2px 4px 10px' }}>
-            <h3 style={{ margin:0 }}>{areaKey === '__UNCAT__' ? 'Additional uploads' : areaKey}</h3>
+            <h3 style={{ margin:0 }}>
+              {areaKey === '__UNCAT__' ? 'Additional uploads' : areaKey}
+            </h3>
             <div style={{ fontSize:12, color:'#94a3b8' }}>
               {byArea[areaKey].length} photo{byArea[areaKey].length === 1 ? '' : 's'}
             </div>
           </div>
+
           <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(220px,1fr))', gap:12 }}>
             {byArea[areaKey].map(p => (
               <PhotoCard key={p.id || `${p.path}#${p.created_at}`} p={p} />
