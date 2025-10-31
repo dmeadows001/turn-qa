@@ -37,35 +37,38 @@ export default async function handler(req, res) {
     let tpRows = [];
     let tpErr = null;
 
-    const trySelect = async (withOptional) => {
-      // include all plausible path columns so we can normalize later
-      const base =
-        'id, turn_id, shot_id, created_at, area_key, ' +
-        'path, storage_path, photo_path, url, file';
+    const trySelect = async (withOptional, baseCols) => {
       const opt = withOptional ? ', is_fix, cleaner_note' : '';
       return await supa
         .from('turn_photos')
-        .select(base + opt)
+        .select(baseCols + opt)
         .eq('turn_id', turnId)
         .order('created_at', { ascending: true });
     };
 
-    // first attempt (may fail if columns don't exist)
-    let first = await trySelect(true);
-    if (first.error) {
-      const msg = (first.error.message || '').toLowerCase();
-      if (/(column).*(does not exist)/.test(msg)) {
-        // fallback: minimal shape
-        const second = await trySelect(false);
-        tpErr = second.error || null;
-        tpRows = Array.isArray(second.data) ? second.data : [];
-      } else {
-        tpErr = first.error;
-      }
-    } else {
-      tpRows = Array.isArray(first.data) ? first.data : [];
-    }
+    // Try widest set of path columns; on “column does not exist” retry with smaller sets
+    const bases = [
+      // widest
+      'id, turn_id, shot_id, created_at, area_key, path, storage_path, photo_path, url, file',
+      // medium
+      'id, turn_id, shot_id, created_at, area_key, path, storage_path, url, file',
+      // minimal (most common)
+      'id, turn_id, shot_id, created_at, area_key, path'
+    ];
 
+    for (const baseCols of bases) {
+      const resp = await trySelect(true, baseCols);
+      if (!resp.error) { tpRows = resp.data || []; break; }
+      const msg = String(resp.error.message || '').toLowerCase();
+      if (!/column .* does not exist/.test(msg)) { tpErr = resp.error; break; }
+      // else: loop and try a smaller base
+    }
+    if (!tpRows.length && !tpErr) {
+      // last-ditch attempt with the minimal base and no optional columns
+      const last = await trySelect(false, 'id, turn_id, shot_id, created_at, area_key, path');
+      tpErr = last.error || null;
+      tpRows = Array.isArray(last.data) ? last.data : [];
+    }
     if (tpErr) throw tpErr;
 
     // 2) Lookup missing area_key via template_shots if needed
