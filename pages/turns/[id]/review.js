@@ -373,6 +373,26 @@ export default function Review() {
             </div>
           )}
 
+          {/* Show manager note (read-only) in manager mode too, when this photo is flagged */}
+          {isManagerMode && flagged && findingsByKey[k]?.note && (
+            <div
+              style={{
+                marginTop: 8,
+                padding: '8px 10px',
+                background: '#0f172a',
+                border: '1px solid #334155',
+                borderRadius: 8,
+                color: '#cbd5e1'
+              }}
+            >
+    <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 4, fontWeight: 700 }}>
+      Manager note (sent to cleaner)
+    </div>
+    <div style={{ whiteSpace: 'pre-wrap' }}>{findingsByKey[k].note}</div>
+  </div>
+)}
+
+
           {/* Show cleaner's persisted note under FIX photos (manager view) */}
           {isFix && !!p.cleaner_note && (
             <div style={{
