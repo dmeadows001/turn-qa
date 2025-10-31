@@ -18,6 +18,7 @@ async function fetchPhotos(turnId) {
 
   // Map and include persisted is_fix/cleaner_note if present (undefined-safe).
   const mapped = (j.photos || []).map(p => ({
+    shot_id: p.shot_id || null,
     id: p.id,
     area_key: p.area_key || '',
     created_at: p.created_at,
@@ -41,6 +42,75 @@ async function fetchFindings(turnId) {
   } catch {
     return [];
   }
+}
+
+async function fetchTemplate(turnId) {
+  try {
+    const r = await fetch(`/api/turn-template?turnId=${turnId}`);
+    const j = await r.json().catch(() => ({}));
+    const shots = Array.isArray(j.shots) ? j.shots : [];
+    return shots.map(s => ({
+      shot_id: s.shot_id,
+      area_key: s.area_key || '',
+      label: s.label || s.area_key || 'Section',
+      min_count: s.min_count || 0,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+function buildSections(photos, templateShots) {
+  const byShot = new Map();      // shot_id -> Photo[]
+  const leftovers = [];          // photos without a matching shot_id
+  const hasShotId = p => p && typeof p.shot_id === 'string' && p.shot_id;
+
+  (photos || []).forEach(p => {
+    if (hasShotId(p)) {
+      const sid = p.shot_id;
+      if (!byShot.has(sid)) byShot.set(sid, []);
+      byShot.get(sid).push(p);
+    } else {
+      leftovers.push(p);
+    }
+  });
+
+  const sections = [];
+
+  // template order first
+  templateShots.forEach(s => {
+    const list = byShot.get(s.shot_id) || [];
+    if (list.length) {
+      list.sort((a,b) => new Date(b.created_at) - new Date(a.created_at));
+      sections.push({ key: s.shot_id, title: s.label || s.area_key || 'Section', photos: list });
+      byShot.delete(s.shot_id);
+    }
+  });
+
+  // any shot_ids not in template (edge cases)
+  for (const [sid, list] of byShot.entries()) {
+    list.sort((a,b) => new Date(b.created_at) - new Date(a.created_at));
+    sections.push({ key: sid, title: 'Additional uploads', photos: list });
+  }
+
+  // leftovers by area_key / Uncategorized
+  if (leftovers.length) {
+    const byArea = leftovers.reduce((acc, p) => {
+      const k = (p.area_key || '').trim() || '__UNCAT__';
+      (acc[k] ||= []).push(p);
+      return acc;
+    }, {});
+    Object.entries(byArea).forEach(([k, list]) => {
+      list.sort((a,b) => new Date(b.created_at) - new Date(a.created_at));
+      sections.push({
+        key: `area:${k}`,
+        title: k === '__UNCAT__' ? 'Additional uploads' : k,
+        photos: list,
+      });
+    });
+  }
+
+  return sections;
 }
 
 function badgeStyle(status) {
@@ -94,6 +164,7 @@ export default function Review() {
   const [turn, setTurn] = useState(null);
   const [status, setStatus] = useState(null);
   const [photos, setPhotos] = useState([]);
+  const [templateShots, setTemplateShots] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadErr, setLoadErr] = useState('');
 
@@ -125,8 +196,14 @@ export default function Review() {
       setLoadErr('');
       try {
         const [t, ph] = await Promise.all([fetchTurn(turnId), fetchPhotos(turnId)]);
+        const [t, ph, ts] = await Promise.all([
+          fetchTurn(turnId),
+          fetchPhotos(turnId),
+          fetchTemplate(turnId),
+        ]);
         setTurn(t);
         setStatus(t && t.status ? t.status : 'in_progress');
+        setTemplateShots(ts);
 
         const cleanerNote =
           (t && (t.cleaner_note ?? t.cleaner_reply ?? t.cleaner_message)) || '';
@@ -549,53 +626,29 @@ export default function Review() {
           </div>
         </div>
 
-        {/* Photos (grouped by area_key) */}
+        {/* Photos (grouped like cleaner: by shot label, then leftovers) */}
         <div style={ui.card}>
           {loading ? (
             <div>Loading photos…</div>
-          ) : photos.length === 0 ? (
+          ) : sections.length === 0 ? (
             <div style={ui.muted}>No photos yet.</div>
           ) : (
-            <>
-              {(() => {
-                // Build map { area_keyOrUncat: Photo[] }
-                const byArea = photos.reduce((acc, p) => {
-                  const key = p.area_key && p.area_key.trim() ? p.area_key.trim() : '__UNCAT__';
-                  (acc[key] ||= []).push(p);
-                  return acc;
-                }, {});
-
-                // Sort newest first inside each area (optional)
-                Object.values(byArea).forEach(list =>
-                  list.sort((a,b) => new Date(b.created_at) - new Date(a.created_at))
-                );
-
-                // Ordered area headers: alphabetic, then "Uncategorized" if any
-                const areas = Object.keys(byArea)
-                  .filter(k => k !== '__UNCAT__')
-                  .sort((a,b) => a.localeCompare(b, undefined, { numeric:true }))
-                  .concat(byArea['__UNCAT__'] ? ['__UNCAT__'] : []);
-
-                return areas.map(areaKey => (
-                  <div key={areaKey} style={{ marginBottom: 18 }}>
-                    <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between', margin:'6px 4px 10px' }}>
-                      <h3 style={{ margin:0 }}>
-                        {areaKey === '__UNCAT__' ? 'Uncategorized' : areaKey}
-                      </h3>
-                      <div style={{ fontSize:12, color:'#94a3b8' }}>
-                        {byArea[areaKey].length} photo{byArea[areaKey].length === 1 ? '' : 's'}
-                      </div>
-                    </div>
-
-                    <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(220px,1fr))', gap:12 }}>
-                      {byArea[areaKey].map(p => (
-                        <PhotoCard key={p.id || keyFor(p)} p={p} />
-                      ))}
-                    </div>
+            sections.map(sec => (
+              <div key={sec.shot_id || sec.area_key || sec.label} style={{ marginBottom: 18 }}>
+                <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between', margin:'6px 4px 10px' }}>
+                  <h3 style={{ margin:0 }}>{sec.label || sec.area_key || 'Section'}</h3>
+                  <div style={{ fontSize:12, color:'#94a3b8' }}>
+                    {sec.photos.length} photo{sec.photos.length === 1 ? '' : 's'}
                   </div>
-                ));
-              })()}
-            </>
+                </div>
+
+                <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(220px,1fr))', gap:12 }}>
+                  {sec.photos.map(p => (
+                    <PhotoCard key={p.id || `${p.path}#${p.created_at}`} p={p} />
+                  ))}
+                </div>
+              </div>
+            ))
           )}
         </div>
 
