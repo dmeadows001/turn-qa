@@ -165,6 +165,7 @@ export default function Review() {
   const [status, setStatus] = useState(null);
   const [photos, setPhotos] = useState([]);
   const [templateShots, setTemplateShots] = useState([]);
+  const [sections, setSections] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadErr, setLoadErr] = useState('');
 
@@ -195,11 +196,10 @@ export default function Review() {
       setLoading(true);
       setLoadErr('');
       try {
-        const [t, ph] = await Promise.all([fetchTurn(turnId), fetchPhotos(turnId)]);
-        const [t, ph, ts] = await Promise.all([
-          fetchTurn(turnId),
-          fetchPhotos(turnId),
-          fetchTemplate(turnId),
+          const [t, ph, ts] = await Promise.all([
+            fetchTurn(turnId),
+            fetchPhotos(turnId),
+            fetchTemplate(turnId),
         ]);
         setTurn(t);
         setStatus(t && t.status ? t.status : 'in_progress');
@@ -630,13 +630,13 @@ export default function Review() {
         <div style={ui.card}>
           {loading ? (
             <div>Loading photos…</div>
-          ) : sections.length === 0 ? (
+          ) : (sections || []).length === 0 ? (    
             <div style={ui.muted}>No photos yet.</div>
           ) : (
-            sections.map(sec => (
-              <div key={sec.shot_id || sec.area_key || sec.label} style={{ marginBottom: 18 }}>
+            (sections || []).map(sec => (
+              <div key={sec.key} style={{ marginBottom: 18 }}>
                 <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between', margin:'6px 4px 10px' }}>
-                  <h3 style={{ margin:0 }}>{sec.label || sec.area_key || 'Section'}</h3>
+                  <h3 style={{ margin:0 }}>{sec.title || 'Section'}</h3>
                   <div style={{ fontSize:12, color:'#94a3b8' }}>
                     {sec.photos.length} photo{sec.photos.length === 1 ? '' : 's'}
                   </div>
