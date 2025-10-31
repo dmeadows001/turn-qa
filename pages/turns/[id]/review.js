@@ -147,6 +147,16 @@ const fixCardStyle = {
   background: '#071a16'
 };
 
+// Dashed section frame, like cleaner need-fix
+const sectionWrapStyle = {
+  border: '2px dashed #334155',
+  borderRadius: 12,
+  padding: 12,
+  background: '#0b1220',
+  marginBottom: 18,
+};
+
+
 // Stable per-photo key
 function keyFor(p) {
   return p && (p.id || `${p.path || ''}#${p.created_at || ''}`);
@@ -637,9 +647,10 @@ export default function Review() {
     <div>Loading photos…</div>
   ) : (sections || []).length > 0 ? (
     (sections || []).map(sec => (
-      <div key={sec.key} style={{ marginBottom: 18 }}>
-        <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between', margin:'6px 4px 10px' }}>
-          <h3 style={{ margin:0 }}>{sec.title || 'Section'}</h3>
+      (sections || []).map(sec => (
+        <div key={sec.key} style={sectionWrapStyle}>
+          <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between', margin:'2px 4px 10px' }}>
+            <h3 style={{ margin:0 }}>{sec.title || 'Section'}</h3>
           <div style={{ fontSize:12, color:'#94a3b8' }}>
             {sec.photos.length} photo{sec.photos.length === 1 ? '' : 's'}
           </div>
@@ -668,8 +679,8 @@ export default function Review() {
         .sort((a,b) => a.localeCompare(b, undefined, { numeric:true }))
         .concat(byArea['__UNCAT__'] ? ['__UNCAT__'] : []);
       return areas.map(areaKey => (
-        <div key={areaKey} style={{ marginBottom: 18 }}>
-          <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between', margin:'6px 4px 10px' }}>
+        <div key={areaKey} style={sectionWrapStyle}>
+          <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between', margin:'2px 4px 10px' }}>
             <h3 style={{ margin:0 }}>{areaKey === '__UNCAT__' ? 'Additional uploads' : areaKey}</h3>
             <div style={{ fontSize:12, color:'#94a3b8' }}>
               {byArea[areaKey].length} photo{byArea[areaKey].length === 1 ? '' : 's'}
