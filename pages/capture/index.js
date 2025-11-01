@@ -337,11 +337,21 @@ export default function Capture() {
               />
             </div>
 
-            <div style={{ marginTop: 12 }}>
-              <button style={ui.btnPrimary} onClick={startTurn} disabled={propsLoading || !propertyId}>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 12 }}>
+              <button
+                style={ui.btnPrimary}
+                onClick={startTurn}
+                disabled={propsLoading || !propertyId}
+              >
                 {propsLoading ? 'Starting…' : 'Start turn'}
               </button>
-            </div>
+
+              {/* Cleaner turn history */}
+              <a href="/cleaner/turns" style={ui.btnSecondary}>
+                View my turns
+              </a>
+              </div>
+
 
             {msg && <div style={{ marginTop: 10, color: '#ef4444' }}>{msg}</div>}
           </Card>
