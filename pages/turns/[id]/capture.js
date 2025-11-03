@@ -661,12 +661,7 @@ export default function Capture() {
       const photos = Object.values(uploadsByShot).flat().map(f => ({
         url: f.url, shotId: f.shotId, area_key: null
       }));
-      const resp = await fetch('/api/submit-turn', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ turnId, photos })
-      });
-      const resp = await fetch('/api/submit-turn', {
+        const resp = await fetch('/api/submit-turn', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ turnId, photos })
@@ -686,8 +681,7 @@ export default function Capture() {
       }
 
       window.location.href = `/turns/${turnId}/done`;
-
-      window.location.href = `/turns/${turnId}/done`;
+      
     } finally {
       setTimeout(() => setSubmitting(false), 300);
     }
