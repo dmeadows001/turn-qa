@@ -14,12 +14,20 @@ export default async function handler(req, res) {
         cleaner_name,
         turn_date,
         property_id,
+
+        -- Keep the original column but also expose a friendly alias the UI expects
         manager_notes,
+        manager_note:manager_notes,
+
         cleaner_reply,
         submitted_at,
         resubmitted_at,
         approved_at,
-        created_at
+        created_at,
+
+        -- >>> Add these two so the UI/API can enforce AI Scan
+        scan_ok,
+        scan_checked_at
       `)
       .eq('id', id)
       .single();
@@ -27,7 +35,17 @@ export default async function handler(req, res) {
     if (error) throw error;
     if (!data) return res.status(404).json({ error: 'Turn not found' });
 
-    res.status(200).json({ turn: data });
+    // Normalize a couple of fields so the client has predictable types
+    const turn = {
+      ...data,
+      // ensure booleans/nulls are sane even if the DB has nulls
+      scan_ok: !!data.scan_ok,
+      scan_checked_at: data.scan_checked_at || null,
+      // prefer the alias if your UI reads `t.manager_note`
+      manager_note: data.manager_note ?? data.manager_notes ?? null,
+    };
+
+    res.status(200).json({ turn });
   } catch (e) {
     console.error('get-turn error:', e);
     res.status(500).json({ error: e.message || 'failed' });
