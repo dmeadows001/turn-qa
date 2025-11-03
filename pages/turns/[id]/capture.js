@@ -121,6 +121,9 @@ export default function Capture() {
 
   const [scanBusy, setScanBusy] = useState(false);
   const [scanFindings, setScanFindings] = useState([]);       // [{ path, area_key, issues: [...] }]
+  // Marks that we've told the server this turn's AI Scan is complete
+  const [scanMarked, setScanMarked] = useState(false);
+
 
   // One hidden file input per shot
   const inputRefs = useRef({});
@@ -260,6 +263,14 @@ export default function Capture() {
       if (!r.ok) throw new Error(j.error || 'scan failed');
       const results = Array.isArray(j.results) ? j.results : [];
       setScanFindings(results);
+      // mark scan done server-side (enables submit)
+      try {
+        if (turnId) {
+          const rr = await fetch(`/api/turns/${turnId}/scan-done`, { method: 'POST' });
+          if (rr.ok) setScanMarked(true);
+        }
+      } catch {}
+
     } catch (e) {
       alert('Vision scan failed. ' + (e?.message || ''));
     } finally {
@@ -655,11 +666,27 @@ export default function Capture() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ turnId, photos })
       });
-      if (!resp.ok) {
-        const err = await resp.json().catch(() => ({}));
-        alert('Submit failed: ' + (err.error || resp.statusText));
+      const resp = await fetch('/api/submit-turn', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ turnId, photos })
+      });
+      const json = await resp.json().catch(() => ({}));
+
+      if (resp.status === 409 && json.code === 'SCAN_REQUIRED') {
+        alert('Please run AI Scan before submitting this turn.');
+        // bring the scan panel into view
+        try { document.getElementById('scan')?.scrollIntoView({ behavior: 'smooth' }); } catch {}
         return;
       }
+
+      if (!resp.ok) {
+        alert('Submit failed: ' + (json.error || resp.statusText));
+        return;
+      }
+
+      window.location.href = `/turns/${turnId}/done`;
+
       window.location.href = `/turns/${turnId}/done`;
     } finally {
       setTimeout(() => setSubmitting(false), 300);
@@ -742,6 +769,7 @@ export default function Capture() {
           {/* AI helper actions (only for first-time capture, not during needs-fix) */}
           {tab !== 'needs-fix' && (
             <div
+              id="scan"   // ← add this
               style={{
                 margin:'8px 0 12px',
                 padding:'10px 12px',
