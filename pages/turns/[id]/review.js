@@ -1,6 +1,6 @@
 // pages/turns/[id]/review.js
 import { useRouter } from 'next/router';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, memo } from 'react';
 import ChromeDark from '../../../components/ChromeDark';
 import { ui } from '../../../lib/theme';
 
@@ -373,151 +373,152 @@ export default function Review() {
   }
 
   function PhotoCard({ p }) {
-    const k = keyFor(p);
-    const selected = selectedKeys.has(k);
-    const noteVal = notesByKey[k] || '';
-    const flagged = !!findingsByKey[k];
-    const isFix = !!p.is_fix;
+  const PhotoCard = memo(function PhotoCard({ p }) {
+  const k = keyFor(p);
+  const selected = selectedKeys.has(k);
+  const noteVal = notesByKey[k] || '';
+  const flagged = !!findingsByKey[k];
+  const isFix = !!p.is_fix;
 
-    // choose card style: green for FIX, else amber when flagged
-    const styleCard =
-      isFix ? fixCardStyle : (flagged ? flaggedCardStyle : null);
+  // choose card style: green for FIX, else amber when flagged
+  const styleCard =
+    isFix ? fixCardStyle : (flagged ? flaggedCardStyle : null);
 
-    return (
-      <div
-        key={p.id || k}
-        style={{
-          border: '1px solid #334155',
-          borderRadius: 12,
-          overflow: 'hidden',
-          background: '#0b1220',
-          ...(styleCard || {})
-        }}
-      >
-        <a href={p.url} target="_blank" rel="noreferrer">
-          <img
-            src={p.url}
-            alt={p.area_key || 'photo'}
-            style={{ width: '100%', display: 'block', aspectRatio: '4/3', objectFit: 'cover' }}
-          />
-        </a>
+  return (
+    <div
+      key={p.id || k}
+      style={{
+        border: '1px solid #334155',
+        borderRadius: 12,
+        overflow: 'hidden',
+        background: '#0b1220',
+        ...(styleCard || {})
+      }}
+    >
+      <a href={p.url} target="_blank" rel="noreferrer">
+        <img
+          src={p.url}
+          alt={p.area_key || 'photo'}
+          style={{ width: '100%', display: 'block', aspectRatio: '4/3', objectFit: 'cover' }}
+        />
+      </a>
 
-        <div style={{ padding: 10, fontSize: 12 }}>
-          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:8 }}>
-            <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-              <b>{p.area_key || '—'}</b>
+      <div style={{ padding: 10, fontSize: 12 }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:8 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+            <b>{p.area_key || '—'}</b>
 
-              {flagged && (
-                <span style={{
-                  padding:'2px 8px',
-                  borderRadius:999,
-                  fontSize:11,
-                  fontWeight:700,
-                  color:'#fcd34d',
-                  background:'#4a2f04',
-                  border:'1px solid #d97706'
-                }}>
-                  needs fix
-                </span>
-              )}
+            {flagged && (
+              <span style={{
+                padding:'2px 8px',
+                borderRadius:999,
+                fontSize:11,
+                fontWeight:700,
+                color:'#fcd34d',
+                background:'#4a2f04',
+                border:'1px solid #d97706'
+              }}>
+                needs fix
+              </span>
+            )}
 
-              {isFix && (
-                <span style={{
-                  padding:'2px 8px',
-                  borderRadius:999,
-                  fontSize:11,
-                  fontWeight:700,
-                  color:'#86efac',
-                  background:'#064e3b',
-                  border:'1px solid #065f46'
-                }}>
-                  FIX
-                </span>
-              )}
-            </div>
-
-            {isManagerMode && (
-              <label style={{ display:'flex', alignItems:'center', gap:6, cursor:'pointer', userSelect:'none' }}>
-                <input
-                  type="checkbox"
-                  checked={selected}
-                  onChange={() => toggleKey(p)}
-                  style={{ transform:'scale(1.1)' }}
-                />
-                <span>Needs fix</span>
-              </label>
+            {isFix && (
+              <span style={{
+                padding:'2px 8px',
+                borderRadius:999,
+                fontSize:11,
+                fontWeight:700,
+                color:'#86efac',
+                background:'#064e3b',
+                border:'1px solid #065f46'
+              }}>
+                FIX
+              </span>
             )}
           </div>
 
-          <div style={{ color: '#9ca3af' }}>{new Date(p.created_at).toLocaleString()}</div>
-          <div style={{ color: '#64748b', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{p.path}</div>
-
-          {/* Per-photo note (manager only) */}
           {isManagerMode && (
-            <div style={{ marginTop:8 }}>
-              <textarea
-                value={noteVal}
-                onChange={e => setNoteFor(p, e.target.value)}
-                rows={2}
-                placeholder="Note for this photo (optional)…"
-                style={{ ...ui.input, width:'100%', padding:'8px 10px', resize:'vertical', background:'#0b1220' }}
+            <label style={{ display:'flex', alignItems:'center', gap:6, cursor:'pointer', userSelect:'none' }}>
+              <input
+                type="checkbox"
+                checked={selected}
+                onChange={() => toggleKey(p)}
+                style={{ transform:'scale(1.1)' }}
               />
-            </div>
-          )}
-
-          {/* Show manager note (read-only) in manager mode too, when this photo is flagged */}
-          {isManagerMode && flagged && findingsByKey[k]?.note && (
-            <div
-              style={{
-                marginTop: 8,
-                padding: '8px 10px',
-                background: '#0f172a',
-                border: '1px solid #334155',
-                borderRadius: 8,
-                color: '#cbd5e1'
-              }}
-            >
-    <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 4, fontWeight: 700 }}>
-      Manager note (sent to cleaner)
-    </div>
-    <div style={{ whiteSpace: 'pre-wrap' }}>{findingsByKey[k].note}</div>
-  </div>
-)}
-
-
-          {/* Show cleaner's persisted note under FIX photos (manager view) */}
-          {isFix && !!p.cleaner_note && (
-            <div style={{
-              marginTop:8,
-              padding:'8px 10px',
-              background:'#052e2b',
-              border:'1px solid #065f46',
-              borderRadius:8,
-              color:'#86efac',
-              whiteSpace:'pre-wrap'
-            }}>
-              {p.cleaner_note}
-            </div>
-          )}
-
-          {/* Cleaner view: show manager note, if any */}
-          {!isManagerMode && flagged && findingsByKey[k] && findingsByKey[k].note && (
-            <div style={{
-              marginTop:8,
-              padding:'8px 10px',
-              background:'#0f172a',
-              border:'1px solid #334155',
-              borderRadius:8,
-              color:'#cbd5e1'
-            }}>
-              <div style={{ fontSize:11, color:'#94a3b8', marginBottom:4, fontWeight:700 }}>Manager note</div>
-              <div style={{ whiteSpace:'pre-wrap' }}>{findingsByKey[k].note}</div>
-            </div>
+              <span>Needs fix</span>
+            </label>
           )}
         </div>
+
+        <div style={{ color: '#9ca3af' }}>{new Date(p.created_at).toLocaleString()}</div>
+        <div style={{ color: '#64748b', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{p.path}</div>
+
+        {/* Per-photo note (manager only) */}
+        {isManagerMode && (
+          <div style={{ marginTop:8 }}>
+            <textarea
+              value={noteVal}
+              onChange={e => setNoteFor(p, e.target.value)}
+              rows={2}
+              placeholder="Note for this photo (optional)…"
+              style={{ ...ui.input, width:'100%', padding:'8px 10px', resize:'vertical', background:'#0b1220' }}
+            />
+          </div>
+        )}
+
+        {/* Show manager note (read-only) in manager mode too, when this photo is flagged */}
+        {isManagerMode && flagged && findingsByKey[k]?.note && (
+          <div
+            style={{
+              marginTop: 8,
+              padding: '8px 10px',
+              background: '#0f172a',
+              border: '1px solid #334155',
+              borderRadius: 8,
+              color: '#cbd5e1'
+            }}
+          >
+            <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 4, fontWeight: 700 }}>
+              Manager note (sent to cleaner)
+            </div>
+            <div style={{ whiteSpace: 'pre-wrap' }}>{findingsByKey[k].note}</div>
+          </div>
+        )}
+
+        {/* Show cleaner's persisted note under FIX photos (manager view) */}
+        {isFix && !!p.cleaner_note && (
+          <div style={{
+            marginTop:8,
+            padding:'8px 10px',
+            background:'#052e2b',
+            border:'1px solid #065f46',
+            borderRadius:8,
+            color:'#86efac',
+            whiteSpace:'pre-wrap'
+          }}>
+            {p.cleaner_note}
+          </div>
+        )}
+
+        {/* Cleaner view: show manager note, if any */}
+        {!isManagerMode && flagged && findingsByKey[k] && findingsByKey[k].note && (
+          <div style={{
+            marginTop:8,
+            padding:'8px 10px',
+            background:'#0f172a',
+            border:'1px solid #334155',
+            borderRadius:8,
+            color:'#cbd5e1'
+          }}>
+            <div style={{ fontSize:11, color:'#94a3b8', marginBottom:4, fontWeight:700 }}>Manager note</div>
+            <div style={{ whiteSpace:'pre-wrap' }}>{findingsByKey[k].note}</div>
+          </div>
+        )}
       </div>
-    );
-  }
+    </div>
+  );
+}, (prevProps, nextProps) => keyFor(prevProps.p) === keyFor(nextProps.p));
+
 
   if (!turnId) {
     return (
