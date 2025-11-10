@@ -657,8 +657,8 @@ export default function Review() {
 
         <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(220px,1fr))', gap:12 }}>
           {sec.photos.map(p => (
-            <PhotoCard key={p.id || `${p.path}#${p.created_at}`} p={p} />
-          ))}
+             <PhotoCard key={keyFor(p)} p={p} />
+           ))}
         </div>
       </div>
     ))
@@ -691,7 +691,7 @@ export default function Review() {
 
           <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(220px,1fr))', gap:12 }}>
             {byArea[areaKey].map(p => (
-              <PhotoCard key={p.id || `${p.path}#${p.created_at}`} p={p} />
+             <PhotoCard key={keyFor(p)} p={p} />
             ))}
           </div>
         </div>
