@@ -774,7 +774,7 @@ export default function Capture() {
                 gap:10
               }}
             >
-              <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+              <div style={{ display:'flex', gap:8, flexWrap:'wrap', alignItems:'center' }}>
                 <button
                   type="button"
                   onClick={runPrecheck}
@@ -783,6 +783,7 @@ export default function Capture() {
                 >
                   {precheckBusy ? 'Checking…' : 'AI Pre-check'}
                 </button>
+
                 <button
                   type="button"
                   onClick={runScan}
@@ -791,6 +792,18 @@ export default function Capture() {
                 >
                   {scanBusy ? 'Scanning…' : 'AI Scan'}
                 </button>
+
+                {scanMarked && (
+                  <span
+                    aria-live="polite"
+                      style={{
+                      fontSize:12, padding:'4px 8px', borderRadius:999,
+                      border:'1px solid #065f46', background:'#052e2b', color:'#86efac'
+                    }}
+                  >
+                    ✓ Scan complete
+                  </span>
+                )}
               </div>
 
               {/* Pre-check flags */}
