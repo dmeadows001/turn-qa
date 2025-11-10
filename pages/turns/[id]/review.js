@@ -1,6 +1,6 @@
 // pages/turns/[id]/review.js
 import { useRouter } from 'next/router';
-import { useEffect, useMemo, useRef, useState, memo } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import ChromeDark from '../../../components/ChromeDark';
 import { ui } from '../../../lib/theme';
 
@@ -372,8 +372,7 @@ export default function Review() {
     }
   }
 
-  
-  const PhotoCard = memo(function PhotoCard({ p, isManagerMode, selectedKeys, notesByKey, findingsByKey, setNoteFor, toggleKey }) {
+  function PhotoCard({ p, isManagerMode, selectedKeys, notesByKey, findingsByKey, setNoteFor, toggleKey }) {
   const k = keyFor(p);
   const selected = selectedKeys.has(k);
   const noteVal = notesByKey[k] || '';
@@ -384,7 +383,6 @@ export default function Review() {
 
   return (
     <div
-      key={p.id || k}
       style={{
         border: '1px solid #334155',
         borderRadius: 12,
@@ -511,34 +509,7 @@ export default function Review() {
       </div>
     </div>
   );
-}, (prev, next) => {
-  const pk = keyFor(prev.p);
-  const nk = keyFor(next.p);
-  if (pk !== nk) return false;                        // different photo
-
-  // note value for THIS photo
-  const prevNote = prev.notesByKey[pk] || '';
-  const nextNote = next.notesByKey[nk] || '';
-  if (prevNote !== nextNote) return false;
-
-  // selection for THIS photo
-  const prevSel = prev.selectedKeys.has(pk);
-  const nextSel = next.selectedKeys.has(nk);
-  if (prevSel !== nextSel) return false;
-
-  // flagged / FIX state for THIS photo
-  const prevFlag = !!prev.findingsByKey[pk];
-  const nextFlag = !!next.findingsByKey[nk];
-  if (prevFlag !== nextFlag) return false;
-
-  const prevFix = !!prev.p.is_fix;
-  const nextFix = !!next.p.is_fix;
-  if (prevFix !== nextFix) return false;
-
-  // if none of the above changed, skip re-render
-  return true;
-});
-
+}
 
   if (!turnId) {
     return (
