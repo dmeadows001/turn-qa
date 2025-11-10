@@ -373,16 +373,14 @@ export default function Review() {
   }
 
   function PhotoCard({ p }) {
-  const PhotoCard = memo(function PhotoCard({ p }) {
+  const PhotoCard = memo(function PhotoCard({ p, isManagerMode, selectedKeys, notesByKey, findingsByKey, setNoteFor, toggleKey }) {
   const k = keyFor(p);
   const selected = selectedKeys.has(k);
   const noteVal = notesByKey[k] || '';
   const flagged = !!findingsByKey[k];
   const isFix = !!p.is_fix;
 
-  // choose card style: green for FIX, else amber when flagged
-  const styleCard =
-    isFix ? fixCardStyle : (flagged ? flaggedCardStyle : null);
+  const styleCard = isFix ? fixCardStyle : (flagged ? flaggedCardStyle : null);
 
   return (
     <div
@@ -453,7 +451,6 @@ export default function Review() {
         <div style={{ color: '#9ca3af' }}>{new Date(p.created_at).toLocaleString()}</div>
         <div style={{ color: '#64748b', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{p.path}</div>
 
-        {/* Per-photo note (manager only) */}
         {isManagerMode && (
           <div style={{ marginTop:8 }}>
             <textarea
@@ -466,7 +463,6 @@ export default function Review() {
           </div>
         )}
 
-        {/* Show manager note (read-only) in manager mode too, when this photo is flagged */}
         {isManagerMode && flagged && findingsByKey[k]?.note && (
           <div
             style={{
@@ -485,7 +481,6 @@ export default function Review() {
           </div>
         )}
 
-        {/* Show cleaner's persisted note under FIX photos (manager view) */}
         {isFix && !!p.cleaner_note && (
           <div style={{
             marginTop:8,
@@ -500,7 +495,6 @@ export default function Review() {
           </div>
         )}
 
-        {/* Cleaner view: show manager note, if any */}
         {!isManagerMode && flagged && findingsByKey[k] && findingsByKey[k].note && (
           <div style={{
             marginTop:8,
@@ -517,7 +511,7 @@ export default function Review() {
       </div>
     </div>
   );
-}, (prevProps, nextProps) => keyFor(prevProps.p) === keyFor(nextProps.p));
+}, (prev, next) => keyFor(prev.p) === keyFor(next.p));
 
 
   if (!turnId) {
@@ -658,7 +652,17 @@ export default function Review() {
 
         <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(220px,1fr))', gap:12 }}>
           {sec.photos.map(p => (
-             <PhotoCard key={keyFor(p)} p={p} />
+             <PhotoCard
+               key={keyFor(p)}
+               p={p}
+              isManagerMode={isManagerMode}
+              selectedKeys={selectedKeys}
+              notesByKey={notesByKey}
+              findingsByKey={findingsByKey}
+              setNoteFor={setNoteFor}
+              toggleKey={toggleKey}
+            />
+
            ))}
         </div>
       </div>
@@ -692,7 +696,16 @@ export default function Review() {
 
           <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(220px,1fr))', gap:12 }}>
             {byArea[areaKey].map(p => (
-             <PhotoCard key={keyFor(p)} p={p} />
+             <PhotoCard
+              key={keyFor(p)}
+              p={p}
+              isManagerMode={isManagerMode}
+              selectedKeys={selectedKeys}
+              notesByKey={notesByKey}
+              findingsByKey={findingsByKey}
+              setNoteFor={setNoteFor}
+              toggleKey={toggleKey}
+              />
             ))}
           </div>
         </div>
