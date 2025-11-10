@@ -511,7 +511,33 @@ export default function Review() {
       </div>
     </div>
   );
-}, (prev, next) => keyFor(prev.p) === keyFor(next.p));
+}, (prev, next) => {
+  const pk = keyFor(prev.p);
+  const nk = keyFor(next.p);
+  if (pk !== nk) return false;                        // different photo
+
+  // note value for THIS photo
+  const prevNote = prev.notesByKey[pk] || '';
+  const nextNote = next.notesByKey[nk] || '';
+  if (prevNote !== nextNote) return false;
+
+  // selection for THIS photo
+  const prevSel = prev.selectedKeys.has(pk);
+  const nextSel = next.selectedKeys.has(nk);
+  if (prevSel !== nextSel) return false;
+
+  // flagged / FIX state for THIS photo
+  const prevFlag = !!prev.findingsByKey[pk];
+  const nextFlag = !!next.findingsByKey[nk];
+  if (prevFlag !== nextFlag) return false;
+
+  const prevFix = !!prev.p.is_fix;
+  const nextFix = !!next.p.is_fix;
+  if (prevFix !== nextFix) return false;
+
+  // if none of the above changed, skip re-render
+  return true;
+});
 
 
   if (!turnId) {
@@ -653,7 +679,7 @@ export default function Review() {
         <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(220px,1fr))', gap:12 }}>
           {sec.photos.map(p => (
              <PhotoCard
-               key={keyFor(p)}
+               key={p.id ?? keyFor(p)}
                p={p}
               isManagerMode={isManagerMode}
               selectedKeys={selectedKeys}
@@ -697,7 +723,7 @@ export default function Review() {
           <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(220px,1fr))', gap:12 }}>
             {byArea[areaKey].map(p => (
              <PhotoCard
-              key={keyFor(p)}
+              key={p.id ?? keyFor(p)}
               p={p}
               isManagerMode={isManagerMode}
               selectedKeys={selectedKeys}
