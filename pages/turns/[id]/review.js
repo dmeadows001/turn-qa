@@ -372,7 +372,7 @@ export default function Review() {
     }
   }
 
-  function PhotoCard({ p })
+  
   const PhotoCard = memo(function PhotoCard({ p, isManagerMode, selectedKeys, notesByKey, findingsByKey, setNoteFor, toggleKey }) {
   const k = keyFor(p);
   const selected = selectedKeys.has(k);
