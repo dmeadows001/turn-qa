@@ -131,10 +131,17 @@ export default function Capture() {
   const smallMeta = { fontSize: 12, color: '#94a3b8' };
 
   async function signPath(path) {
-    const resp = await fetch('/api/sign-photo', {
+  const stampedName = isFixMode ? `fix_${Date.now()}_${f.name}` : f.name;
+  const resp = await fetch('/api/upload-url', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path, expires: 600 })
+      body: JSON.stringify({
+      turnId,
+      shotId,
+      filename: stampedName,        // <- force a new object key for fixes
+      mime: f.type || 'image/jpeg',
+      variant: isFixMode ? 'fix' : undefined  // harmless hint if backend uses it
+    })
     });
     if (!resp.ok) throw new Error('sign failed');
     const json = await resp.json();
