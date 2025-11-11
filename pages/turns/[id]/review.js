@@ -157,10 +157,15 @@ const sectionWrapStyle = {
 };
 
 
-// Stable per-photo key
+// Stable per-photo key: prefer storage path, then id; never include created_at
 function keyFor(p) {
-  return p && (p.id || `${p.path || ''}#${p.created_at || ''}`);
+  if (!p) return '';
+  if (p.path && p.path.length) return p.path;   // canonical, stable across renders
+  if (p.id) return String(p.id);
+  // last resort: area + shot (stable enough within a turn)
+  return `${p.area_key || 'area'}::${p.shot_id || 'shot'}`;
 }
+
 
 export default function Review() {
   const router = useRouter();
@@ -275,19 +280,20 @@ export default function Review() {
       [photos, templateShots]
   );
   
-  function toggleKey(p) {
-    const k = keyFor(p);
-    setSelectedKeys(prev => {
-      const next = new Set(prev);
-      if (next.has(k)) next.delete(k);
-      else next.add(k);
-      return next;
-    });
-  }
-  function setNoteFor(p, text) {
-    const k = keyFor(p);
-    setNotesByKey(prev => ({ ...prev, [k]: text }));
-  }
+ const toggleKey = useCallback((p) => {
+  const k = keyFor(p);
+  setSelectedKeys(prev => {
+    const next = new Set(prev);
+    if (next.has(k)) next.delete(k);
+    else next.add(k);
+    return next;
+  });
+}, []);
+  
+  const setNoteFor = useCallback((p, text) => {
+  const k = keyFor(p);
+  setNotesByKey(prev => ({ ...prev, [k]: text }));
+}, []);
 
   // --- Approve ---
   async function markApproved() {
@@ -650,14 +656,14 @@ export default function Review() {
         <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(220px,1fr))', gap:12 }}>
           {sec.photos.map(p => (
              <PhotoCard
-               key={p.id ?? keyFor(p)}
-               p={p}
-              isManagerMode={isManagerMode}
-              selectedKeys={selectedKeys}
-              notesByKey={notesByKey}
-              findingsByKey={findingsByKey}
-              setNoteFor={setNoteFor}
-              toggleKey={toggleKey}
+               key={keyFor(p)}
+                p={p}
+                isManagerMode={isManagerMode}
+                selectedKeys={selectedKeys}
+                notesByKey={notesByKey}
+                findingsByKey={findingsByKey}
+                setNoteFor={setNoteFor}
+                toggleKey={toggleKey}
             />
 
            ))}
@@ -694,7 +700,7 @@ export default function Review() {
           <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(220px,1fr))', gap:12 }}>
             {byArea[areaKey].map(p => (
              <PhotoCard
-              key={p.id ?? keyFor(p)}
+              key={keyFor(p)}
               p={p}
               isManagerMode={isManagerMode}
               selectedKeys={selectedKeys}
