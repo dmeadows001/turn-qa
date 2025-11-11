@@ -162,7 +162,34 @@ export default function Capture() {
       }
     });
   }
-  
+
+  // --- Path normalization helpers for matching notes to photos (ADDED) ---
+  function stripQuery(u = '') {
+    const i = u.indexOf('?');
+    return i >= 0 ? u.slice(0, i) : u;
+  }
+  function stripProtoHost(u = '') {
+    try {
+      if (u.startsWith('http://') || u.startsWith('https://')) {
+        const url = new URL(u);
+        return url.pathname || '';
+      }
+    } catch {}
+    return u;
+  }
+  function normalizePath(raw = '') {
+    let p = raw || '';
+    p = stripQuery(p);
+    p = stripProtoHost(p);
+    if (p.startsWith('/')) p = p.slice(1);
+    return p;
+  }
+  function baseName(p = '') {
+    const n = normalizePath(p);
+    const parts = n.split('/');
+    return parts[parts.length - 1] || n;
+  }
+
   function ensureThumb(path) {
     if (!path || requestedThumbsRef.current.has(path) || thumbByPath[path]) return;
     requestedThumbsRef.current.add(path);
@@ -441,9 +468,31 @@ export default function Capture() {
           (Array.isArray(j.items) ? j.items :
           Array.isArray(j?.notes?.items) ? j.notes.items :
           Array.isArray(j.photos) ? j.photos : []);
+
+        // Build a multi-key index: exact path, normalized path, and basename (ADDED)
         const byPath = {};
-        list.forEach(it => { if (it?.path && (it.note || it.notes)) byPath[it.path] = it.note || it.notes; });
-        setFixNotes({ byPath, overall: String(overall || ''), count: Object.keys(byPath).length });
+        for (const it of list) {
+          const p = it?.path || '';
+          const note = it?.note || it?.notes || '';
+          if (!p || !note) continue;
+          const n = normalizePath(p);
+          const b = baseName(p);
+          byPath[p] = note;   // as-is
+          byPath[n] = note;   // normalized
+          byPath[b] = note;   // basename fallback
+        }
+
+        setFixNotes({
+          byPath,
+          overall: String(overall || ''),
+          count: Object.keys(byPath).length
+        });
+
+        // Optional debug keys
+        if (typeof window !== 'undefined') {
+          window.__CAPTURE_DEBUG__ = window.__CAPTURE_DEBUG__ || {};
+          window.__CAPTURE_DEBUG__.notesKeys = Object.keys(byPath);
+        }
       } catch {}
     })();
   }, [turnId]);
@@ -872,7 +921,12 @@ export default function Capture() {
                   {files.map(f => {
                     if (!f.preview && !thumbByPath[f.url]) ensureThumb(f.url);
                     const thumb = f.preview || thumbByPath[f.url] || null;
-                    const managerNote = fixNotes?.byPath?.[f.url];
+
+                    // (CHANGED) widen lookup to normalized path / basename
+                    const managerNote =
+                      fixNotes?.byPath?.[f.url] ||
+                      fixNotes?.byPath?.[normalizePath(f.url)] ||
+                      fixNotes?.byPath?.[baseName(f.url)];
 
                     // Only originals show amber "Needs fix"
                     const showNeedsFix = !!managerNote && !f.isFix;
