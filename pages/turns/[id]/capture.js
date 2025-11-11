@@ -130,17 +130,12 @@ export default function Capture() {
   // ------- helpers -------
   const smallMeta = { fontSize: 12, color: '#94a3b8' };
 
+  // ✅ FIXED: sign existing storage paths to display thumbnails / open originals
   async function signPath(path) {
-  const resp = await fetch('/api/upload-url', {
+    const resp = await fetch('/api/sign-photo', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-      turnId,
-      shotId,
-      filename: f.name,                 // ← keep original name
-      mime: f.type || 'image/jpeg',
-      variant: isFixMode ? 'fix' : undefined   // ← hint server to uniquify path
-    })
+      body: JSON.stringify({ path, expires: 600 })
     });
     if (!resp.ok) throw new Error('sign failed');
     const json = await resp.json();
@@ -283,7 +278,6 @@ export default function Capture() {
     }
   }
 
- 
   // -------- Load template (required shots) --------
   useEffect(() => {
     async function loadTemplate() {
@@ -414,6 +408,7 @@ export default function Capture() {
 
         setUploadsByShot(prev => {
           const merged = { ...byShot };
+          // Keep any new (unsaved) fix uploads already in state
           for (const [shotId, localFiles = []] of Object.entries(prev || {})) {
             const previews = localFiles.filter(f => f.preview); // unsaved FIX uploads
             if (previews.length) merged[shotId] = [ ...(merged[shotId] || []), ...previews ];
@@ -700,7 +695,7 @@ export default function Capture() {
           {/* AI helper actions (only for first-time capture, not during needs-fix) */}
           {tab !== 'needs-fix' && (
             <div
-              id="scan"   // ← add this
+              id="scan"
               style={{
                 margin:'8px 0 12px',
                 padding:'10px 12px',
@@ -879,7 +874,7 @@ export default function Capture() {
                     const thumb = f.preview || thumbByPath[f.url] || null;
                     const managerNote = fixNotes?.byPath?.[f.url];
 
-                    // >>> KEY CHANGE: only show amber "needs fix" state on ORIGINALS (not on fixes)
+                    // Only originals show amber "Needs fix"
                     const showNeedsFix = !!managerNote && !f.isFix;
 
                     return (
