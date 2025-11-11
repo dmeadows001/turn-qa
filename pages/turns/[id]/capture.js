@@ -130,7 +130,7 @@ export default function Capture() {
   // ------- helpers -------
   const smallMeta = { fontSize: 12, color: '#94a3b8' };
 
-  // ✅ sign existing storage paths to display thumbnails / open originals
+  // ✅ signs an existing storage path for viewing/thumbnail
   async function signPath(path) {
     const resp = await fetch('/api/sign-photo', {
       method: 'POST',
@@ -162,7 +162,7 @@ export default function Capture() {
       }
     });
   }
-
+  
   function ensureThumb(path) {
     if (!path || requestedThumbsRef.current.has(path) || thumbByPath[path]) return;
     requestedThumbsRef.current.add(path);
@@ -410,7 +410,7 @@ export default function Capture() {
           const merged = { ...byShot };
           // Keep any new (unsaved) fix uploads already in state
           for (const [shotId, localFiles = []] of Object.entries(prev || {})) {
-            const previews = localFiles.filter(f => f.preview); // unsaved FIX uploads
+            const previews = localFiles.filter(f => f.preview);
             if (previews.length) merged[shotId] = [ ...(merged[shotId] || []), ...previews ];
           }
           return merged;
@@ -482,7 +482,7 @@ export default function Capture() {
             shotId,
             filename: f.name,
             mime: f.type || 'image/jpeg',
-            // >>> MINIMAL FIX: ensure fixes never overwrite originals
+            // 🔑 minimal fix: make fix uploads get a unique storage key
             variant: isFixMode ? 'fix' : undefined
           })
         });
@@ -502,12 +502,10 @@ export default function Capture() {
 
       // 3) Upload using whichever shape the API returned
       try {
-        // Tiny trace id for this file attempt
         const traceId = Math.random().toString(36).slice(2, 8);
         let done = false;
         const tried = [];
 
-        // Helper to expose what happened when ?debug=1
         const trace = (obj) => {
           try {
             if (typeof window !== 'undefined' && window.__CAPTURE_DEBUG__) {
@@ -520,7 +518,6 @@ export default function Capture() {
           console.debug('[capture upload]', traceId, obj);
         };
 
-        // Try proxy PUT first (keeps existing preference)
         if (meta.uploadUrl && !done) {
           const up = await fetch(meta.uploadUrl, {
             method: 'PUT',
@@ -537,7 +534,6 @@ export default function Capture() {
           }
         }
 
-        // Fallback: Supabase signed upload (multipart/form-data)
         if (!done && meta.signedUploadUrl) {
           const fd = new FormData();
           fd.append('file', f);
@@ -578,7 +574,6 @@ export default function Capture() {
       setUploadsByShot(prev => ({ ...prev, [shotId]: [ ...(prev[shotId] || []), ...uploaded ] }));
     }
 
-    // Allow selecting the same file again if needed
     try {
       const el = inputRefs.current[shotId];
       if (el) el.value = '';
@@ -588,7 +583,6 @@ export default function Capture() {
   // -------- Submit initial turn --------
   async function submitAll() {
     if (submitting) return;
-    // minimal: ensure each shot meets min_count
     const unmet = (shots || []).filter(s => (s.min_count || 1) > (uploadsByShot[s.shot_id]?.length || 0));
     if (unmet.length) {
       alert('Please add required photos before submitting:\n' + unmet.map(a => `• ${a.label}`).join('\n'));
@@ -609,7 +603,6 @@ export default function Capture() {
 
       if (resp.status === 409 && json.code === 'SCAN_REQUIRED') {
         alert('Please run AI Scan before submitting this turn.');
-        // bring the scan panel into view
         try { document.getElementById('scan')?.scrollIntoView({ behavior: 'smooth' }); } catch {}
         return;
       }
@@ -630,14 +623,12 @@ export default function Capture() {
   async function submitFixes() {
     if (submitting) return;
 
-    // new photos are those with preview present
     const newPhotos = Object.values(uploadsByShot)
       .flat()
       .filter(f => !!f.preview)
       .map(f => ({
         url: f.url,
         shotId: f.shotId,
-        // send per-photo cleaner note
         note: (cleanerNoteByNewPath[f.url] || '').trim() || null,
       }));
 
@@ -654,7 +645,7 @@ export default function Capture() {
         body: JSON.stringify({
           turn_id: turnId,
           reply: reply || '',
-          photos: newPhotos,   // API will store is_fix + cleaner_note now
+          photos: newPhotos,
         })
       });
       const json = await resp.json().catch(() => ({}));
@@ -664,7 +655,6 @@ export default function Capture() {
       }
 
       alert('Fixes submitted for review ✅');
-      // Refresh to fetch persisted is_fix + notes (and manager status change)
       window.location.reload();
     } finally {
       setTimeout(() => setSubmitting(false), 200);
@@ -745,7 +735,6 @@ export default function Capture() {
                 )}
               </div>
 
-              {/* Pre-check flags */}
               {!!precheckFlags.length && (
                 <div style={{ fontSize:13, color:'#bfdbfe' }}>
                   <div style={{ fontWeight:700, marginBottom:4 }}>Pre-check:</div>
@@ -755,7 +744,6 @@ export default function Capture() {
                 </div>
               )}
 
-              {/* Vision findings */}
               {!!scanFindings.length && (
                 <div style={{ fontSize:13, color:'#bfdbfe' }}>
                   <div style={{ fontWeight:700, marginBottom:4 }}>Vision findings:</div>
