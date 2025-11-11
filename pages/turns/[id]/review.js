@@ -165,6 +165,174 @@ function keyFor(p) {
   return `${p.area_key || 'area'}::${p.shot_id || 'shot'}`;
 }
 
+// --- PhotoCard at module scope so it doesn't remount each render ---
+const PhotoCard = memo(function PhotoCard({
+  p, isManagerMode, selectedKeys, notesByKey, findingsByKey, setNoteFor, toggleKey
+}) {
+  const k = keyFor(p);
+  const selected = selectedKeys.has(k);
+  const noteVal = notesByKey[k] || '';
+  const flagged = !!findingsByKey[k];
+  const isFix = !!p.is_fix;
+
+  const styleCard = isFix ? fixCardStyle : (flagged ? flaggedCardStyle : null);
+
+  return (
+    <div
+      style={{
+        border: '1px solid #334155',
+        borderRadius: 12,
+        overflow: 'hidden',
+        background: '#0b1220',
+        ...(styleCard || {})
+      }}
+    >
+      <a href={p.url} target="_blank" rel="noreferrer">
+        <img
+          src={p.url}
+          alt={p.area_key || 'photo'}
+          style={{ width: '100%', display: 'block', aspectRatio: '4/3', objectFit: 'cover' }}
+        />
+      </a>
+
+      <div style={{ padding: 10, fontSize: 12 }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:8 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+            <b>{p.area_key || '—'}</b>
+
+            {flagged && (
+              <span style={{
+                padding:'2px 8px',
+                borderRadius:999,
+                fontSize:11,
+                fontWeight:700,
+                color:'#fcd34d',
+                background:'#4a2f04',
+                border:'1px solid #d97706'
+              }}>
+                needs fix
+              </span>
+            )}
+
+            {isFix && (
+              <span style={{
+                padding:'2px 8px',
+                borderRadius:999,
+                fontSize:11,
+                fontWeight:700,
+                color:'#86efac',
+                background:'#064e3b',
+                border:'1px solid #065f46'
+              }}>
+                FIX
+              </span>
+            )}
+          </div>
+
+          {isManagerMode && (
+            <label style={{ display:'flex', alignItems:'center', gap:6, cursor:'pointer', userSelect:'none' }}>
+              <input
+                type="checkbox"
+                checked={selected}
+                onChange={() => toggleKey(p)}
+                style={{ transform:'scale(1.1)' }}
+              />
+              <span>Needs fix</span>
+            </label>
+          )}
+        </div>
+
+        <div style={{ color: '#9ca3af' }}>{new Date(p.created_at).toLocaleString()}</div>
+        <div style={{ color: '#64748b', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{p.path}</div>
+
+        {isManagerMode && (
+          <div style={{ marginTop:8 }}>
+            <textarea
+              value={noteVal}
+              onChange={e => setNoteFor(p, e.target.value)}
+              rows={2}
+              placeholder="Note for this photo (optional)…"
+              style={{ ...ui.input, width:'100%', padding:'8px 10px', resize:'vertical', background:'#0b1220' }}
+            />
+          </div>
+        )}
+
+        {isManagerMode && flagged && findingsByKey[k]?.note && (
+          <div
+            style={{
+              marginTop: 8,
+              padding: '8px 10px',
+              background: '#0f172a',
+              border: '1px solid #334155',
+              borderRadius: 8,
+              color: '#cbd5e1'
+            }}
+          >
+            <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 4, fontWeight: 700 }}>
+              Manager note (sent to cleaner)
+            </div>
+            <div style={{ whiteSpace: 'pre-wrap' }}>{findingsByKey[k].note}</div>
+          </div>
+        )}
+
+        {isFix && !!p.cleaner_note && (
+          <div style={{
+            marginTop:8,
+            padding:'8px 10px',
+            background:'#052e2b',
+            border:'1px solid #065f46',
+            borderRadius:8,
+            color:'#86efac',
+            whiteSpace:'pre-wrap'
+          }}>
+            {p.cleaner_note}
+          </div>
+        )}
+
+        {!isManagerMode && flagged && findingsByKey[k] && findingsByKey[k].note && (
+          <div style={{
+            marginTop:8,
+            padding:'8px 10px',
+            background:'#0f172a',
+            border:'1px solid #334155',
+            borderRadius:8,
+            color:'#cbd5e1'
+          }}>
+            <div style={{ fontSize:11, color:'#94a3b8', marginBottom:4, fontWeight:700 }}>Manager note</div>
+            <div style={{ whiteSpace:'pre-wrap' }}>{findingsByKey[k].note}</div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}, (prev, next) => {
+  // only re-render this card when its own props change
+  const pk = keyFor(prev.p);
+  const nk = keyFor(next.p);
+  if (pk !== nk) return false; // different photo instance
+
+  // note value for THIS photo
+  const prevNote = prev.notesByKey[pk] || '';
+  const nextNote = next.notesByKey[nk] || '';
+  if (prevNote !== nextNote) return false;
+
+  // selection for THIS photo
+  const prevSel = prev.selectedKeys.has(pk);
+  const nextSel = next.selectedKeys.has(nk);
+  if (prevSel !== nextSel) return false;
+
+  // flagged / FIX state for THIS photo
+  const prevFlag = !!prev.findingsByKey[pk];
+  const nextFlag = !!next.findingsByKey[nk];
+  if (prevFlag !== nextFlag) return false;
+
+  const prevFix = !!prev.p.is_fix;
+  const nextFix = !!next.p.is_fix;
+  if (prevFix !== nextFix) return false;
+
+  return true; // unchanged → skip render
+});
+
 export default function Review() {
   const router = useRouter();
   const turnId = router.query.id;
@@ -376,174 +544,6 @@ export default function Review() {
       setActing(false);
     }
   }
-
-  // --- PhotoCard (memoized so typing doesn't lose focus) ---
-  const PhotoCard = memo(function PhotoCard({
-    p, isManagerMode, selectedKeys, notesByKey, findingsByKey, setNoteFor, toggleKey
-  }) {
-    const k = keyFor(p);
-    const selected = selectedKeys.has(k);
-    const noteVal = notesByKey[k] || '';
-    const flagged = !!findingsByKey[k];
-    const isFix = !!p.is_fix;
-
-    const styleCard = isFix ? fixCardStyle : (flagged ? flaggedCardStyle : null);
-
-    return (
-      <div
-        style={{
-          border: '1px solid #334155',
-          borderRadius: 12,
-          overflow: 'hidden',
-          background: '#0b1220',
-          ...(styleCard || {})
-        }}
-      >
-        <a href={p.url} target="_blank" rel="noreferrer">
-          <img
-            src={p.url}
-            alt={p.area_key || 'photo'}
-            style={{ width: '100%', display: 'block', aspectRatio: '4/3', objectFit: 'cover' }}
-          />
-        </a>
-
-        <div style={{ padding: 10, fontSize: 12 }}>
-          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:8 }}>
-            <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-              <b>{p.area_key || '—'}</b>
-
-              {flagged && (
-                <span style={{
-                  padding:'2px 8px',
-                  borderRadius:999,
-                  fontSize:11,
-                  fontWeight:700,
-                  color:'#fcd34d',
-                  background:'#4a2f04',
-                  border:'1px solid #d97706'
-                }}>
-                  needs fix
-                </span>
-              )}
-
-              {isFix && (
-                <span style={{
-                  padding:'2px 8px',
-                  borderRadius:999,
-                  fontSize:11,
-                  fontWeight:700,
-                  color:'#86efac',
-                  background:'#064e3b',
-                  border:'1px solid #065f46'
-                }}>
-                  FIX
-                </span>
-              )}
-            </div>
-
-            {isManagerMode && (
-              <label style={{ display:'flex', alignItems:'center', gap:6, cursor:'pointer', userSelect:'none' }}>
-                <input
-                  type="checkbox"
-                  checked={selected}
-                  onChange={() => toggleKey(p)}
-                  style={{ transform:'scale(1.1)' }}
-                />
-                <span>Needs fix</span>
-              </label>
-            )}
-          </div>
-
-          <div style={{ color: '#9ca3af' }}>{new Date(p.created_at).toLocaleString()}</div>
-          <div style={{ color: '#64748b', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{p.path}</div>
-
-          {isManagerMode && (
-            <div style={{ marginTop:8 }}>
-              <textarea
-                value={noteVal}
-                onChange={e => setNoteFor(p, e.target.value)}
-                rows={2}
-                placeholder="Note for this photo (optional)…"
-                style={{ ...ui.input, width:'100%', padding:'8px 10px', resize:'vertical', background:'#0b1220' }}
-              />
-            </div>
-          )}
-
-          {isManagerMode && flagged && findingsByKey[k]?.note && (
-            <div
-              style={{
-                marginTop: 8,
-                padding: '8px 10px',
-                background: '#0f172a',
-                border: '1px solid #334155',
-                borderRadius: 8,
-                color: '#cbd5e1'
-              }}
-            >
-              <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 4, fontWeight: 700 }}>
-                Manager note (sent to cleaner)
-              </div>
-              <div style={{ whiteSpace: 'pre-wrap' }}>{findingsByKey[k].note}</div>
-            </div>
-          )}
-
-          {isFix && !!p.cleaner_note && (
-            <div style={{
-              marginTop:8,
-              padding:'8px 10px',
-              background:'#052e2b',
-              border:'1px solid #065f46',
-              borderRadius:8,
-              color:'#86efac',
-              whiteSpace:'pre-wrap'
-            }}>
-              {p.cleaner_note}
-            </div>
-          )}
-
-          {!isManagerMode && flagged && findingsByKey[k] && findingsByKey[k].note && (
-            <div style={{
-              marginTop:8,
-              padding:'8px 10px',
-              background:'#0f172a',
-              border:'1px solid #334155',
-              borderRadius:8,
-              color:'#cbd5e1'
-            }}>
-              <div style={{ fontSize:11, color:'#94a3b8', marginBottom:4, fontWeight:700 }}>Manager note</div>
-              <div style={{ whiteSpace:'pre-wrap' }}>{findingsByKey[k].note}</div>
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  }, (prev, next) => {
-    // only re-render this card when its own props change
-    const pk = keyFor(prev.p);
-    const nk = keyFor(next.p);
-    if (pk !== nk) return false; // different photo instance
-
-    // note value for THIS photo
-    const prevNote = prev.notesByKey[pk] || '';
-    const nextNote = next.notesByKey[nk] || '';
-    if (prevNote !== nextNote) return false;
-
-    // selection for THIS photo
-    const prevSel = prev.selectedKeys.has(pk);
-    const nextSel = next.selectedKeys.has(nk);
-    if (prevSel !== nextSel) return false;
-
-    // flagged / FIX state for THIS photo
-    const prevFlag = !!prev.findingsByKey[pk];
-    const nextFlag = !!next.findingsByKey[nk];
-    if (prevFlag !== nextFlag) return false;
-
-    const prevFix = !!prev.p.is_fix;
-    const nextFix = !!next.p.is_fix;
-    if (prevFix !== nextFix) return false;
-
-    return true; // unchanged → skip render
-  });
 
   if (!turnId) {
     return (
