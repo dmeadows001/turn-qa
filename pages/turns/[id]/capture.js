@@ -128,6 +128,33 @@ export default function Capture() {
   // ------- helpers -------
   const smallMeta = { fontSize: 12, color: '#94a3b8' };
 
+  // Find manager note for a storage path with a few tolerant checks
+function managerNoteFor(path) {
+  try {
+    const byPath = (fixNotes && fixNotes.byPath) ? fixNotes.byPath : {};
+    const p = String(path || '');
+    if (!p) return null;
+
+    // exact
+    if (byPath[p]) return byPath[p];
+
+    // normalize leading slash variants
+    const noLead = p.replace(/^\/+/, '');
+    const withLead = p.startsWith('/') ? p : `/${p}`;
+    if (byPath[noLead]) return byPath[noLead];
+    if (byPath[withLead]) return byPath[withLead];
+
+    // basename fallback (last resort)
+    const base = noLead.split('/').pop();
+    if (!base) return null;
+    const hitKey = Object.keys(byPath).find(k => (k || '').split('/').pop() === base);
+    return hitKey ? byPath[hitKey] : null;
+  } catch {
+    return null;
+  }
+}
+
+
   // signs an existing storage path for viewing/thumbnail
   async function signPath(path) {
     const resp = await fetch('/api/sign-photo', {
@@ -866,7 +893,8 @@ export default function Capture() {
                   {files.map(f => {
                     if (!f.preview && !thumbByPath[f.url]) ensureThumb(f.url);
                     const thumb = f.preview || thumbByPath[f.url] || null;
-                    const managerNote = fixNotes?.byPath?.[f.url];
+                    const managerNote = managerNoteFor(f.url);
+
 
                     // Only originals show amber "Needs fix"
                     const showNeedsFix = !!managerNote && !f.isFix;
