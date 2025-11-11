@@ -124,7 +124,6 @@ export default function Capture() {
   // Marks that we've told the server this turn's AI Scan is complete
   const [scanMarked, setScanMarked] = useState(false);
 
-
   // One hidden file input per shot
   const inputRefs = useRef({});
 
@@ -495,62 +494,26 @@ export default function Capture() {
     loadExisting();
   }, [turnId, shots]);
 
-// --- Fetch needs-fix notes (overall + per-photo) for the banner ---
-useEffect(() => {
-  if (!turnId) return;
-  (async () => {
-    try {
-      let overall = '';
-      let list = [];
-
-      // 1) Preferred: /findings → [{ path, note, severity }]
+  // --- Fetch needs-fix notes (overall + per-photo) for the banner ---
+  useEffect(() => {
+    if (!turnId) return;
+    (async () => {
       try {
-        const r = await fetch(`/api/turns/${turnId}/findings`);
-        if (r.ok) {
-          const j = await r.json().catch(() => ({}));
-          if (Array.isArray(j)) {
-            list = j; // already an array of findings
-          } else if (Array.isArray(j?.findings)) {
-            list = j.findings;
-            overall = j.summary || j.overall || '';
-          }
-        }
-      } catch { /* non-blocking */ }
-
-      // 2) Fallback: legacy /notes shape
-      if (!list.length) {
-        try {
-          const r2 = await fetch(`/api/turns/${turnId}/notes`);
-          if (r2.ok) {
-            const j2 = await r2.json().catch(() => ({}));
-            overall = j2.overall_note || j2?.notes?.overall || j2.overall || '';
-            list = Array.isArray(j2.items) ? j2.items
-                 : Array.isArray(j2?.notes?.items) ? j2.notes.items
-                 : Array.isArray(j2.photos) ? j2.photos
-                 : [];
-          }
-        } catch { /* non-blocking */ }
-      }
-
-      // Normalize to byPath map
-      const byPath = {};
-      (list || []).forEach(it => {
-        const p = it?.path || '';
-        const n = (it?.note || it?.notes || '').trim();
-        if (p && n) byPath[p] = n;
-      });
-
-      setFixNotes({
-        byPath,
-        overall: String(overall || ''),
-        count: Object.keys(byPath).length
-      });
-    } catch {
-      // ignore
-    }
-  })();
-}, [turnId]);
-
+        const r = await fetch(`/api/turns/${turnId}/notes`);
+        if (!r.ok) return;
+        const j = await r.json().catch(() => ({}));
+        const overall =
+          j.overall_note || j?.notes?.overall || j.overall || '';
+        const list =
+          (Array.isArray(j.items) ? j.items :
+          Array.isArray(j?.notes?.items) ? j.notes.items :
+          Array.isArray(j.photos) ? j.photos : []);
+        const byPath = {};
+        list.forEach(it => { if (it?.path && (it.note || it.notes)) byPath[it.path] = it.note || it.notes; });
+        setFixNotes({ byPath, overall: String(overall || ''), count: Object.keys(byPath).length });
+      } catch {}
+    })();
+  }, [turnId]);
 
   // -------- Add files (quality + upload to Storage) --------
   async function addFiles(shotId, fileList) {
@@ -697,7 +660,7 @@ useEffect(() => {
       const photos = Object.values(uploadsByShot).flat().map(f => ({
         url: f.url, shotId: f.shotId, area_key: null
       }));
-        const resp = await fetch('/api/submit-turn', {
+      const resp = await fetch('/api/submit-turn', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ turnId, photos })
@@ -832,7 +795,7 @@ useEffect(() => {
                 {scanMarked && (
                   <span
                     aria-live="polite"
-                      style={{
+                    style={{
                       fontSize:12, padding:'4px 8px', borderRadius:999,
                       border:'1px solid #065f46', background:'#052e2b', color:'#86efac'
                     }}
@@ -978,14 +941,17 @@ useEffect(() => {
                     const thumb = f.preview || thumbByPath[f.url] || null;
                     const managerNote = fixNotes?.byPath?.[f.url];
 
+                    // >>> KEY CHANGE: only show amber "needs fix" state on ORIGINALS (not on fixes)
+                    const showNeedsFix = !!managerNote && !f.isFix;
+
                     return (
                       <div
                         key={f.url}
                         style={{
-                          border: f.isFix ? '1px solid #065f46' : (managerNote ? '1px solid #d97706' : ui.card.border),
+                          border: f.isFix ? '1px solid #065f46' : (showNeedsFix ? '1px solid #d97706' : ui.card.border),
                           boxShadow: f.isFix
                             ? '0 0 0 3px rgba(5, 150, 105, 0.20) inset'
-                            : (managerNote ? '0 0 0 3px rgba(217,119,6,0.15)' : 'none'),
+                            : (showNeedsFix ? '0 0 0 3px rgba(217,119,6,0.15)' : 'none'),
                           borderRadius:10,
                           padding:10,
                           background: f.isFix ? '#071a16' : '#0b1220'
@@ -1004,7 +970,7 @@ useEffect(() => {
                           )}
 
                           {/* badges */}
-                          {managerNote && (
+                          {showNeedsFix && (
                             <span style={{
                               position:'absolute', top:8, left:8,
                               background:'#4a2f04', color:'#fcd34d',
@@ -1037,8 +1003,8 @@ useEffect(() => {
                           </ThemedButton>
                         </div>
 
-                        {/* Manager note (if flagged) visible to cleaner */}
-                        {managerNote && (
+                        {/* Manager note (only on originals) */}
+                        {showNeedsFix && (
                           <div style={{
                             marginTop:6, padding:'8px 10px',
                             border:'1px dashed #d97706', background:'#3a2b10',
