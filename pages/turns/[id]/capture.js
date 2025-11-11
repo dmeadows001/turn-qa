@@ -372,7 +372,7 @@ export default function Capture() {
             const ak = String(it.area_key || '').toLowerCase();
             if (ak && areaToShotId.has(ak)) targetShot = areaToShotId.get(ak);
           }
-          if (!targetShot) targetShot = '__extras__';
+        if (!targetShot) targetShot = '__extras__';
 
           const file = {
             name: path.split('/').pop() || 'photo.jpg',
@@ -480,9 +480,17 @@ export default function Capture() {
           body: JSON.stringify({
             turnId,
             shotId,
-            filename: f.name,
+-           filename: f.name,
++           // Ensure fix uploads NEVER reuse the original basename → unique storage key
++           filename: (() => {
++             if (!isFixMode) return f.name;
++             const dot = f.name.lastIndexOf('.');
++             const base = dot > 0 ? f.name.slice(0, dot) : f.name;
++             const ext  = dot > 0 ? f.name.slice(dot) : '';
++             return `${base}__fix__${Date.now().toString(36)}${ext}`;
++           })(),
             mime: f.type || 'image/jpeg',
-            // 🔑 minimal fix: make fix uploads get a unique storage key
+            // keep the existing hint for the server
             variant: isFixMode ? 'fix' : undefined
           })
         });
