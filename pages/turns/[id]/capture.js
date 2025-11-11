@@ -474,6 +474,15 @@ export default function Capture() {
       // 2) Ask backend for upload target
       let meta = {};
       try {
+        // NEW: make a unique name in needs-fix mode so we never reuse the original key
+      const filenameForUpload = (() => {
+        if (!isFixMode) return f.name;
+        const dot = f.name.lastIndexOf('.');
+        const base = dot > 0 ? f.name.slice(0, dot) : f.name;
+        const ext  = dot > 0 ? f.name.slice(dot) : '';
+        return `${base}__fix__${Date.now().toString(36)}${ext}`;
+      })();
+        
         const resp = await fetch('/api/upload-url', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
