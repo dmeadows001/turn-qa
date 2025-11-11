@@ -23,7 +23,9 @@ async function findOneFileUnderPrefix(prefix) {
     sortBy: { column: 'name', order: 'desc' },
   });
   if (error || !Array.isArray(data) || data.length === 0) return null;
-  const file = data.find(f => /\.(jpe?g|png|webp|heic|heif|gif)$/i.test(f.name)) || data[0];
+  const file =
+    data.find((f) => /\.(jpe?g|png|webp|heic|heif|gif)$/i.test(f.name)) ||
+    data[0];
   return file ? `${folder}/${file.name}` : null;
 }
 
@@ -53,19 +55,28 @@ export default async function handler(req, res) {
       // medium
       'id, turn_id, shot_id, created_at, area_key, path, storage_path, url, file',
       // minimal (most common)
-      'id, turn_id, shot_id, created_at, area_key, path'
+      'id, turn_id, shot_id, created_at, area_key, path',
     ];
 
     for (const baseCols of bases) {
       const resp = await trySelect(true, baseCols);
-      if (!resp.error) { tpRows = resp.data || []; break; }
+      if (!resp.error) {
+        tpRows = resp.data || [];
+        break;
+      }
       const msg = String(resp.error.message || '').toLowerCase();
-      if (!/column .* does not exist/.test(msg)) { tpErr = resp.error; break; }
+      if (!/column .* does not exist/.test(msg)) {
+        tpErr = resp.error;
+        break;
+      }
       // else: loop and try a smaller base
     }
     if (!tpRows.length && !tpErr) {
       // last-ditch attempt with the minimal base and no optional columns
-      const last = await trySelect(false, 'id, turn_id, shot_id, created_at, area_key, path');
+      const last = await trySelect(
+        false,
+        'id, turn_id, shot_id, created_at, area_key, path'
+      );
       tpErr = last.error || null;
       tpRows = Array.isArray(last.data) ? last.data : [];
     }
@@ -75,8 +86,8 @@ export default async function handler(req, res) {
     const missingShotIds = Array.from(
       new Set(
         tpRows
-          .filter(r => !r.area_key && r.shot_id)
-          .map(r => String(r.shot_id))
+          .filter((r) => !r.area_key && r.shot_id)
+          .map((r) => String(r.shot_id))
           .filter(Boolean)
       )
     );
@@ -88,9 +99,14 @@ export default async function handler(req, res) {
         .select('id, area_key')
         .in('id', missingShotIds);
       if (!tsErr && Array.isArray(tsRows)) {
-        tsMap = Object.fromEntries(tsRows.map(t => [String(t.id), t.area_key || '']));
+        tsMap = Object.fromEntries(
+          tsRows.map((t) => [String(t.id), t.area_key || ''])
+        );
       } else if (tsErr) {
-        console.warn('[list-turn-photos] template_shots lookup failed', tsErr.message || tsErr);
+        console.warn(
+          '[list-turn-photos] template_shots lookup failed',
+          tsErr.message || tsErr
+        );
       }
     }
 
@@ -103,12 +119,7 @@ export default async function handler(req, res) {
 
       // Normalize across multiple possible column names
       const rawPath =
-        r.path ||
-        r.storage_path ||
-        r.photo_path ||
-        r.url ||
-        r.file ||
-        '';
+        r.path || r.storage_path || r.photo_path || r.url || r.file || '';
       let objPath = cleanPath(rawPath);
       if (!objPath) {
         objPath = `turns/${turnId}/${r.shot_id || ''}`.replace(/\/+$/, '');
@@ -118,10 +129,12 @@ export default async function handler(req, res) {
       let signedUrl = '';
 
       try {
+        // If it's a folder prefix, pick a concrete file so thumbnails work
         if (!looksLikeFile(finalPath)) {
           const found = await findOneFileUnderPrefix(finalPath);
           if (found) {
             finalPath = found;
+            // best-effort backfill the resolved file path to 'path' if we have an id
             if (r.id) updates.push({ id: r.id, path: finalPath });
           }
         }
@@ -133,7 +146,11 @@ export default async function handler(req, res) {
           if (!sErr) signedUrl = s?.signedUrl || '';
         }
       } catch (e) {
-        console.warn('[list-turn-photos] signing/list error for', objPath, e?.message || e);
+        console.warn(
+          '[list-turn-photos] signing/list error for',
+          objPath,
+          e?.message || e
+        );
       }
 
       out.push({
@@ -150,31 +167,37 @@ export default async function handler(req, res) {
       });
     }
 
-    // 4) Dedupe by final path, but KEEP THE NEWEST row (latest created_at)
-    const bestByPath = new Map(); // path -> row
-      for (const row of out) {
-        const key = row.path || '';
-        if (!key) continue;
-        const prev = bestByPath.get(key);
-        if (!prev) {
-          bestByPath.set(key, row);
-        } else {
-          // Compare by created_at; fallback to id if needed
-          const prevTime = new Date(prev.created_at || 0).getTime();
-          const curTime  = new Date(row.created_at || 0).getTime();
-          if (curTime >= prevTime) bestByPath.set(key, row);
-        }
+    // 4) Dedupe by (path + is_fix) to ensure original and fix never collapse
+    const bestByKey = new Map(); // `${path}|${is_fix?1:0}` -> row
+    for (const row of out) {
+      const p = row.path || '';
+      if (!p) continue;
+      const k = `${p}|${row.is_fix ? 1 : 0}`;
+      const prev = bestByKey.get(k);
+      if (!prev) {
+        bestByKey.set(k, row);
+      } else {
+        // Keep the newest row (created_at), fall back to id
+        const prevTime = new Date(prev.created_at || 0).getTime();
+        const curTime = new Date(row.created_at || 0).getTime();
+        if (curTime >= prevTime) bestByKey.set(k, row);
       }
-const finalOut = Array.from(bestByPath.values());
+    }
+    const finalOut = Array.from(bestByKey.values());
 
     // 5) Best-effort backfill
     if (updates.length) {
       try {
         await Promise.all(
-          updates.map(u => supa.from('turn_photos').update({ path: u.path }).eq('id', u.id))
+          updates.map((u) =>
+            supa.from('turn_photos').update({ path: u.path }).eq('id', u.id)
+          )
         );
       } catch (e) {
-        console.warn('[list-turn-photos] backfill update failed', e?.message || e);
+        console.warn(
+          '[list-turn-photos] backfill update failed',
+          e?.message || e
+        );
       }
     }
 
