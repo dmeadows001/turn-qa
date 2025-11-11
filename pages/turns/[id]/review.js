@@ -1,6 +1,6 @@
 // pages/turns/[id]/review.js
 import { useRouter } from 'next/router';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback, memo } from 'react';
 import ChromeDark from '../../../components/ChromeDark';
 import { ui } from '../../../lib/theme';
 
@@ -156,7 +156,6 @@ const sectionWrapStyle = {
   marginBottom: 18,
 };
 
-
 // Stable per-photo key: prefer storage path, then id; never include created_at
 function keyFor(p) {
   if (!p) return '';
@@ -165,7 +164,6 @@ function keyFor(p) {
   // last resort: area + shot (stable enough within a turn)
   return `${p.area_key || 'area'}::${p.shot_id || 'shot'}`;
 }
-
 
 export default function Review() {
   const router = useRouter();
@@ -210,10 +208,10 @@ export default function Review() {
       setLoading(true);
       setLoadErr('');
       try {
-          const [t, ph, ts] = await Promise.all([
-            fetchTurn(turnId),
-            fetchPhotos(turnId),
-            fetchTemplate(turnId),
+        const [t, ph, ts] = await Promise.all([
+          fetchTurn(turnId),
+          fetchPhotos(turnId),
+          fetchTemplate(turnId),
         ]);
         setTurn(t);
         setStatus(t && t.status ? t.status : 'in_progress');
@@ -275,25 +273,26 @@ export default function Review() {
   }, [photos]);
 
   // Build the same sections structure the cleaner page uses
-    const sections = useMemo(
-      () => buildSections(photos, templateShots),
-      [photos, templateShots]
+  const sections = useMemo(
+    () => buildSections(photos, templateShots),
+    [photos, templateShots]
   );
-  
- const toggleKey = useCallback((p) => {
-  const k = keyFor(p);
-  setSelectedKeys(prev => {
-    const next = new Set(prev);
-    if (next.has(k)) next.delete(k);
-    else next.add(k);
-    return next;
-  });
-}, []);
-  
+
+  // --- Stable callbacks so children don't remount during typing ---
+  const toggleKey = useCallback((p) => {
+    const k = keyFor(p);
+    setSelectedKeys(prev => {
+      const next = new Set(prev);
+      if (next.has(k)) next.delete(k);
+      else next.add(k);
+      return next;
+    });
+  }, []);
+
   const setNoteFor = useCallback((p, text) => {
-  const k = keyFor(p);
-  setNotesByKey(prev => ({ ...prev, [k]: text }));
-}, []);
+    const k = keyFor(p);
+    setNotesByKey(prev => ({ ...prev, [k]: text }));
+  }, []);
 
   // --- Approve ---
   async function markApproved() {
@@ -378,144 +377,173 @@ export default function Review() {
     }
   }
 
-  function PhotoCard({ p, isManagerMode, selectedKeys, notesByKey, findingsByKey, setNoteFor, toggleKey }) {
-  const k = keyFor(p);
-  const selected = selectedKeys.has(k);
-  const noteVal = notesByKey[k] || '';
-  const flagged = !!findingsByKey[k];
-  const isFix = !!p.is_fix;
+  // --- PhotoCard (memoized so typing doesn't lose focus) ---
+  const PhotoCard = memo(function PhotoCard({
+    p, isManagerMode, selectedKeys, notesByKey, findingsByKey, setNoteFor, toggleKey
+  }) {
+    const k = keyFor(p);
+    const selected = selectedKeys.has(k);
+    const noteVal = notesByKey[k] || '';
+    const flagged = !!findingsByKey[k];
+    const isFix = !!p.is_fix;
 
-  const styleCard = isFix ? fixCardStyle : (flagged ? flaggedCardStyle : null);
+    const styleCard = isFix ? fixCardStyle : (flagged ? flaggedCardStyle : null);
 
-  return (
-    <div
-      style={{
-        border: '1px solid #334155',
-        borderRadius: 12,
-        overflow: 'hidden',
-        background: '#0b1220',
-        ...(styleCard || {})
-      }}
-    >
-      <a href={p.url} target="_blank" rel="noreferrer">
-        <img
-          src={p.url}
-          alt={p.area_key || 'photo'}
-          style={{ width: '100%', display: 'block', aspectRatio: '4/3', objectFit: 'cover' }}
-        />
-      </a>
+    return (
+      <div
+        style={{
+          border: '1px solid #334155',
+          borderRadius: 12,
+          overflow: 'hidden',
+          background: '#0b1220',
+          ...(styleCard || {})
+        }}
+      >
+        <a href={p.url} target="_blank" rel="noreferrer">
+          <img
+            src={p.url}
+            alt={p.area_key || 'photo'}
+            style={{ width: '100%', display: 'block', aspectRatio: '4/3', objectFit: 'cover' }}
+          />
+        </a>
 
-      <div style={{ padding: 10, fontSize: 12 }}>
-        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:8 }}>
-          <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-            <b>{p.area_key || '—'}</b>
+        <div style={{ padding: 10, fontSize: 12 }}>
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:8 }}>
+            <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+              <b>{p.area_key || '—'}</b>
 
-            {flagged && (
-              <span style={{
-                padding:'2px 8px',
-                borderRadius:999,
-                fontSize:11,
-                fontWeight:700,
-                color:'#fcd34d',
-                background:'#4a2f04',
-                border:'1px solid #d97706'
-              }}>
-                needs fix
-              </span>
-            )}
+              {flagged && (
+                <span style={{
+                  padding:'2px 8px',
+                  borderRadius:999,
+                  fontSize:11,
+                  fontWeight:700,
+                  color:'#fcd34d',
+                  background:'#4a2f04',
+                  border:'1px solid #d97706'
+                }}>
+                  needs fix
+                </span>
+              )}
 
-            {isFix && (
-              <span style={{
-                padding:'2px 8px',
-                borderRadius:999,
-                fontSize:11,
-                fontWeight:700,
-                color:'#86efac',
-                background:'#064e3b',
-                border:'1px solid #065f46'
-              }}>
-                FIX
-              </span>
+              {isFix && (
+                <span style={{
+                  padding:'2px 8px',
+                  borderRadius:999,
+                  fontSize:11,
+                  fontWeight:700,
+                  color:'#86efac',
+                  background:'#064e3b',
+                  border:'1px solid #065f46'
+                }}>
+                  FIX
+                </span>
+              )}
+            </div>
+
+            {isManagerMode && (
+              <label style={{ display:'flex', alignItems:'center', gap:6, cursor:'pointer', userSelect:'none' }}>
+                <input
+                  type="checkbox"
+                  checked={selected}
+                  onChange={() => toggleKey(p)}
+                  style={{ transform:'scale(1.1)' }}
+                />
+                <span>Needs fix</span>
+              </label>
             )}
           </div>
+
+          <div style={{ color: '#9ca3af' }}>{new Date(p.created_at).toLocaleString()}</div>
+          <div style={{ color: '#64748b', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{p.path}</div>
 
           {isManagerMode && (
-            <label style={{ display:'flex', alignItems:'center', gap:6, cursor:'pointer', userSelect:'none' }}>
-              <input
-                type="checkbox"
-                checked={selected}
-                onChange={() => toggleKey(p)}
-                style={{ transform:'scale(1.1)' }}
+            <div style={{ marginTop:8 }}>
+              <textarea
+                value={noteVal}
+                onChange={e => setNoteFor(p, e.target.value)}
+                rows={2}
+                placeholder="Note for this photo (optional)…"
+                style={{ ...ui.input, width:'100%', padding:'8px 10px', resize:'vertical', background:'#0b1220' }}
               />
-              <span>Needs fix</span>
-            </label>
+            </div>
+          )}
+
+          {isManagerMode && flagged && findingsByKey[k]?.note && (
+            <div
+              style={{
+                marginTop: 8,
+                padding: '8px 10px',
+                background: '#0f172a',
+                border: '1px solid #334155',
+                borderRadius: 8,
+                color: '#cbd5e1'
+              }}
+            >
+              <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 4, fontWeight: 700 }}>
+                Manager note (sent to cleaner)
+              </div>
+              <div style={{ whiteSpace: 'pre-wrap' }}>{findingsByKey[k].note}</div>
+            </div>
+          )}
+
+          {isFix && !!p.cleaner_note && (
+            <div style={{
+              marginTop:8,
+              padding:'8px 10px',
+              background:'#052e2b',
+              border:'1px solid #065f46',
+              borderRadius:8,
+              color:'#86efac',
+              whiteSpace:'pre-wrap'
+            }}>
+              {p.cleaner_note}
+            </div>
+          )}
+
+          {!isManagerMode && flagged && findingsByKey[k] && findingsByKey[k].note && (
+            <div style={{
+              marginTop:8,
+              padding:'8px 10px',
+              background:'#0f172a',
+              border:'1px solid #334155',
+              borderRadius:8,
+              color:'#cbd5e1'
+            }}>
+              <div style={{ fontSize:11, color:'#94a3b8', marginBottom:4, fontWeight:700 }}>Manager note</div>
+              <div style={{ whiteSpace:'pre-wrap' }}>{findingsByKey[k].note}</div>
+            </div>
           )}
         </div>
-
-        <div style={{ color: '#9ca3af' }}>{new Date(p.created_at).toLocaleString()}</div>
-        <div style={{ color: '#64748b', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{p.path}</div>
-
-        {isManagerMode && (
-          <div style={{ marginTop:8 }}>
-            <textarea
-              value={noteVal}
-              onChange={e => setNoteFor(p, e.target.value)}
-              rows={2}
-              placeholder="Note for this photo (optional)…"
-              style={{ ...ui.input, width:'100%', padding:'8px 10px', resize:'vertical', background:'#0b1220' }}
-            />
-          </div>
-        )}
-
-        {isManagerMode && flagged && findingsByKey[k]?.note && (
-          <div
-            style={{
-              marginTop: 8,
-              padding: '8px 10px',
-              background: '#0f172a',
-              border: '1px solid #334155',
-              borderRadius: 8,
-              color: '#cbd5e1'
-            }}
-          >
-            <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 4, fontWeight: 700 }}>
-              Manager note (sent to cleaner)
-            </div>
-            <div style={{ whiteSpace: 'pre-wrap' }}>{findingsByKey[k].note}</div>
-          </div>
-        )}
-
-        {isFix && !!p.cleaner_note && (
-          <div style={{
-            marginTop:8,
-            padding:'8px 10px',
-            background:'#052e2b',
-            border:'1px solid #065f46',
-            borderRadius:8,
-            color:'#86efac',
-            whiteSpace:'pre-wrap'
-          }}>
-            {p.cleaner_note}
-          </div>
-        )}
-
-        {!isManagerMode && flagged && findingsByKey[k] && findingsByKey[k].note && (
-          <div style={{
-            marginTop:8,
-            padding:'8px 10px',
-            background:'#0f172a',
-            border:'1px solid #334155',
-            borderRadius:8,
-            color:'#cbd5e1'
-          }}>
-            <div style={{ fontSize:11, color:'#94a3b8', marginBottom:4, fontWeight:700 }}>Manager note</div>
-            <div style={{ whiteSpace:'pre-wrap' }}>{findingsByKey[k].note}</div>
-          </div>
-        )}
       </div>
-    </div>
-  );
-}
+    );
+  }, (prev, next) => {
+    // only re-render this card when its own props change
+    const pk = keyFor(prev.p);
+    const nk = keyFor(next.p);
+    if (pk !== nk) return false; // different photo instance
+
+    // note value for THIS photo
+    const prevNote = prev.notesByKey[pk] || '';
+    const nextNote = next.notesByKey[nk] || '';
+    if (prevNote !== nextNote) return false;
+
+    // selection for THIS photo
+    const prevSel = prev.selectedKeys.has(pk);
+    const nextSel = next.selectedKeys.has(nk);
+    if (prevSel !== nextSel) return false;
+
+    // flagged / FIX state for THIS photo
+    const prevFlag = !!prev.findingsByKey[pk];
+    const nextFlag = !!next.findingsByKey[nk];
+    if (prevFlag !== nextFlag) return false;
+
+    const prevFix = !!prev.p.is_fix;
+    const nextFix = !!next.p.is_fix;
+    if (prevFix !== nextFix) return false;
+
+    return true; // unchanged → skip render
+  });
 
   if (!turnId) {
     return (
@@ -639,85 +667,84 @@ export default function Review() {
           </div>
         </div>
 
-       {/* Photos (grouped like cleaner: by shot label, then leftovers) */}
-<div style={ui.card}>
-  {loading ? (
-    <div>Loading photos…</div>
-  ) : (sections && sections.length > 0) ? (
-    sections.map(sec => (
-      <div key={sec.key} style={sectionWrapStyle}>
-        <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between', margin:'2px 4px 10px' }}>
-          <h3 style={{ margin:0 }}>{sec.title || 'Section'}</h3>
-          <div style={{ fontSize:12, color:'#94a3b8' }}>
-            {sec.photos.length} photo{sec.photos.length === 1 ? '' : 's'}
-          </div>
+        {/* Photos (grouped like cleaner: by shot label, then leftovers) */}
+        <div style={ui.card}>
+          {loading ? (
+            <div>Loading photos…</div>
+          ) : (sections && sections.length > 0) ? (
+            sections.map(sec => (
+              <div key={sec.key} style={sectionWrapStyle}>
+                <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between', margin:'2px 4px 10px' }}>
+                  <h3 style={{ margin:0 }}>{sec.title || 'Section'}</h3>
+                  <div style={{ fontSize:12, color:'#94a3b8' }}>
+                    {sec.photos.length} photo{sec.photos.length === 1 ? '' : 's'}
+                  </div>
+                </div>
+
+                <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(220px,1fr))', gap:12 }}>
+                  {sec.photos.map(p => (
+                    <PhotoCard
+                      key={keyFor(p)}
+                      p={p}
+                      isManagerMode={isManagerMode}
+                      selectedKeys={selectedKeys}
+                      notesByKey={notesByKey}
+                      findingsByKey={findingsByKey}
+                      setNoteFor={setNoteFor}
+                      toggleKey={toggleKey}
+                    />
+                  ))}
+                </div>
+              </div>
+            ))
+          ) : (photos && photos.length > 0) ? (
+            (() => {
+              // Fallback: group by area_key so managers still see everything
+              const byArea = (photos || []).reduce((acc, p) => {
+                const k = (p.area_key || '').trim() || '__UNCAT__';
+                (acc[k] ||= []).push(p);
+                return acc;
+              }, {});
+              Object.values(byArea).forEach(list =>
+                list.sort((a,b) => new Date(b.created_at) - new Date(a.created_at))
+              );
+              const areas = Object.keys(byArea)
+                .filter(k => k !== '__UNCAT__')
+                .sort((a,b) => a.localeCompare(b, undefined, { numeric:true }))
+                .concat(byArea['__UNCAT__'] ? ['__UNCAT__'] : []);
+
+              return areas.map(areaKey => (
+                <div key={areaKey} style={sectionWrapStyle}>
+                  <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between', margin:'2px 4px 10px' }}>
+                    <h3 style={{ margin:0 }}>
+                      {areaKey === '__UNCAT__' ? 'Additional uploads' : areaKey}
+                    </h3>
+                    <div style={{ fontSize:12, color:'#94a3b8' }}>
+                      {byArea[areaKey].length} photo{byArea[areaKey].length === 1 ? '' : 's'}
+                    </div>
+                  </div>
+
+                  <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(220px,1fr))', gap:12 }}>
+                    {byArea[areaKey].map(p => (
+                      <PhotoCard
+                        key={keyFor(p)}
+                        p={p}
+                        isManagerMode={isManagerMode}
+                        selectedKeys={selectedKeys}
+                        notesByKey={notesByKey}
+                        findingsByKey={findingsByKey}
+                        setNoteFor={setNoteFor}
+                        toggleKey={toggleKey}
+                      />
+                    ))}
+                  </div>
+                </div>
+              ));
+            })()
+          ) : (
+            <div style={ui.muted}>No photos yet.</div>
+          )}
         </div>
-
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(220px,1fr))', gap:12 }}>
-          {sec.photos.map(p => (
-             <PhotoCard
-               key={keyFor(p)}
-                p={p}
-                isManagerMode={isManagerMode}
-                selectedKeys={selectedKeys}
-                notesByKey={notesByKey}
-                findingsByKey={findingsByKey}
-                setNoteFor={setNoteFor}
-                toggleKey={toggleKey}
-            />
-
-           ))}
-        </div>
-      </div>
-    ))
-  ) : (photos && photos.length > 0) ? (
-    (() => {
-      // Fallback: group by area_key so managers still see everything
-      const byArea = (photos || []).reduce((acc, p) => {
-        const k = (p.area_key || '').trim() || '__UNCAT__';
-        (acc[k] ||= []).push(p);
-        return acc;
-      }, {});
-      Object.values(byArea).forEach(list =>
-        list.sort((a,b) => new Date(b.created_at) - new Date(a.created_at))
-      );
-      const areas = Object.keys(byArea)
-        .filter(k => k !== '__UNCAT__')
-        .sort((a,b) => a.localeCompare(b, undefined, { numeric:true }))
-        .concat(byArea['__UNCAT__'] ? ['__UNCAT__'] : []);
-
-      return areas.map(areaKey => (
-        <div key={areaKey} style={sectionWrapStyle}>
-          <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between', margin:'2px 4px 10px' }}>
-            <h3 style={{ margin:0 }}>
-              {areaKey === '__UNCAT__' ? 'Additional uploads' : areaKey}
-            </h3>
-            <div style={{ fontSize:12, color:'#94a3b8' }}>
-              {byArea[areaKey].length} photo{byArea[areaKey].length === 1 ? '' : 's'}
-            </div>
-          </div>
-
-          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(220px,1fr))', gap:12 }}>
-            {byArea[areaKey].map(p => (
-             <PhotoCard
-              key={keyFor(p)}
-              p={p}
-              isManagerMode={isManagerMode}
-              selectedKeys={selectedKeys}
-              notesByKey={notesByKey}
-              findingsByKey={findingsByKey}
-              setNoteFor={setNoteFor}
-              toggleKey={toggleKey}
-              />
-            ))}
-          </div>
-        </div>
-      ));
-    })()
-  ) : (
-    <div style={ui.muted}>No photos yet.</div>
-  )}
-</div>
 
         {uniqueAreas.length > 1 && (
           <div style={{ ...ui.subtle }}>
