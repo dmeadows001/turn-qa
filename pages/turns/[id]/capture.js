@@ -105,7 +105,7 @@ export default function Capture() {
   const requestedThumbsRef = useRef(new Set());
 
   // Needs-fix (manager) notes to show to cleaner, by storage path
-  const [fixNotes, setFixNotes] = useState({ byPath: {}, overall: '', count: 0 });
+  const [fixNotes, setFixNotes] = useState({ byPath: {}, byShotId: {}, overall: '', count: 0 });
   const [hideFixBanner, setHideFixBanner] = useState(false);
 
   // Cleaner overall reply (optional)
@@ -128,10 +128,15 @@ export default function Capture() {
   // ------- helpers -------
   const smallMeta = { fontSize: 12, color: '#94a3b8' };
 
-  // Find manager note for a storage path with a few tolerant checks
-function managerNoteFor(path) {
+ // Find manager note for a storage path /or/ shot_id with tolerant matching
+function managerNoteFor(path, shotId) {
   try {
     const byPath = (fixNotes && fixNotes.byPath) ? fixNotes.byPath : {};
+    const byShotId = (fixNotes && fixNotes.byShotId) ? fixNotes.byShotId : {};
+
+    // Highest-confidence: direct shot_id mapping
+    if (shotId && byShotId[String(shotId)]) return byShotId[String(shotId)];
+
     const p = String(path || '');
     if (!p) return null;
 
@@ -454,15 +459,46 @@ function managerNoteFor(path) {
         if (!r.ok) return;
         const j = await r.json().catch(() => ({}));
         const overall =
-          j.overall_note || j?.notes?.overall || j.overall || '';
-        const list =
-          (Array.isArray(j.items) ? j.items :
-          Array.isArray(j?.notes?.items) ? j.notes.items :
-          Array.isArray(j.photos) ? j.photos : []);
-        const byPath = {};
-        list.forEach(it => { if (it?.path && (it.note || it.notes)) byPath[it.path] = it.note || it.notes; });
-        setFixNotes({ byPath, overall: String(overall || ''), count: Object.keys(byPath).length });
-      } catch {}
+  j.overall_note || j?.notes?.overall || j.overall || '';
+
+const list =
+  (Array.isArray(j.items) ? j.items :
+  Array.isArray(j?.notes?.items) ? j.notes.items :
+  Array.isArray(j.photos) ? j.photos : []);
+
+const byPath = {};
+const byShotId = {};
+
+// index both path and shot_id (if present)
+list.forEach(it => {
+  const n = it?.note || it?.notes;
+  if (!n) return;
+
+  if (it?.path) {
+    const raw = String(it.path);
+    const noLead = raw.replace(/^\/+/, '');
+    byPath[raw] = n;
+    byPath[noLead] = n; // tolerate leading-slash differences
+  }
+  if (it?.shot_id) {
+    byShotId[String(it.shot_id)] = n;
+  }
+});
+
+const count =
+  Object.keys(byPath).length > 0
+    ? Object.keys(byPath).length
+    : Object.keys(byShotId).length;
+
+setFixNotes({ byPath, byShotId, overall: String(overall || ''), count });
+
+// optional: expose to debug console
+try {
+  if (typeof window !== 'undefined') {
+    window.__CAPTURE_DEBUG__ = window.__CAPTURE_DEBUG__ || {};
+    window.__CAPTURE_DEBUG__.fixNotes = { byPath, byShotId, overall: String(overall || ''), count };
+  }
+} catch {}
     })();
   }, [turnId]);
 
@@ -893,7 +929,7 @@ function managerNoteFor(path) {
                   {files.map(f => {
                     if (!f.preview && !thumbByPath[f.url]) ensureThumb(f.url);
                     const thumb = f.preview || thumbByPath[f.url] || null;
-                    const managerNote = managerNoteFor(f.url);
+                    const managerNote = managerNoteFor(f.url, f.shotId);
 
 
                     // Only originals show amber "Needs fix"
