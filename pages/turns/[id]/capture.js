@@ -351,30 +351,33 @@ export default function Capture() {
 
         for (const it of items) {
           const path = it.path || '';
-          if (!path || seen.has(path)) continue;
-          seen.add(path);
+          // 👇 Use (path + is_fix) as the dedupe key so original and fix can coexist
+          const key = path ? `${path}|${it?.is_fix ? 1 : 0}` : '';
+          if (!path || seen.has(key)) continue;
+          seen.add(key);
 
           let targetShot = null;
           if (it.shot_id && shotIdSet.has(it.shot_id)) {
             targetShot = it.shot_id;
           } else {
-            const ak = String(it.area_key || '').toLowerCase();
-            if (ak && areaToShotId.has(ak)) targetShot = areaToShotId.get(ak);
-          }
-          if (!targetShot) targetShot = '__extras__';
-
-          const file = {
-            name: path.split('/').pop() || 'photo.jpg',
-            url: path,
-            width: null,
-            height: null,
-            shotId: targetShot,
-            preview: null,
-            isFix: !!it.is_fix,
-            cleanerNote: it.cleaner_note || null,
-          };
-          (byShot[targetShot] ||= []).push(file);
+          const ak = String(it.area_key || '').toLowerCase();
+          if (ak && areaToShotId.has(ak)) targetShot = areaToShotId.get(ak);
         }
+        if (!targetShot) targetShot = '__extras__';
+
+        const file = {
+          name: path.split('/').pop() || 'photo.jpg',
+          url: path,
+          width: null,
+          height: null,
+          shotId: targetShot,
+          preview: null,
+          isFix: !!it.is_fix,
+          cleanerNote: it.cleaner_note || null,
+        };
+        (byShot[targetShot] ||= []).push(file);
+      }
+
 
         if (byShot['__extras__'] && !shotList.some(s => s.shot_id === '__extras__')) {
           setShots(prev => {
