@@ -495,26 +495,62 @@ export default function Capture() {
     loadExisting();
   }, [turnId, shots]);
 
-  // --- Fetch needs-fix notes (overall + per-photo) for the banner ---
-  useEffect(() => {
-    if (!turnId) return;
-    (async () => {
+// --- Fetch needs-fix notes (overall + per-photo) for the banner ---
+useEffect(() => {
+  if (!turnId) return;
+  (async () => {
+    try {
+      let overall = '';
+      let list = [];
+
+      // 1) Preferred: /findings → [{ path, note, severity }]
       try {
-        const r = await fetch(`/api/turns/${turnId}/notes`);
-        if (!r.ok) return;
-        const j = await r.json().catch(() => ({}));
-        const overall =
-          j.overall_note || j?.notes?.overall || j.overall || '';
-        const list =
-          (Array.isArray(j.items) ? j.items :
-          Array.isArray(j?.notes?.items) ? j.notes.items :
-          Array.isArray(j.photos) ? j.photos : []);
-        const byPath = {};
-        list.forEach(it => { if (it?.path && (it.note || it.notes)) byPath[it.path] = it.note || it.notes; });
-        setFixNotes({ byPath, overall: String(overall || ''), count: Object.keys(byPath).length });
-      } catch {}
-    })();
-  }, [turnId]);
+        const r = await fetch(`/api/turns/${turnId}/findings`);
+        if (r.ok) {
+          const j = await r.json().catch(() => ({}));
+          if (Array.isArray(j)) {
+            list = j; // already an array of findings
+          } else if (Array.isArray(j?.findings)) {
+            list = j.findings;
+            overall = j.summary || j.overall || '';
+          }
+        }
+      } catch { /* non-blocking */ }
+
+      // 2) Fallback: legacy /notes shape
+      if (!list.length) {
+        try {
+          const r2 = await fetch(`/api/turns/${turnId}/notes`);
+          if (r2.ok) {
+            const j2 = await r2.json().catch(() => ({}));
+            overall = j2.overall_note || j2?.notes?.overall || j2.overall || '';
+            list = Array.isArray(j2.items) ? j2.items
+                 : Array.isArray(j2?.notes?.items) ? j2.notes.items
+                 : Array.isArray(j2.photos) ? j2.photos
+                 : [];
+          }
+        } catch { /* non-blocking */ }
+      }
+
+      // Normalize to byPath map
+      const byPath = {};
+      (list || []).forEach(it => {
+        const p = it?.path || '';
+        const n = (it?.note || it?.notes || '').trim();
+        if (p && n) byPath[p] = n;
+      });
+
+      setFixNotes({
+        byPath,
+        overall: String(overall || ''),
+        count: Object.keys(byPath).length
+      });
+    } catch {
+      // ignore
+    }
+  })();
+}, [turnId]);
+
 
   // -------- Add files (quality + upload to Storage) --------
   async function addFiles(shotId, fileList) {
