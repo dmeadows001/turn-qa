@@ -128,64 +128,81 @@ export default function Capture() {
   // ------- helpers -------
   const smallMeta = { fontSize: 12, color: '#94a3b8' };
 
-// Find manager note for a storage path with tolerant checks + shot_id fallback
-function managerNoteFor(path, shotId) {
-  try {
-    const byPath   = (fixNotes && fixNotes.byPath)   ? fixNotes.byPath   : {};
-    const byShotId = (fixNotes && fixNotes.byShotId) ? fixNotes.byShotId : {};
-    const p = String(path || '');
-    const tryKey = (k) => (k ? byPath[k] : undefined);
+  // NEW: Canonical key normalizer for URLs/paths so notes & cards match
+  function normalizeKey(s) {
+    try {
+      let x = String(s || '');
 
-    // 1) exact / normalized / case-insensitive
-    if (p) {
-      const noLead   = p.replace(/^\/+/, '');
-      const withLead = p.startsWith('/') ? p : `/${p}`;
+      // strip query/hash
+      x = x.split('?')[0].split('#')[0];
 
-      const variants = [
-        p, noLead, withLead,
-        p.toLowerCase(), noLead.toLowerCase(), withLead.toLowerCase()
-      ];
-      for (const v of variants) {
-        const hit = tryKey(v);
-        if (hit) return hit;
+      // if full URL, keep pathname
+      try { const u = new URL(x); x = u.pathname; } catch {}
+
+      // trim common supabase/object prefixes
+      x = x.replace(/^\/?storage\/v1\/object\/public\//, '');
+      x = x.replace(/^\/?object\/sign\//, '');
+
+      // drop bucket prefix if present (photos/..., turns/..., etc.)
+      if (x.includes('/')) {
+        x = x.replace(/^[^/]+\/(.*)$/, '$1');
       }
 
-      // 2) basename equality (case-insensitive)
-      const base = noLead.split('/').pop();
-      if (base) {
-        const baseLc = base.toLowerCase();
-        for (const k of Object.keys(byPath)) {
-          const tail = String(k || '').split('/').pop() || '';
-          if (tail === base || tail.toLowerCase() === baseLc) {
-            return byPath[k];
-          }
-        }
+      // remove leading slashes
+      x = x.replace(/^\/+/, '');
 
-        // 3) last-resort: endsWith/contains on basename (case-insensitive)
-        for (const k of Object.keys(byPath)) {
-          const kk = String(k || '');
-          if (kk.toLowerCase().endsWith(baseLc) || kk.toLowerCase().includes(baseLc)) {
-            return byPath[k];
-          }
-        }
-      }
+      return x;
+    } catch {
+      return String(s || '');
     }
-
-    // 4) final fallback: shot_id-indexed note
-    if (shotId && byShotId[String(shotId)]) return byShotId[String(shotId)];
-
-    return null;
-  } catch {
-    return null;
   }
-}
+
+  // Find manager note for a storage path with tolerant checks + shot_id fallback
+  function managerNoteFor(path, shotId) {
+    try {
+      const byPath   = (fixNotes && fixNotes.byPath)   ? fixNotes.byPath   : {};
+      const byShotId = (fixNotes && fixNotes.byShotId) ? fixNotes.byShotId : {};
+      const p = String(path || '');
+
+      if (p) {
+        const noLead    = p.replace(/^\/+/, '');
+        const withLead  = p.startsWith('/') ? p : `/${p}`;
+        const norm      = normalizeKey(p);
+        const normLead  = norm ? `/${norm}` : '';
+
+        const variants = [
+          p, noLead, withLead,
+          p.toLowerCase(), noLead.toLowerCase(), withLead.toLowerCase(),
+          norm, norm.toLowerCase(), normLead, normLead.toLowerCase()
+        ].filter(Boolean);
+
+        for (const v of variants) {
+          if (byPath[v]) return byPath[v];
+        }
+
+        // basename last-resort (use normalized tail first)
+        const base = (normalizeKey(noLead) || noLead).split('/').pop();
+        if (base) {
+          const baseLc = base.toLowerCase();
+          for (const k of Object.keys(byPath)) {
+            const tail = (String(k || '').split('?')[0].split('#')[0].split('/').pop() || '');
+            if (tail === base || tail.toLowerCase() === baseLc) return byPath[k];
+          }
+        }
+      }
+
+      if (shotId && byShotId[String(shotId)]) return byShotId[String(shotId)];
+      return null;
+    } catch {
+      return null;
+    }
+  }
 
   if (typeof window !== 'undefined') {
-  window.__CAPTURE_DEBUG__ = window.__CAPTURE_DEBUG__ || {};
-  window.__CAPTURE_DEBUG__.managerNoteFor = managerNoteFor;
-}
-
-
+    window.__CAPTURE_DEBUG__ = window.__CAPTURE_DEBUG__ || {};
+    window.__CAPTURE_DEBUG__.managerNoteFor = managerNoteFor;
+    window.__CAPTURE_DEBUG__.normalizeKey = normalizeKey;
+  }
 
   // signs an existing storage path for viewing/thumbnail
   async function signPath(path) {
@@ -419,24 +436,23 @@ function managerNoteFor(path, shotId) {
           if (it.shot_id && shotIdSet.has(it.shot_id)) {
             targetShot = it.shot_id;
           } else {
-          const ak = String(it.area_key || '').toLowerCase();
-          if (ak && areaToShotId.has(ak)) targetShot = areaToShotId.get(ak);
+            const ak = String(it.area_key || '').toLowerCase();
+            if (ak && areaToShotId.has(ak)) targetShot = areaToShotId.get(ak);
+          }
+          if (!targetShot) targetShot = '__extras__';
+
+          const file = {
+            name: path.split('/').pop() || 'photo.jpg',
+            url: path,
+            width: null,
+            height: null,
+            shotId: targetShot,
+            preview: null,
+            isFix: !!it.is_fix,
+            cleanerNote: it.cleaner_note || null,
+          };
+          (byShot[targetShot] ||= []).push(file);
         }
-        if (!targetShot) targetShot = '__extras__';
-
-        const file = {
-          name: path.split('/').pop() || 'photo.jpg',
-          url: path,
-          width: null,
-          height: null,
-          shotId: targetShot,
-          preview: null,
-          isFix: !!it.is_fix,
-          cleanerNote: it.cleaner_note || null,
-        };
-        (byShot[targetShot] ||= []).push(file);
-      }
-
 
         if (byShot['__extras__'] && !shotList.some(s => s.shot_id === '__extras__')) {
           setShots(prev => {
@@ -477,104 +493,116 @@ function managerNoteFor(path, shotId) {
     loadExisting();
   }, [turnId, shots]);
 
-// --- Fetch needs-fix notes ---
-useEffect(() => {
-  if (!turnId) return;
+  // --- Fetch needs-fix notes ---
+  useEffect(() => {
+    if (!turnId) return;
 
-  (async () => {
-    try {
-      const r = await fetch(`/api/turns/${turnId}/notes`);
-      if (!r.ok) return;
-      const j = await r.json().catch(() => ({}));
+    (async () => {
+      try {
+        const r = await fetch(`/api/turns/${turnId}/notes`);
+        if (!r.ok) return;
+        const j = await r.json().catch(() => ({}));
 
-      const overall =
-        j.overall_note || j?.notes?.overall || j.overall || '';
+        const overall =
+          j.overall_note || j?.notes?.overall || j.overall || '';
 
-      const list =
-        (Array.isArray(j.items) ? j.items :
-        Array.isArray(j?.notes?.items) ? j.notes.items :
-        Array.isArray(j.photos) ? j.photos : []);
+        const list =
+          (Array.isArray(j.items) ? j.items :
+          Array.isArray(j?.notes?.items) ? j.notes.items :
+          Array.isArray(j.photos) ? j.photos : []);
 
-      const byPath = {};
-      const byShotId = {};
+        const byPath = {};
+        const byShotId = {};
 
-      for (const it of list) {
-        const n = it?.note || it?.notes;
-        if (!n) continue;
+        for (const it of list) {
+          const n = it?.note || it?.notes;
+          if (!n) continue;
 
-        if (it?.path) {
-  const raw    = String(it.path);
-  const noLead = raw.replace(/^\/+/, '');
-  const withLead = raw.startsWith('/') ? raw : `/${raw}`;
-  const base   = noLead.split('/').pop() || '';
+          // Current (fix) path keys
+          if (it?.path) {
+            const raw    = String(it.path);
+            const noLead = raw.replace(/^\/+/, '');
+            const withLead = raw.startsWith('/') ? raw : `/${raw}`;
+            const base   = noLead.split('/').pop() || '';
+            const norm   = normalizeKey(raw);
+            const normLead = norm ? `/${norm}` : '';
 
-  // store multiple keys, including lowercased variants to ignore case
-  byPath[raw]           = n;
-  byPath[noLead]        = n;
-  byPath[withLead]      = n;
-  byPath[raw.toLowerCase()]      = n;
-  byPath[noLead.toLowerCase()]   = n;
-  byPath[withLead.toLowerCase()] = n;
-  if (base) {
-    byPath[base]                = n;          // basename exact
-    byPath[base.toLowerCase()]  = n;          // basename (lower)
-  }
-}
-        if (it?.shot_id) {
-  byShotId[String(it.shot_id)] = n;
-}
+            byPath[raw] = n;
+            byPath[noLead] = n;
+            byPath[withLead] = n;
+            byPath[raw.toLowerCase()] = n;
+            byPath[noLead.toLowerCase()] = n;
+            byPath[withLead.toLowerCase()] = n;
+            if (norm) {
+              byPath[norm] = n;
+              byPath[norm.toLowerCase()] = n;
+              byPath[normLead] = n;
+              byPath[normLead.toLowerCase()] = n;
+            }
+            if (base) {
+              byPath[base] = n;
+              byPath[base.toLowerCase()] = n;
+            }
+          }
+          if (it?.shot_id) {
+            byShotId[String(it.shot_id)] = n;
+          }
 
           // ALSO index manager notes by the *original* photo and shot
-  const origRaw =
-    it?.orig_url || it?.orig_path || it?.original_path || it?.original_url || null;
-  if (origRaw) {
-    const raw2     = String(origRaw);
-    const noLead2  = raw2.replace(/^\/+/, '');
-    const withLead2= raw2.startsWith('/') ? raw2 : `/${raw2}`;
-    const base2    = noLead2.split('/').pop() || '';
+          const origRaw =
+            it?.orig_url || it?.orig_path || it?.original_path || it?.original_url || null;
+          if (origRaw) {
+            const raw2      = String(origRaw);
+            const noLead2   = raw2.replace(/^\/+/, '');
+            const withLead2 = raw2.startsWith('/') ? raw2 : `/${raw2}`;
+            const base2     = noLead2.split('/').pop() || '';
+            const norm2     = normalizeKey(raw2);
+            const normLead2 = norm2 ? `/${norm2}` : '';
 
-    byPath[raw2]                 = n;
-    byPath[noLead2]              = n;
-    byPath[withLead2]            = n;
-    byPath[raw2.toLowerCase()]   = n;
-    byPath[noLead2.toLowerCase()]= n;
-    byPath[withLead2.toLowerCase()]= n;
-    if (base2) {
-      byPath[base2]               = n;
-      byPath[base2.toLowerCase()] = n;
-    }
-  }
+            byPath[raw2] = n;
+            byPath[noLead2] = n;
+            byPath[withLead2] = n;
+            byPath[raw2.toLowerCase()] = n;
+            byPath[noLead2.toLowerCase()] = n;
+            byPath[withLead2.toLowerCase()] = n;
+            if (norm2) {
+              byPath[norm2] = n;
+              byPath[norm2.toLowerCase()] = n;
+              byPath[normLead2] = n;
+              byPath[normLead2.toLowerCase()] = n;
+            }
+            if (base2) {
+              byPath[base2] = n;
+              byPath[base2.toLowerCase()] = n;
+            }
+          }
 
-  const origShot =
-    it?.orig_shotid || it?.orig_shot_id || it?.original_shotid || it?.original_shot_id;
-  if (origShot) {
-    byShotId[String(origShot)] = n;
-  }
+          const origShot =
+            it?.orig_shotid || it?.orig_shot_id || it?.original_shotid || it?.original_shot_id;
+          if (origShot) {
+            byShotId[String(origShot)] = n;
+          }
+        }
 
+        const count =
+          Object.keys(byPath).length > 0
+            ? Object.keys(byPath).length
+            : Object.keys(byShotId).length;
 
+        setFixNotes({ byPath, byShotId, overall: String(overall || ''), count });
 
+        // debug expose
+        if (typeof window !== 'undefined') {
+          window.__CAPTURE_DEBUG__ = window.__CAPTURE_DEBUG__ || {};
+          window.__CAPTURE_DEBUG__.fixNotes = {
+            byPath, byShotId, overall: String(overall || ''), count
+          };
+        }
+      } catch {
+        // ignore
       }
-
-      const count =
-        Object.keys(byPath).length > 0
-          ? Object.keys(byPath).length
-          : Object.keys(byShotId).length;
-
-      setFixNotes({ byPath, byShotId, overall: String(overall || ''), count });
-
-      // debug expose (keep inside the IIFE/try so braces match)
-      if (typeof window !== 'undefined') {
-        window.__CAPTURE_DEBUG__ = window.__CAPTURE_DEBUG__ || {};
-        window.__CAPTURE_DEBUG__.fixNotes = {
-          byPath, byShotId, overall: String(overall || ''), count
-        };
-      }
-    } catch {
-      // ignore
-    }
-  })();
-}, [turnId]);
-
+    })();
+  }, [turnId]);
 
   // -------- Add files (quality + upload to Storage) --------
   async function addFiles(shotId, fileList) {
@@ -1004,9 +1032,6 @@ useEffect(() => {
                     if (!f.preview && !thumbByPath[f.url]) ensureThumb(f.url);
                     const thumb = f.preview || thumbByPath[f.url] || null;
                     const managerNote = managerNoteFor(f.url, f.shotId || s.shot_id);
-
-
-
 
                     // Only originals show amber "Needs fix"
                     const showNeedsFix = !!managerNote && !f.isFix;
