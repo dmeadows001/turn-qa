@@ -431,32 +431,33 @@ function normalizeKey(s) {
         const seen = new Set();
 
         for (const it of items) {
-          const path = it.path || '';
-          // 👇 Use (path + is_fix) as the dedupe key so original and fix can coexist
-          const key = path ? `${path}|${it?.is_fix ? 1 : 0}` : '';
-          if (!path || seen.has(key)) continue;
-          seen.add(key);
+        const path = it.path || '';
+        const base = path.split('/').pop() || '';
 
-          let targetShot = null;
-          if (it.shot_id && shotIdSet.has(it.shot_id)) {
-            targetShot = it.shot_id;
-          } else {
-            const ak = String(it.area_key || '').toLowerCase();
-            if (ak && areaToShotId.has(ak)) targetShot = areaToShotId.get(ak);
-          }
-          if (!targetShot) targetShot = '__extras__';
+        // Heuristic: treat as FIX if any of these are true
+        const inferredFix =
+          !!it.is_fix ||
+          /__fix__/i.test(base) ||
+          !!it.orig_path || !!it.orig_url || !!it.original_path || !!it.original_url;
 
-          const file = {
-            name: path.split('/').pop() || 'photo.jpg',
-            url: path,
-            width: null,
-            height: null,
-            shotId: targetShot,
-            preview: null,
-            isFix: !!it.is_fix,
-            cleanerNote: it.cleaner_note || null,
-            managerNote: it.manager_note || null,
-          };
+      // Dedupe by (path + inferredFix) so original + fix never collapse
+      const key = path ? `${path}|${inferredFix ? 1 : 0}` : '';
+      if (!path || seen.has(key)) continue;
+      seen.add(key);
+
+      ...
+      const file = {
+        name: base,
+        url: path,
+        width: null,
+        height: null,
+        shotId: targetShot,
+        preview: null,
+        isFix: inferredFix,
+        cleanerNote: it.cleaner_note || it.note || null,   // keep any note column shape
+        managerNote: it.manager_note || null,
+      };
+
           (byShot[targetShot] ||= []).push(file);
         }
 
