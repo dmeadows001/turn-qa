@@ -40,12 +40,15 @@ export default async function handler(req, res) {
     let tpErr = null;
 
     const trySelect = async (withOptional, baseCols) => {
-      const opt = withOptional ? ', is_fix, cleaner_note' : '';
-      return await supa
-        .from('turn_photos')
-        .select(baseCols + opt)
-        .eq('turn_id', turnId)
-        .order('created_at', { ascending: true });
+    // keep shapes backwards-compatible; only add columns if present
+    const opt = withOptional
+      ? ', is_fix, cleaner_note, manager_note, orig_path, orig_url, original_path, original_url, orig_shotid, orig_shot_id'
+      : '';
+    return await supa
+      .from('turn_photos')
+      .select(baseCols + opt)
+      .eq('turn_id', turnId)
+      .order('created_at', { ascending: true });
     };
 
     // Try widest set of path columns; on “column does not exist” retry with smaller sets
@@ -164,6 +167,12 @@ export default async function handler(req, res) {
         // carry-through if present (undefined if not selected)
         is_fix: r.is_fix ?? undefined,
         cleaner_note: r.cleaner_note ?? undefined,
+         manager_note: r.manager_note ?? undefined,
+        // pass through any “origin” fields if they exist (undefined otherwise)
+        orig_path: r.orig_path ?? r.original_path ?? undefined,
+        orig_url: r.orig_url ?? r.original_url ?? undefined,
+        orig_shotid: r.orig_shotid ?? r.orig_shot_id ?? undefined,
+       });
       });
     }
 
