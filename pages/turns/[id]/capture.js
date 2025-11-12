@@ -430,36 +430,45 @@ function normalizeKey(s) {
         const byShot = {};
         const seen = new Set();
 
-        for (const it of items) {
-        const path = it.path || '';
-        const base = path.split('/').pop() || '';
+       for (const it of items) {
+      const path = it.path || '';
+      const base = path.split('/').pop() || '';
 
-        // Heuristic: treat as FIX if any of these are true
-        const inferredFix =
-          !!it.is_fix ||
-          /__fix__/i.test(base) ||
-          !!it.orig_path || !!it.orig_url || !!it.original_path || !!it.original_url;
+      // Infer whether this is a FIX photo (don’t rely only on is_fix)
+      const inferredFix =
+        !!it.is_fix ||
+        /__fix__/i.test(base) ||
+        !!it.orig_path || !!it.orig_url || !!it.original_path || !!it.original_url;
 
-      // Dedupe by (path + inferredFix) so original + fix never collapse
+      // Dedupe by (path + inferredFix) so original and fix never collapse
       const key = path ? `${path}|${inferredFix ? 1 : 0}` : '';
       if (!path || seen.has(key)) continue;
       seen.add(key);
 
-      ...
-      const file = {
-        name: base,
-        url: path,
-        width: null,
-        height: null,
-        shotId: targetShot,
-        preview: null,
-        isFix: inferredFix,
-        cleanerNote: it.cleaner_note || it.note || null,   // keep any note column shape
-        managerNote: it.manager_note || null,
-      };
+      // Pick target shot (keep your existing logic)
+      let targetShot = null;
+      if (it.shot_id && shotIdSet.has(it.shot_id)) {
+      targetShot = it.shot_id;
+    } else {
+      const ak = String(it.area_key || '').toLowerCase();
+      if (ak && areaToShotId.has(ak)) targetShot = areaToShotId.get(ak);
+    }
+    if (!targetShot) targetShot = '__extras__';
 
-          (byShot[targetShot] ||= []).push(file);
-        }
+  const file = {
+    name: base,
+    url: path,
+    width: null,
+    height: null,
+    shotId: targetShot,
+    preview: null,
+    isFix: inferredFix,                         // <-- drives green FIX badge/outline
+    cleanerNote: it.cleaner_note || it.note || null,
+    managerNote: it.manager_note || null,
+  };
+  (byShot[targetShot] ||= []).push(file);
+}
+
 
         if (byShot['__extras__'] && !shotList.some(s => s.shot_id === '__extras__')) {
           setShots(prev => {
