@@ -965,7 +965,8 @@ useEffect(() => {
                   {files.map(f => {
                     if (!f.preview && !thumbByPath[f.url]) ensureThumb(f.url);
                     const thumb = f.preview || thumbByPath[f.url] || null;
-                    const managerNote = managerNoteFor(f.url, f.shotId);
+                    const managerNote = managerNoteFor(f.url, s.shot_id);
+
 
 
                     // Only originals show amber "Needs fix"
