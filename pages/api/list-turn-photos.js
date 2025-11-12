@@ -172,8 +172,7 @@ export default async function handler(req, res) {
         orig_path: r.orig_path ?? r.original_path ?? undefined,
         orig_url: r.orig_url ?? r.original_url ?? undefined,
         orig_shotid: r.orig_shotid ?? r.orig_shot_id ?? undefined,
-       });
-      });
+        });
     }
 
     // 4) Dedupe by (path + is_fix) to ensure original and fix never collapse
