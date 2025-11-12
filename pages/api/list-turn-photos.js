@@ -175,23 +175,14 @@ export default async function handler(req, res) {
         });
     }
 
-    // 4) Dedupe by (path + is_fix) to ensure original and fix never collapse
-    const bestByKey = new Map(); // `${path}|${is_fix?1:0}` -> row
-    for (const row of out) {
-      const p = row.path || '';
-      if (!p) continue;
-      const k = `${p}|${row.is_fix ? 1 : 0}`;
-      const prev = bestByKey.get(k);
-      if (!prev) {
-        bestByKey.set(k, row);
-      } else {
-        // Keep the newest row (created_at), fall back to id
-        const prevTime = new Date(prev.created_at || 0).getTime();
-        const curTime = new Date(row.created_at || 0).getTime();
-        if (curTime >= prevTime) bestByKey.set(k, row);
-      }
-    }
-    const finalOut = Array.from(bestByKey.values());
+   // 4) Do NOT dedupe — return everything, oldest -> newest
+  const finalOut = out
+    .slice()
+    .sort((a, b) => {
+      const ta = new Date(a.created_at || 0).getTime();
+      const tb = new Date(b.created_at || 0).getTime();
+      return ta - tb;
+    });
 
     // 5) Best-effort backfill
     if (updates.length) {
