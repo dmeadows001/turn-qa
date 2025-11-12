@@ -134,26 +134,44 @@ function managerNoteFor(path, shotId) {
     const byPath   = (fixNotes && fixNotes.byPath)   ? fixNotes.byPath   : {};
     const byShotId = (fixNotes && fixNotes.byShotId) ? fixNotes.byShotId : {};
     const p = String(path || '');
+    const tryKey = (k) => (k ? byPath[k] : undefined);
+
+    // 1) exact / normalized / case-insensitive
     if (p) {
-      // exact
-      if (byPath[p]) return byPath[p];
-
-      // normalize leading slash variants
-      const noLead  = p.replace(/^\/+/, '');
+      const noLead   = p.replace(/^\/+/, '');
       const withLead = p.startsWith('/') ? p : `/${p}`;
-      if (byPath[noLead])  return byPath[noLead];
-      if (byPath[withLead]) return byPath[withLead];
 
-      // basename fallback (last resort)
+      const variants = [
+        p, noLead, withLead,
+        p.toLowerCase(), noLead.toLowerCase(), withLead.toLowerCase()
+      ];
+      for (const v of variants) {
+        const hit = tryKey(v);
+        if (hit) return hit;
+      }
+
+      // 2) basename equality (case-insensitive)
       const base = noLead.split('/').pop();
       if (base) {
-        const hitKey = Object.keys(byPath).find(k => (k || '').split('/').pop() === base);
-        if (hitKey) return byPath[hitKey];
+        const baseLc = base.toLowerCase();
+        for (const k of Object.keys(byPath)) {
+          const tail = String(k || '').split('/').pop() || '';
+          if (tail === base || tail.toLowerCase() === baseLc) {
+            return byPath[k];
+          }
+        }
+
+        // 3) last-resort: endsWith/contains on basename (case-insensitive)
+        for (const k of Object.keys(byPath)) {
+          const kk = String(k || '');
+          if (kk.toLowerCase().endsWith(baseLc) || kk.toLowerCase().includes(baseLc)) {
+            return byPath[k];
+          }
+        }
       }
     }
 
-    // final fallback: shot_id-based note (covers cases where the note API
-    // didn’t return a path or the path differs slightly from storage)
+    // 4) final fallback: shot_id-indexed note
     if (shotId && byShotId[String(shotId)]) return byShotId[String(shotId)];
 
     return null;
@@ -479,14 +497,24 @@ useEffect(() => {
         if (!n) continue;
 
         if (it?.path) {
-          const raw = String(it.path);
-          const noLead = raw.replace(/^\/+/, '');
-          byPath[raw] = n;
-          byPath[noLead] = n; // tolerate leading slash differences
-        }
-        if (it?.shot_id) {
-          byShotId[String(it.shot_id)] = n;
-        }
+  const raw    = String(it.path);
+  const noLead = raw.replace(/^\/+/, '');
+  const withLead = raw.startsWith('/') ? raw : `/${raw}`;
+  const base   = noLead.split('/').pop() || '';
+
+  // store multiple keys, including lowercased variants to ignore case
+  byPath[raw]           = n;
+  byPath[noLead]        = n;
+  byPath[withLead]      = n;
+  byPath[raw.toLowerCase()]      = n;
+  byPath[noLead.toLowerCase()]   = n;
+  byPath[withLead.toLowerCase()] = n;
+  if (base) {
+    byPath[base]                = n;          // basename exact
+    byPath[base.toLowerCase()]  = n;          // basename (lower)
+  }
+}
+
       }
 
       const count =
