@@ -128,32 +128,35 @@ export default function Capture() {
   // ------- helpers -------
   const smallMeta = { fontSize: 12, color: '#94a3b8' };
 
- // Find manager note for a storage path /or/ shot_id with tolerant matching
+// Find manager note for a storage path with tolerant checks + shot_id fallback
 function managerNoteFor(path, shotId) {
   try {
-    const byPath = (fixNotes && fixNotes.byPath) ? fixNotes.byPath : {};
+    const byPath   = (fixNotes && fixNotes.byPath)   ? fixNotes.byPath   : {};
     const byShotId = (fixNotes && fixNotes.byShotId) ? fixNotes.byShotId : {};
+    const p = String(path || '');
+    if (p) {
+      // exact
+      if (byPath[p]) return byPath[p];
 
-    // Highest-confidence: direct shot_id mapping
+      // normalize leading slash variants
+      const noLead  = p.replace(/^\/+/, '');
+      const withLead = p.startsWith('/') ? p : `/${p}`;
+      if (byPath[noLead])  return byPath[noLead];
+      if (byPath[withLead]) return byPath[withLead];
+
+      // basename fallback (last resort)
+      const base = noLead.split('/').pop();
+      if (base) {
+        const hitKey = Object.keys(byPath).find(k => (k || '').split('/').pop() === base);
+        if (hitKey) return byPath[hitKey];
+      }
+    }
+
+    // final fallback: shot_id-based note (covers cases where the note API
+    // didn’t return a path or the path differs slightly from storage)
     if (shotId && byShotId[String(shotId)]) return byShotId[String(shotId)];
 
-    const p = String(path || '');
-    if (!p) return null;
-
-    // exact
-    if (byPath[p]) return byPath[p];
-
-    // normalize leading slash variants
-    const noLead = p.replace(/^\/+/, '');
-    const withLead = p.startsWith('/') ? p : `/${p}`;
-    if (byPath[noLead]) return byPath[noLead];
-    if (byPath[withLead]) return byPath[withLead];
-
-    // basename fallback (last resort)
-    const base = noLead.split('/').pop();
-    if (!base) return null;
-    const hitKey = Object.keys(byPath).find(k => (k || '').split('/').pop() === base);
-    return hitKey ? byPath[hitKey] : null;
+    return null;
   } catch {
     return null;
   }
