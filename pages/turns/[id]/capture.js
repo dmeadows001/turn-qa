@@ -514,6 +514,10 @@ useEffect(() => {
     byPath[base.toLowerCase()]  = n;          // basename (lower)
   }
 }
+        if (it?.shot_id) {
+  byShotId[String(it.shot_id)] = n;
+}
+
 
       }
 
@@ -965,7 +969,8 @@ useEffect(() => {
                   {files.map(f => {
                     if (!f.preview && !thumbByPath[f.url]) ensureThumb(f.url);
                     const thumb = f.preview || thumbByPath[f.url] || null;
-                    const managerNote = managerNoteFor(f.url, s.shot_id);
+                    const managerNote = managerNoteFor(f.url, f.shotId || s.shot_id);
+
 
 
 
