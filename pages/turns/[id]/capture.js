@@ -129,33 +129,34 @@ export default function Capture() {
   const smallMeta = { fontSize: 12, color: '#94a3b8' };
 
   // NEW: Canonical key normalizer for URLs/paths so notes & cards match
-  function normalizeKey(s) {
-    try {
-      let x = String(s || '');
+function normalizeKey(s) {
+  try {
+    let x = String(s || '');
 
-      // strip query/hash
-      x = x.split('?')[0].split('#')[0];
+    // strip query/hash
+    x = x.split('?')[0].split('#')[0];
 
-      // if full URL, keep pathname
-      try { const u = new URL(x); x = u.pathname; } catch {}
+    // if full URL, keep pathname
+    try { const u = new URL(x); x = u.pathname; } catch {}
 
-      // trim common supabase/object prefixes
-      x = x.replace(/^\/?storage\/v1\/object\/public\//, '');
-      x = x.replace(/^\/?object\/sign\//, '');
+    // remove leading slashes
+    x = x.replace(/^\/+/, '');
 
-      // drop bucket prefix if present (photos/..., turns/..., etc.)
-      if (x.includes('/')) {
-        x = x.replace(/^[^/]+\/(.*)$/, '$1');
-      }
+    // strip signed URL wrappers
+    x = x.replace(/^storage\/v1\/object\/sign\//, '');
+    x = x.replace(/^object\/sign\//, '');
 
-      // remove leading slashes
-      x = x.replace(/^\/+/, '');
+    // strip bucket if present
+    x = x.replace(/^photos\//, '');
 
-      return x;
-    } catch {
-      return String(s || '');
-    }
+    // IMPORTANT: only strip the fixed folder prefix, not arbitrary segments
+    x = x.replace(/^turns\//, '');
+
+    return x;
+  } catch {
+    return String(s || '');
   }
+}
 
   // Find manager note for a storage path with tolerant checks + shot_id fallback
   function managerNoteFor(path, shotId) {
@@ -170,11 +171,15 @@ export default function Capture() {
         const norm      = normalizeKey(p);
         const normLead  = norm ? `/${norm}` : '';
 
+        // try both “turns/…” and no “turns/…”
+        const withTurns = norm ? `turns/${norm}` : '';
         const variants = [
           p, noLead, withLead,
           p.toLowerCase(), noLead.toLowerCase(), withLead.toLowerCase(),
-          norm, norm.toLowerCase(), normLead, normLead.toLowerCase()
+          norm, norm.toLowerCase(), normLead, normLead.toLowerCase(),
+          withTurns, withTurns.toLowerCase()
         ].filter(Boolean);
+
 
         for (const v of variants) {
           if (byPath[v]) return byPath[v];
