@@ -105,7 +105,7 @@ export default function Capture() {
   const requestedThumbsRef = useRef(new Set());
 
   // Needs-fix (manager) notes to show to cleaner, by storage path
-  const [fixNotes, setFixNotes] = useState({ byPath: {}, byShotId: {}, overall: '', count: 0 });
+  const [fixNotes, setFixNotes] = useState({ byPath: {}, byShotId: {}, byId: {}, overall: '', count: 0 });
   const [hideFixBanner, setHideFixBanner] = useState(false);
 
   // Cleaner overall reply (optional)
