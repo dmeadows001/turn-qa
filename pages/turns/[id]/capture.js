@@ -450,57 +450,62 @@ function managerNoteFor(path, shotId) {
     loadExisting();
   }, [turnId, shots]);
 
-  // --- Fetch needs-fix notes ---
-  useEffect(() => {
-    if (!turnId) return;
-    (async () => {
-      try {
-        const r = await fetch(`/api/turns/${turnId}/notes`);
-        if (!r.ok) return;
-        const j = await r.json().catch(() => ({}));
-        const overall =
-  j.overall_note || j?.notes?.overall || j.overall || '';
+// --- Fetch needs-fix notes ---
+useEffect(() => {
+  if (!turnId) return;
 
-const list =
-  (Array.isArray(j.items) ? j.items :
-  Array.isArray(j?.notes?.items) ? j.notes.items :
-  Array.isArray(j.photos) ? j.photos : []);
+  (async () => {
+    try {
+      const r = await fetch(`/api/turns/${turnId}/notes`);
+      if (!r.ok) return;
+      const j = await r.json().catch(() => ({}));
 
-const byPath = {};
-const byShotId = {};
+      const overall =
+        j.overall_note || j?.notes?.overall || j.overall || '';
 
-// index both path and shot_id (if present)
-list.forEach(it => {
-  const n = it?.note || it?.notes;
-  if (!n) return;
+      const list =
+        (Array.isArray(j.items) ? j.items :
+        Array.isArray(j?.notes?.items) ? j.notes.items :
+        Array.isArray(j.photos) ? j.photos : []);
 
-  if (it?.path) {
-    const raw = String(it.path);
-    const noLead = raw.replace(/^\/+/, '');
-    byPath[raw] = n;
-    byPath[noLead] = n; // tolerate leading-slash differences
-  }
-  if (it?.shot_id) {
-    byShotId[String(it.shot_id)] = n;
-  }
-});
+      const byPath = {};
+      const byShotId = {};
 
-const count =
-  Object.keys(byPath).length > 0
-    ? Object.keys(byPath).length
-    : Object.keys(byShotId).length;
+      for (const it of list) {
+        const n = it?.note || it?.notes;
+        if (!n) continue;
 
-setFixNotes({ byPath, byShotId, overall: String(overall || ''), count });
+        if (it?.path) {
+          const raw = String(it.path);
+          const noLead = raw.replace(/^\/+/, '');
+          byPath[raw] = n;
+          byPath[noLead] = n; // tolerate leading slash differences
+        }
+        if (it?.shot_id) {
+          byShotId[String(it.shot_id)] = n;
+        }
+      }
 
-// optional: expose to debug console
-try {
-  if (typeof window !== 'undefined') {
-    window.__CAPTURE_DEBUG__ = window.__CAPTURE_DEBUG__ || {};
-    window.__CAPTURE_DEBUG__.fixNotes = { byPath, byShotId, overall: String(overall || ''), count };
-  }
-} catch {}
-    })();
-  }, [turnId]);
+      const count =
+        Object.keys(byPath).length > 0
+          ? Object.keys(byPath).length
+          : Object.keys(byShotId).length;
+
+      setFixNotes({ byPath, byShotId, overall: String(overall || ''), count });
+
+      // debug expose (keep inside the IIFE/try so braces match)
+      if (typeof window !== 'undefined') {
+        window.__CAPTURE_DEBUG__ = window.__CAPTURE_DEBUG__ || {};
+        window.__CAPTURE_DEBUG__.fixNotes = {
+          byPath, byShotId, overall: String(overall || ''), count
+        };
+      }
+    } catch {
+      // ignore
+    }
+  })();
+}, [turnId]);
+
 
   // -------- Add files (quality + upload to Storage) --------
   async function addFiles(shotId, fileList) {
