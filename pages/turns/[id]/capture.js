@@ -455,6 +455,7 @@ function normalizeKey(s) {
             preview: null,
             isFix: !!it.is_fix,
             cleanerNote: it.cleaner_note || null,
+            managerNote: it.manager_note || null,
           };
           (byShot[targetShot] ||= []).push(file);
         }
@@ -1036,7 +1037,10 @@ function normalizeKey(s) {
                   {files.map(f => {
                     if (!f.preview && !thumbByPath[f.url]) ensureThumb(f.url);
                     const thumb = f.preview || thumbByPath[f.url] || null;
-                    const managerNote = managerNoteFor(f.url, f.shotId || s.shot_id);
+                    // Prefer a note coming directly from the photo row; fallback to the notes map
+                    const managerNote =
+                      (f.managerNote && String(f.managerNote)) ||
+                      managerNoteFor(f.url, f.shotId || s.shot_id);
 
                     // Only originals show amber "Needs fix"
                     const showNeedsFix = !!managerNote && !f.isFix;
