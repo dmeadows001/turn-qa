@@ -180,6 +180,12 @@ function managerNoteFor(path, shotId) {
   }
 }
 
+  if (typeof window !== 'undefined') {
+  window.__CAPTURE_DEBUG__ = window.__CAPTURE_DEBUG__ || {};
+  window.__CAPTURE_DEBUG__.managerNoteFor = managerNoteFor;
+}
+
+
 
   // signs an existing storage path for viewing/thumbnail
   async function signPath(path) {
@@ -517,6 +523,34 @@ useEffect(() => {
         if (it?.shot_id) {
   byShotId[String(it.shot_id)] = n;
 }
+
+          // ALSO index manager notes by the *original* photo and shot
+  const origRaw =
+    it?.orig_url || it?.orig_path || it?.original_path || it?.original_url || null;
+  if (origRaw) {
+    const raw2     = String(origRaw);
+    const noLead2  = raw2.replace(/^\/+/, '');
+    const withLead2= raw2.startsWith('/') ? raw2 : `/${raw2}`;
+    const base2    = noLead2.split('/').pop() || '';
+
+    byPath[raw2]                 = n;
+    byPath[noLead2]              = n;
+    byPath[withLead2]            = n;
+    byPath[raw2.toLowerCase()]   = n;
+    byPath[noLead2.toLowerCase()]= n;
+    byPath[withLead2.toLowerCase()]= n;
+    if (base2) {
+      byPath[base2]               = n;
+      byPath[base2.toLowerCase()] = n;
+    }
+  }
+
+  const origShot =
+    it?.orig_shotid || it?.orig_shot_id || it?.original_shotid || it?.original_shot_id;
+  if (origShot) {
+    byShotId[String(origShot)] = n;
+  }
+
 
 
       }
