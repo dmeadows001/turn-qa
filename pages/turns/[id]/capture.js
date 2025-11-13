@@ -391,32 +391,44 @@ export default function Capture() {
         const seen = new Set();
 
         for (const it of items) {
-          const path = it.path || '';
-          if (!path || seen.has(path)) continue;
-          seen.add(path);
+  const path = it.path || '';
+  const base = path.split('/').pop() || '';
 
-          let targetShot = null;
-          if (it.shot_id && shotIdSet.has(it.shot_id)) {
-            targetShot = it.shot_id;
-          } else {
-            const ak = String(it.area_key || '').toLowerCase();
-            if (ak && areaToShotId.has(ak)) targetShot = areaToShotId.get(ak);
-          }
-          if (!targetShot) targetShot = '__extras__';
+  // Infer whether this is a FIX photo even if is_fix is null / missing
+  const inferredFix =
+    !!it.is_fix ||
+    !!it.cleaner_note ||          // any cleaner note = fix photo
+    /__fix__/i.test(base) ||      // our new naming convention
+    /-fix\./i.test(base);         // or a “-fix.jpg” style name
 
-          const file = {
-            name: path.split('/').pop() || 'photo.jpg',
-            url: path,
-            width: null,
-            height: null,
-            shotId: targetShot,
-            preview: null,
-            isFix: !!it.is_fix,
-            cleanerNote: it.cleaner_note || it.note || null,
-            managerNote: it.manager_note || null,
-          };
-          (byShot[targetShot] ||= []).push(file);
-        }
+  // Dedupe by (path + inferredFix) so original and fix can coexist
+  const key = path ? `${path}|${inferredFix ? 1 : 0}` : '';
+  if (!path || seen.has(key)) continue;
+  seen.add(key);
+
+  let targetShot = null;
+  if (it.shot_id && shotIdSet.has(it.shot_id)) {
+    targetShot = it.shot_id;
+  } else {
+    const ak = String(it.area_key || '').toLowerCase();
+    if (ak && areaToShotId.has(ak)) targetShot = areaToShotId.get(ak);
+  }
+  if (!targetShot) targetShot = '__extras__';
+
+  const file = {
+    id: it.id ?? null,            // carry DB id through for stable React keys
+    name: base || 'photo.jpg',
+    url: path,
+    width: null,
+    height: null,
+    shotId: targetShot,
+    preview: null,
+    isFix: inferredFix,           // <-- drives green outline + FIX badge
+    cleanerNote: it.cleaner_note || null,
+  };
+
+  (byShot[targetShot] ||= []).push(file);
+}
 
         if (byShot['__extras__'] && !shotList.some(s => s.shot_id === '__extras__')) {
           setShots(prev => {
@@ -672,6 +684,7 @@ export default function Capture() {
 
         // 4) Success → add to UI
         uploaded.push({
+          id: null
           name: f.name,
           shotId,
           url: finalPath,           // object key (used later for signing/preview)
@@ -982,37 +995,37 @@ export default function Capture() {
                 {/* File cards */}
                 <div style={{ marginTop:10, display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(260px,1fr))', gap:16 }}>
                   {files.map(f => {
-                    if (!f.preview && !thumbByPath[f.url]) ensureThumb(f.url);
-                    const thumb = f.preview || thumbByPath[f.url] || null;
+  if (!f.preview && !thumbByPath[f.url]) ensureThumb(f.url);
+  const thumb = f.preview || thumbByPath[f.url] || null;
+  const managerNote = managerNoteFor(f.url, f.shotId || s.shot_id);
 
-                    const fixPaths = (fixNotes && fixNotes.fixPaths) || {};
-                    const keyNoLead = String(f.url || '').replace(/^\/+/, '');
-                    const isFixFlag =
-                      f.isFix ||
-                      !!fixPaths[f.url] ||
-                      !!fixPaths[keyNoLead] ||
-                      !!fixPaths[`/${keyNoLead}`];
+  // Only originals show amber "Needs fix"
+  const showNeedsFix = !!managerNote && !f.isFix;
 
-                    // Prefer a note coming directly from the photo row; fallback to the notes map
-                    const managerNote =
-                      (f.managerNote && String(f.managerNote)) ||
-                      managerNoteFor(f.url, f.shotId || s.shot_id);
+  // Make sure original + fix with same path both render
+  const reactKey =
+    f.id != null
+      ? `row-${f.id}`
+      : `${f.url}|${f.isFix ? 'fix' : 'orig'}`;
 
-                    // Only originals show amber "Needs fix"
-                    const showNeedsFix = !!managerNote && !isFixFlag;
+  return (
+    <div
+      key={reactKey}
+      style={{
+        border: f.isFix ? '1px solid #065f46' : (showNeedsFix ? '1px solid #d97706' : ui.card.border),
+        boxShadow: f.isFix
+          ? '0 0 0 3px rgba(5, 150, 105, 0.20) inset'
+          : (showNeedsFix ? '0 0 0 3px rgba(217,119,6,0.15)' : 'none'),
+        borderRadius:10,
+        padding:10,
+        background: f.isFix ? '#071a16' : '#0b1220'
+      }}
+    >
+      {/* rest of card unchanged */}
+    </div>
+  );
+})}
 
-                    return (
-                      <div
-                        key={f.url}
-                        style={{
-                          border: isFixFlag ? '1px solid #065f46' : (showNeedsFix ? '1px solid #d97706' : ui.card.border),
-                          boxShadow: isFixFlag
-                            ? '0 0 0 3px rgba(5, 150, 105, 0.20) inset'
-                            : (showNeedsFix ? '0 0 0 3px rgba(217,119,6,0.15)' : 'none'),
-                          borderRadius:10,
-                          padding:10,
-                          background: isFixFlag ? '#071a16' : '#0b1220'
-                        }}
                       >
                         <div style={{ position:'relative', marginBottom:8, height:160 }}>
                           {thumb ? (
