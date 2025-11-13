@@ -457,7 +457,7 @@ export default function Capture() {
     loadExisting();
   }, [turnId, shots]);
 
-  // --- Fetch needs-fix notes + which paths are fixes ---
+   // --- Fetch needs-fix notes + map originals and fixes ---
   useEffect(() => {
     if (!turnId) return;
 
@@ -479,9 +479,10 @@ export default function Capture() {
         const byShotId = {};
         const fixPaths = {};
 
-        const indexPath = (obj, note) => {
-          if (!obj) return;
-          const raw      = String(obj);
+        // helper to index an original photo path for "Needs fix"
+        const indexPath = (path, note) => {
+          if (!path) return;
+          const raw      = String(path);
           const noLead   = raw.replace(/^\/+/, '');
           const withLead = raw.startsWith('/') ? raw : `/${raw}`;
           byPath[raw] = note;
@@ -493,14 +494,15 @@ export default function Capture() {
           const note = it?.note || it?.notes;
           if (!note) continue;
 
-          // original photo path (where we want to show the amber "Needs fix")
+          // ORIGINAL photo path—that's where we show the amber "Needs fix"
           const origRaw =
             it.original_path || it.orig_path ||
             it.original_url  || it.orig_url  ||
             it.path || '';
 
+          // FIX photo path (if the API sends a separate one)
           const fixRaw =
-            it.path || it.fix_path || '';
+            it.fix_path || it.fixed_path || null;
 
           indexPath(origRaw, note);
 
@@ -514,7 +516,7 @@ export default function Capture() {
             byShotId[String(origShot)] = note;
           }
 
-          // mark which paths correspond to FIX photos
+          // Only mark FIX paths when we have an explicit fix_path
           if (fixRaw) {
             const rawF      = String(fixRaw);
             const noLeadF   = rawF.replace(/^\/+/, '');
