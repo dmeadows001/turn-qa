@@ -105,7 +105,13 @@ export default function Capture() {
   const requestedThumbsRef = useRef(new Set());
 
   // Needs-fix (manager) notes to show to cleaner, by storage path
-  const [fixNotes, setFixNotes] = useState({ byPath: {}, byShotId: {}, byId: {}, overall: '', count: 0 });
+  const [fixNotes, setFixNotes] = useState({
+    byPath: {},
+    byShotId: {},
+    fixPaths: {},
+    overall: '',
+    count: 0
+  });
   const [hideFixBanner, setHideFixBanner] = useState(false);
 
   // Cleaner overall reply (optional)
@@ -128,71 +134,26 @@ export default function Capture() {
   // ------- helpers -------
   const smallMeta = { fontSize: 12, color: '#94a3b8' };
 
-  // NEW: Canonical key normalizer for URLs/paths so notes & cards match
-function normalizeKey(s) {
-  try {
-    let x = String(s || '');
-
-    // strip query/hash
-    x = x.split('?')[0].split('#')[0];
-
-    // if full URL, keep pathname
-    try { const u = new URL(x); x = u.pathname; } catch {}
-
-    // remove leading slashes
-    x = x.replace(/^\/+/, '');
-
-    // strip signed URL wrappers
-    x = x.replace(/^storage\/v1\/object\/sign\//, '');
-    x = x.replace(/^object\/sign\//, '');
-
-    // strip bucket if present
-    x = x.replace(/^photos\//, '');
-
-    // IMPORTANT: only strip the fixed folder prefix, not arbitrary segments
-    x = x.replace(/^turns\//, '');
-
-    return x;
-  } catch {
-    return String(s || '');
-  }
-}
-
-  // Find manager note for a storage path with tolerant checks + shot_id fallback
+  // Find manager note for a storage path with simple tolerant checks + shot_id fallback
   function managerNoteFor(path, shotId) {
     try {
       const byPath   = (fixNotes && fixNotes.byPath)   ? fixNotes.byPath   : {};
       const byShotId = (fixNotes && fixNotes.byShotId) ? fixNotes.byShotId : {};
       const p = String(path || '');
+      const noLead = p.replace(/^\/+/, '');
+      const withLead = p.startsWith('/') ? p : `/${p}`;
 
-      if (p) {
-        const noLead    = p.replace(/^\/+/, '');
-        const withLead  = p.startsWith('/') ? p : `/${p}`;
-        const norm      = normalizeKey(p);
-        const normLead  = norm ? `/${norm}` : '';
+      if (byPath[p]) return byPath[p];
+      if (byPath[noLead]) return byPath[noLead];
+      if (byPath[withLead]) return byPath[withLead];
 
-        // try both “turns/…” and no “turns/…”
-        const withTurns = norm ? `turns/${norm}` : '';
-        const variants = [
-          p, noLead, withLead,
-          p.toLowerCase(), noLead.toLowerCase(), withLead.toLowerCase(),
-          norm, norm.toLowerCase(), normLead, normLead.toLowerCase(),
-          withTurns, withTurns.toLowerCase()
-        ].filter(Boolean);
-
-
-        for (const v of variants) {
-          if (byPath[v]) return byPath[v];
-        }
-
-        // basename last-resort (use normalized tail first)
-        const base = (normalizeKey(noLead) || noLead).split('/').pop();
-        if (base) {
-          const baseLc = base.toLowerCase();
-          for (const k of Object.keys(byPath)) {
-            const tail = (String(k || '').split('?')[0].split('#')[0].split('/').pop() || '');
-            if (tail === base || tail.toLowerCase() === baseLc) return byPath[k];
-          }
+      // Last resort: match by filename within the same turn folder
+      const base = noLead.split('/').pop() || '';
+      if (base) {
+        const baseLc = base.toLowerCase();
+        for (const k of Object.keys(byPath)) {
+          const tail = (String(k || '').split('?')[0].split('#')[0].split('/').pop() || '');
+          if (tail === base || tail.toLowerCase() === baseLc) return byPath[k];
         }
       }
 
@@ -206,7 +167,6 @@ function normalizeKey(s) {
   if (typeof window !== 'undefined') {
     window.__CAPTURE_DEBUG__ = window.__CAPTURE_DEBUG__ || {};
     window.__CAPTURE_DEBUG__.managerNoteFor = managerNoteFor;
-    window.__CAPTURE_DEBUG__.normalizeKey = normalizeKey;
   }
 
   // signs an existing storage path for viewing/thumbnail
@@ -430,45 +390,33 @@ function normalizeKey(s) {
         const byShot = {};
         const seen = new Set();
 
-       for (const it of items) {
-      const path = it.path || '';
-      const base = path.split('/').pop() || '';
+        for (const it of items) {
+          const path = it.path || '';
+          if (!path || seen.has(path)) continue;
+          seen.add(path);
 
-      // Infer whether this is a FIX photo (don’t rely only on is_fix)
-      const inferredFix =
-        !!it.is_fix ||
-        /__fix__/i.test(base) ||
-        !!it.orig_path || !!it.orig_url || !!it.original_path || !!it.original_url;
+          let targetShot = null;
+          if (it.shot_id && shotIdSet.has(it.shot_id)) {
+            targetShot = it.shot_id;
+          } else {
+            const ak = String(it.area_key || '').toLowerCase();
+            if (ak && areaToShotId.has(ak)) targetShot = areaToShotId.get(ak);
+          }
+          if (!targetShot) targetShot = '__extras__';
 
-      // Dedupe by (path + inferredFix) so original and fix never collapse
-      const key = path ? `${path}|${inferredFix ? 1 : 0}` : '';
-      if (!path || seen.has(key)) continue;
-      seen.add(key);
-
-      // Pick target shot (keep your existing logic)
-      let targetShot = null;
-      if (it.shot_id && shotIdSet.has(it.shot_id)) {
-      targetShot = it.shot_id;
-    } else {
-      const ak = String(it.area_key || '').toLowerCase();
-      if (ak && areaToShotId.has(ak)) targetShot = areaToShotId.get(ak);
-    }
-    if (!targetShot) targetShot = '__extras__';
-
-  const file = {
-    name: base,
-    url: path,
-    width: null,
-    height: null,
-    shotId: targetShot,
-    preview: null,
-    isFix: inferredFix,                         // <-- drives green FIX badge/outline
-    cleanerNote: it.cleaner_note || it.note || null,
-    managerNote: it.manager_note || null,
-  };
-  (byShot[targetShot] ||= []).push(file);
-}
-
+          const file = {
+            name: path.split('/').pop() || 'photo.jpg',
+            url: path,
+            width: null,
+            height: null,
+            shotId: targetShot,
+            preview: null,
+            isFix: !!it.is_fix,
+            cleanerNote: it.cleaner_note || it.note || null,
+            managerNote: it.manager_note || null,
+          };
+          (byShot[targetShot] ||= []).push(file);
+        }
 
         if (byShot['__extras__'] && !shotList.some(s => s.shot_id === '__extras__')) {
           setShots(prev => {
@@ -509,7 +457,7 @@ function normalizeKey(s) {
     loadExisting();
   }, [turnId, shots]);
 
-  // --- Fetch needs-fix notes ---
+  // --- Fetch needs-fix notes + which paths are fixes ---
   useEffect(() => {
     if (!turnId) return;
 
@@ -529,74 +477,51 @@ function normalizeKey(s) {
 
         const byPath = {};
         const byShotId = {};
+        const fixPaths = {};
+
+        const indexPath = (obj, note) => {
+          if (!obj) return;
+          const raw      = String(obj);
+          const noLead   = raw.replace(/^\/+/, '');
+          const withLead = raw.startsWith('/') ? raw : `/${raw}`;
+          byPath[raw] = note;
+          byPath[noLead] = note;
+          byPath[withLead] = note;
+        };
 
         for (const it of list) {
-          const n = it?.note || it?.notes;
-          if (!n) continue;
+          const note = it?.note || it?.notes;
+          if (!note) continue;
 
-          // Current (fix) path keys
-          if (it?.path) {
-            const raw    = String(it.path);
-            const noLead = raw.replace(/^\/+/, '');
-            const withLead = raw.startsWith('/') ? raw : `/${raw}`;
-            const base   = noLead.split('/').pop() || '';
-            const norm   = normalizeKey(raw);
-            const normLead = norm ? `/${norm}` : '';
-
-            byPath[raw] = n;
-            byPath[noLead] = n;
-            byPath[withLead] = n;
-            byPath[raw.toLowerCase()] = n;
-            byPath[noLead.toLowerCase()] = n;
-            byPath[withLead.toLowerCase()] = n;
-            if (norm) {
-              byPath[norm] = n;
-              byPath[norm.toLowerCase()] = n;
-              byPath[normLead] = n;
-              byPath[normLead.toLowerCase()] = n;
-            }
-            if (base) {
-              byPath[base] = n;
-              byPath[base.toLowerCase()] = n;
-            }
-          }
-          if (it?.shot_id) {
-            byShotId[String(it.shot_id)] = n;
-          }
-
-          // ALSO index manager notes by the *original* photo and shot
+          // original photo path (where we want to show the amber "Needs fix")
           const origRaw =
-            it?.orig_url || it?.orig_path || it?.original_path || it?.original_url || null;
-          if (origRaw) {
-            const raw2      = String(origRaw);
-            const noLead2   = raw2.replace(/^\/+/, '');
-            const withLead2 = raw2.startsWith('/') ? raw2 : `/${raw2}`;
-            const base2     = noLead2.split('/').pop() || '';
-            const norm2     = normalizeKey(raw2);
-            const normLead2 = norm2 ? `/${norm2}` : '';
+            it.original_path || it.orig_path ||
+            it.original_url  || it.orig_url  ||
+            it.path || '';
 
-            byPath[raw2] = n;
-            byPath[noLead2] = n;
-            byPath[withLead2] = n;
-            byPath[raw2.toLowerCase()] = n;
-            byPath[noLead2.toLowerCase()] = n;
-            byPath[withLead2.toLowerCase()] = n;
-            if (norm2) {
-              byPath[norm2] = n;
-              byPath[norm2.toLowerCase()] = n;
-              byPath[normLead2] = n;
-              byPath[normLead2.toLowerCase()] = n;
-            }
-            if (base2) {
-              byPath[base2] = n;
-              byPath[base2.toLowerCase()] = n;
-            }
+          const fixRaw =
+            it.path || it.fix_path || '';
+
+          indexPath(origRaw, note);
+
+          if (it.shot_id) {
+            byShotId[String(it.shot_id)] = note;
+          }
+          const origShot =
+            it.orig_shotid || it.orig_shot_id ||
+            it.original_shotid || it.original_shot_id;
+          if (origShot) {
+            byShotId[String(origShot)] = note;
           }
 
-          const origShot =
-            it?.orig_shotid || it?.orig_shot_id || it?.original_shotid || it?.original_shot_id;
-          if (origShot) {
-            byShotId[String(origShot)] = n;
+          // mark which paths correspond to FIX photos
+          if (fixRaw) {
+            const rawF      = String(fixRaw);
+            const noLeadF   = rawF.replace(/^\/+/, '');
+            const withLeadF = rawF.startsWith('/') ? rawF : `/${rawF}`;
+            fixPaths[rawF] = true;
+            fixPaths[noLeadF] = true;
+            fixPaths[withLeadF] = true;
           }
         }
 
@@ -605,13 +530,23 @@ function normalizeKey(s) {
             ? Object.keys(byPath).length
             : Object.keys(byShotId).length;
 
-        setFixNotes({ byPath, byShotId, overall: String(overall || ''), count });
+        setFixNotes({
+          byPath,
+          byShotId,
+          fixPaths,
+          overall: String(overall || ''),
+          count
+        });
 
         // debug expose
         if (typeof window !== 'undefined') {
           window.__CAPTURE_DEBUG__ = window.__CAPTURE_DEBUG__ || {};
           window.__CAPTURE_DEBUG__.fixNotes = {
-            byPath, byShotId, overall: String(overall || ''), count
+            byPath,
+            byShotId,
+            fixPaths,
+            overall: String(overall || ''),
+            count
           };
         }
       } catch {
@@ -1047,25 +982,34 @@ function normalizeKey(s) {
                   {files.map(f => {
                     if (!f.preview && !thumbByPath[f.url]) ensureThumb(f.url);
                     const thumb = f.preview || thumbByPath[f.url] || null;
+
+                    const fixPaths = (fixNotes && fixNotes.fixPaths) || {};
+                    const keyNoLead = String(f.url || '').replace(/^\/+/, '');
+                    const isFixFlag =
+                      f.isFix ||
+                      !!fixPaths[f.url] ||
+                      !!fixPaths[keyNoLead] ||
+                      !!fixPaths[`/${keyNoLead}`];
+
                     // Prefer a note coming directly from the photo row; fallback to the notes map
                     const managerNote =
                       (f.managerNote && String(f.managerNote)) ||
                       managerNoteFor(f.url, f.shotId || s.shot_id);
 
                     // Only originals show amber "Needs fix"
-                    const showNeedsFix = !!managerNote && !f.isFix;
+                    const showNeedsFix = !!managerNote && !isFixFlag;
 
                     return (
                       <div
                         key={f.url}
                         style={{
-                          border: f.isFix ? '1px solid #065f46' : (showNeedsFix ? '1px solid #d97706' : ui.card.border),
-                          boxShadow: f.isFix
+                          border: isFixFlag ? '1px solid #065f46' : (showNeedsFix ? '1px solid #d97706' : ui.card.border),
+                          boxShadow: isFixFlag
                             ? '0 0 0 3px rgba(5, 150, 105, 0.20) inset'
                             : (showNeedsFix ? '0 0 0 3px rgba(217,119,6,0.15)' : 'none'),
                           borderRadius:10,
                           padding:10,
-                          background: f.isFix ? '#071a16' : '#0b1220'
+                          background: isFixFlag ? '#071a16' : '#0b1220'
                         }}
                       >
                         <div style={{ position:'relative', marginBottom:8, height:160 }}>
@@ -1091,7 +1035,7 @@ function normalizeKey(s) {
                               Needs fix
                             </span>
                           )}
-                          {f.isFix && (
+                          {isFixFlag && (
                             <span style={{
                               position:'absolute', top:8, right:8,
                               background:'#064e3b', color:'#86efac',
@@ -1126,7 +1070,7 @@ function normalizeKey(s) {
                         )}
 
                         {/* Cleaner per-photo note editor ONLY for newly added fixes (with preview) */}
-                        {f.preview && f.isFix && (
+                        {f.preview && isFixFlag && (
                           <div style={{ marginTop:8 }}>
                             <div style={{ fontSize:12, color:'#9ca3af', marginBottom:4, fontWeight:700 }}>Note to manager (for this fix)</div>
                             <textarea
@@ -1140,7 +1084,7 @@ function normalizeKey(s) {
                         )}
 
                         {/* Persisted cleaner note (when loaded later without preview) */}
-                        {!f.preview && f.isFix && f.cleanerNote && (
+                        {!f.preview && isFixFlag && f.cleanerNote && (
                           <div style={{
                             marginTop:8, padding:'8px 10px',
                             background:'#052e2b', border:'1px solid #065f46',
