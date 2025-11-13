@@ -684,7 +684,7 @@ export default function Capture() {
 
         // 4) Success → add to UI
         uploaded.push({
-          id: null
+          id: null,
           name: f.name,
           shotId,
           url: finalPath,           // object key (used later for signing/preview)
