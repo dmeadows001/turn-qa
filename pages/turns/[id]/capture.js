@@ -115,22 +115,12 @@ export default function Capture() {
   // Per-new-photo cleaner notes (keyed by storage path)
   const [cleanerNoteByNewPath, setCleanerNoteByNewPath] = useState({});
 
-  // --- AI pre-check + scan state (non-invasive) ---
-  const [precheckBusy, setPrecheckBusy] = useState(false);
-  const [precheckFlags, setPrecheckFlags] = useState([]);     // array of strings
-
-  const [scanBusy, setScanBusy] = useState(false);
-  const [scanFindings, setScanFindings] = useState([]);       // [{ path, area_key, issues: [...] }]
-  // Marks that we've told the server this turn's AI Scan is complete
-  const [scanMarked, setScanMarked] = useState(false);
-
   // One hidden file input per shot
   const inputRefs = useRef({});
 
   // ------- helpers -------
   const smallMeta = { fontSize: 12, color: '#94a3b8' };
 
-  // ✅ FIXED: sign existing storage paths to display thumbnails / open originals
   async function signPath(path) {
     const resp = await fetch('/api/sign-photo', {
       method: 'POST',
@@ -162,34 +152,7 @@ export default function Capture() {
       }
     });
   }
-
-  // --- Path normalization helpers for matching notes to photos (ADDED) ---
-  function stripQuery(u = '') {
-    const i = u.indexOf('?');
-    return i >= 0 ? u.slice(0, i) : u;
-  }
-  function stripProtoHost(u = '') {
-    try {
-      if (u.startsWith('http://') || u.startsWith('https://')) {
-        const url = new URL(u);
-        return url.pathname || '';
-      }
-    } catch {}
-    return u;
-  }
-  function normalizePath(raw = '') {
-    let p = raw || '';
-    p = stripQuery(p);
-    p = stripProtoHost(p);
-    if (p.startsWith('/')) p = p.slice(1);
-    return p;
-  }
-  function baseName(p = '') {
-    const n = normalizePath(p);
-    const parts = n.split('/');
-    return parts[parts.length - 1] || n;
-  }
-
+  
   function ensureThumb(path) {
     if (!path || requestedThumbsRef.current.has(path) || thumbByPath[path]) return;
     requestedThumbsRef.current.add(path);
@@ -204,132 +167,131 @@ export default function Capture() {
     inputRefs.current[shotId]?.click();
   }
 
-  // Map shot_id -> { area_key, label, notes } for quick lookup
-  function shotMetaById() {
-    const list = Array.isArray(shots) ? shots : [];
-    const map = {};
-    for (const s of list) map[s.shot_id] = { area_key: s.area_key, label: s.label, notes: s.notes };
-    return map;
-  }
-
-  // Build uploads grouped by area for pre-check
-  function buildUploadsByArea() {
-    const meta = shotMetaById();
-    const byArea = {};
-    for (const [shotId, files = []] of Object.entries(uploadsByShot || {})) {
-      const area = (meta[shotId]?.area_key || 'unknown').toString();
-      if (!byArea[area]) byArea[area] = [];
-      for (const f of files) {
-        byArea[area].push({ name: f.name || f.url?.split('/').pop() || 'photo.jpg', url: f.url });
-      }
-    }
-    return byArea;
-  }
-
-  // Build a flat "items" array for AI scan with context
-  function buildScanItems() {
-    const meta = shotMetaById();
-    const items = [];
-    for (const [shotId, files = []] of Object.entries(uploadsByShot || {})) {
-      const m = meta[shotId] || {};
-      for (const f of files) {
-        items.push({
-          url: f.url,
-          area_key: m.area_key || 'unknown',
-          label: m.label || '',
-          notes: m.notes || ''
-        });
-      }
-    }
-    return items;
-  }
-
-  // --- Actions: AI Pre-check (fast, local heuristics) ---
-  async function runPrecheck() {
+ // --- Load existing photos for this turn (ensures we only bucket into *visible* shots) ---
+useEffect(() => {
+  async function loadExisting() {
+    if (!turnId || !Array.isArray(shots)) return;
     try {
-      setPrecheckBusy(true);
-      setPrecheckFlags([]);
-      const uploadsByArea = buildUploadsByArea();
-      const required = (Array.isArray(shots) ? shots : []).map(s => ({
-        key: s.area_key,
-        title: s.label,
-        minPhotos: s.min_count || 1,
-      }));
-      const r = await fetch('/api/vision-precheck', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ uploadsByArea, required }),
-      });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(j.error || 'pre-check failed');
-      const flags = Array.isArray(j.flags) ? j.flags : (Array.isArray(j?.results) ? j.results : []);
-      setPrecheckFlags(flags || []);
-    } catch (e) {
-      alert('Pre-check failed. ' + (e?.message || ''));
-    } finally {
-      setPrecheckBusy(false);
-    }
-  }
+      const r = await fetch(`/api/list-turn-photos?id=${turnId}`);
+      const j = await r.json();
+      const items = Array.isArray(j.photos) ? j.photos : [];
 
-  // --- Actions: AI Vision Scan (OpenAI) ---
-  async function runScan() {
-    try {
-      setScanBusy(true);
-      setScanFindings([]);
-      const items = buildScanItems();
-      if (!items.length) {
-        alert('Please add at least one photo first.');
-        return;
-      }
-      const r = await fetch('/api/vision-scan', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items })
-      });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(j.error || 'scan failed');
-      const results = Array.isArray(j.results) ? j.results : [];
-      setScanFindings(results);
-      // mark scan done server-side (enables submit)
-      try {
-        if (turnId) {
-          const rr = await fetch(`/api/turns/${turnId}/scan-done`, { method: 'POST' });
-          if (rr.ok) setScanMarked(true);
+      // Build quick lookups for currently visible shots
+      const shotIdSet = new Set(shots.map(s => s.shot_id));
+      const areaToShotId = new Map(
+        shots.map(s => [String(s.area_key || '').toLowerCase(), s.shot_id])
+      );
+
+      // Group by *currently visible* shot; otherwise bucket to __extras__
+      const byShot = {};
+      const seen = new Set(); // de-dupe by storage path
+
+      for (const it of items) {
+        const path = it.path || '';
+        if (!path || seen.has(path)) continue;
+        seen.add(path);
+
+        let targetShot = null;
+
+        // 1) Prefer a valid shot_id if it exists in current shots
+        if (it.shot_id && shotIdSet.has(it.shot_id)) {
+          targetShot = it.shot_id;
+        } else {
+          // 2) Else soft-match by area_key only if that area exists in current shots
+          const ak = String(it.area_key || '').toLowerCase();
+          if (ak && areaToShotId.has(ak)) {
+            targetShot = areaToShotId.get(ak);
+          }
         }
-      } catch {}
 
-    } catch (e) {
-      alert('Vision scan failed. ' + (e?.message || ''));
-    } finally {
-      setScanBusy(false);
+        // 3) If still not mapped to a visible shot, bucket to __extras__
+        if (!targetShot) targetShot = '__extras__';
+
+        const file = {
+          name: path.split('/').pop() || 'photo.jpg',
+          url: path,
+          width: null,
+          height: null,
+          shotId: targetShot,
+          preview: null,
+          isFix: !!it.is_fix,
+          cleanerNote: it.cleaner_note || null,
+        };
+
+        (byShot[targetShot] ||= []).push(file);
+      }
+
+      // Ensure __extras__ shows up if we’ve placed files there and the template didn’t include it
+      if (byShot['__extras__'] && !shots.some(s => s.shot_id === '__extras__')) {
+        // Append the pseudo section without touching other shots
+        // (keeps your existing shape/labels)
+        // NOTE: this only adds the section; it does not change shots that already exist.
+        // You already added a similar guard in loadTemplate; this is a belt-and-suspenders check.
+        // We DO NOT call setShots here to avoid loops; we only surface files via uploadsByShot.
+      }
+
+      setUploadsByShot(byShot);
+
+      // kick off signing for thumbnails we’ll render
+      Object.values(byShot).flat().forEach(f => ensureThumb(f.url));
+
+      // Debug overlay hooks (if you’re using debug=1)
+      if (typeof window !== 'undefined' && window.__CAPTURE_DEBUG__) {
+        window.__CAPTURE_DEBUG__.byShot = byShot;
+      }
+    } catch {
+      // ignore
     }
   }
+  loadExisting();
+}, [turnId, shots]);
 
   // -------- Load template (required shots) --------
-  useEffect(() => {
-    async function loadTemplate() {
-      if (!turnId) return;
-      try {
-        const r = await fetch(`/api/turn-template?turnId=${turnId}`);
-        const json = await r.json();
+useEffect(() => {
+  async function loadTemplate() {
+    if (!turnId) return;
+    try {
+      const r = await fetch(`/api/turn-template?turnId=${turnId}`);
+      const json = await r.json();
 
-        let nextShots = [];
-        if (Array.isArray(json.shots) && json.shots.length) {
-          nextShots = json.shots.map(s => ({
-            shot_id: s.shot_id,
-            area_key: s.area_key,
-            label: s.label,
-            min_count: s.min_count || 1,
-            notes: s.notes || '',
-            rules_text: s.rules_text || ''
-          }));
-        } else {
-          nextShots = DEFAULT_SHOTS;
-        }
+      let nextShots = [];
+      if (Array.isArray(json.shots) && json.shots.length) {
+        nextShots = json.shots.map(s => ({
+          shot_id: s.shot_id,
+          area_key: s.area_key,
+          label: s.label,
+          min_count: s.min_count || 1,
+          notes: s.notes || '',
+          rules_text: s.rules_text || ''
+        }));
+      } else {
+        nextShots = DEFAULT_SHOTS;
+      }
 
-        // Guarantee at least one visible section
-        if (!nextShots.length) {
-          nextShots = [{
+      // Guarantee at least one visible section
+      if (!nextShots.length) {
+        nextShots = [{
+          shot_id: '__extras__',
+          area_key: 'existing_uploads',
+          label: 'Additional uploads',
+          min_count: 0,
+          notes: 'Previously uploaded',
+          rules_text: ''
+        }];
+      }
+
+      setTemplateRules(json.rules || { property: '', template: '' });
+      setShots(nextShots);
+
+      // optional debug
+      if (typeof window !== 'undefined') {
+        window.__CAPTURE_DEBUG__ = window.__CAPTURE_DEBUG__ || {};
+        window.__CAPTURE_DEBUG__.shots = nextShots;
+      }
+    } catch {
+      const nextShots = (DEFAULT_SHOTS && DEFAULT_SHOTS.length)
+        ? DEFAULT_SHOTS
+        : [{
             shot_id: '__extras__',
             area_key: 'existing_uploads',
             label: 'Additional uploads',
@@ -337,122 +299,94 @@ export default function Capture() {
             notes: 'Previously uploaded',
             rules_text: ''
           }];
-        }
+      setShots(nextShots);
+      if (typeof window !== 'undefined') {
+        window.__CAPTURE_DEBUG__ = window.__CAPTURE_DEBUG__ || {};
+        window.__CAPTURE_DEBUG__.shots = nextShots;
+      }
+    }
+  }
+  loadTemplate();
+}, [turnId]);
 
-        setTemplateRules(json.rules || { property: '', template: '' });
-        setShots(nextShots);
+// --- Load existing photos for this turn (bucket only into visible shots; else __extras__) ---
+useEffect(() => {
+  async function loadExisting() {
+    if (!turnId) return;
 
-        // optional debug
-        if (typeof window !== 'undefined') {
-          window.__CAPTURE_DEBUG__ = window.__CAPTURE_DEBUG__ || {};
-          window.__CAPTURE_DEBUG__.shots = nextShots;
+    try {
+      const r = await fetch(`/api/list-turn-photos?id=${turnId}`);
+      const j = await r.json();
+      const items = Array.isArray(j.photos) ? j.photos : [];
+
+      const shotList = Array.isArray(shots) ? shots : [];
+      const shotIdSet = new Set(shotList.map(s => s.shot_id));
+      const areaToShotId = new Map(
+        shotList.map(s => [String(s.area_key || '').toLowerCase(), s.shot_id])
+      );
+
+      const byShot = {};
+      const seen = new Set();
+
+      for (const it of items) {
+        const path = it.path || '';
+        if (!path || seen.has(path)) continue;
+        seen.add(path);
+
+        let targetShot = null;
+        if (it.shot_id && shotIdSet.has(it.shot_id)) {
+          targetShot = it.shot_id;
+        } else {
+          const ak = String(it.area_key || '').toLowerCase();
+          if (ak && areaToShotId.has(ak)) targetShot = areaToShotId.get(ak);
         }
-      } catch {
-        const nextShots = (DEFAULT_SHOTS && DEFAULT_SHOTS.length)
-          ? DEFAULT_SHOTS
-          : [{
+        if (!targetShot) targetShot = '__extras__';
+
+        const file = {
+          name: path.split('/').pop() || 'photo.jpg',
+          url: path,
+          width: null,
+          height: null,
+          shotId: targetShot,
+          preview: null,
+          isFix: !!it.is_fix,
+          cleanerNote: it.cleaner_note || null,
+        };
+        (byShot[targetShot] ||= []).push(file);
+      }
+
+      // ensure __extras__ visible if needed
+      if (byShot['__extras__'] && !shotList.some(s => s.shot_id === '__extras__')) {
+        setShots(prev => {
+          const cur = Array.isArray(prev) ? prev : [];
+          if (cur.some(s => s.shot_id === '__extras__')) return cur;
+          return [
+            ...cur,
+            {
               shot_id: '__extras__',
               area_key: 'existing_uploads',
               label: 'Additional uploads',
               min_count: 0,
               notes: 'Previously uploaded',
               rules_text: ''
-            }];
-        setShots(nextShots);
-        if (typeof window !== 'undefined') {
-          window.__CAPTURE_DEBUG__ = window.__CAPTURE_DEBUG__ || {};
-          window.__CAPTURE_DEBUG__.shots = nextShots;
-        }
-      }
-    }
-    loadTemplate();
-  }, [turnId]);
-
-  // --- Load existing photos for this turn (bucket only into visible shots; else __extras__) ---
-  useEffect(() => {
-    async function loadExisting() {
-      if (!turnId) return;
-
-      try {
-        const r = await fetch(`/api/list-turn-photos?id=${turnId}`);
-        const j = await r.json();
-        const items = Array.isArray(j.photos) ? j.photos : [];
-
-        const shotList = Array.isArray(shots) ? shots : [];
-        const shotIdSet = new Set(shotList.map(s => s.shot_id));
-        const areaToShotId = new Map(
-          shotList.map(s => [String(s.area_key || '').toLowerCase(), s.shot_id])
-        );
-
-        const byShot = {};
-        const seen = new Set();
-
-        for (const it of items) {
-          const path = it.path || '';
-          if (!path || seen.has(path)) continue;
-          seen.add(path);
-
-          let targetShot = null;
-          if (it.shot_id && shotIdSet.has(it.shot_id)) {
-            targetShot = it.shot_id;
-          } else {
-            const ak = String(it.area_key || '').toLowerCase();
-            if (ak && areaToShotId.has(ak)) targetShot = areaToShotId.get(ak);
-          }
-          if (!targetShot) targetShot = '__extras__';
-
-          const file = {
-            name: path.split('/').pop() || 'photo.jpg',
-            url: path,
-            width: null,
-            height: null,
-            shotId: targetShot,
-            preview: null,
-            isFix: !!it.is_fix,
-            cleanerNote: it.cleaner_note || null,
-          };
-          (byShot[targetShot] ||= []).push(file);
-        }
-
-        // ensure __extras__ visible if needed
-        if (byShot['__extras__'] && !shotList.some(s => s.shot_id === '__extras__')) {
-          setShots(prev => {
-            const cur = Array.isArray(prev) ? prev : [];
-            if (cur.some(s => s.shot_id === '__extras__')) return cur;
-            return [
-              ...cur,
-              {
-                shot_id: '__extras__',
-                area_key: 'existing_uploads',
-                label: 'Additional uploads',
-                min_count: 0,
-                notes: 'Previously uploaded',
-                rules_text: ''
-              }
-            ];
-          });
-        }
-
-        setUploadsByShot(prev => {
-          const merged = { ...byShot };
-          // Keep any new (unsaved) fix uploads already in state
-          for (const [shotId, localFiles = []] of Object.entries(prev || {})) {
-            const previews = localFiles.filter(f => f.preview); // unsaved FIX uploads
-            if (previews.length) merged[shotId] = [ ...(merged[shotId] || []), ...previews ];
-          }
-          return merged;
+            }
+          ];
         });
-
-        if (typeof window !== 'undefined') {
-          window.__CAPTURE_DEBUG__ = window.__CAPTURE_DEBUG__ || {};
-          window.__CAPTURE_DEBUG__.byShot = byShot;
-        }
-      } catch {
-        // ignore
       }
+
+      setUploadsByShot(byShot);
+      Object.values(byShot).flat().forEach(f => ensureThumb(f.url));
+
+      if (typeof window !== 'undefined') {
+        window.__CAPTURE_DEBUG__ = window.__CAPTURE_DEBUG__ || {};
+        window.__CAPTURE_DEBUG__.byShot = byShot;
+      }
+    } catch {
+      // ignore
     }
-    loadExisting();
-  }, [turnId, shots]);
+  }
+  loadExisting();
+}, [turnId, shots]);
 
   // --- Fetch needs-fix notes (overall + per-photo) for the banner ---
   useEffect(() => {
@@ -468,31 +402,9 @@ export default function Capture() {
           (Array.isArray(j.items) ? j.items :
           Array.isArray(j?.notes?.items) ? j.notes.items :
           Array.isArray(j.photos) ? j.photos : []);
-
-        // Build a multi-key index: exact path, normalized path, and basename (ADDED)
         const byPath = {};
-        for (const it of list) {
-          const p = it?.path || '';
-          const note = it?.note || it?.notes || '';
-          if (!p || !note) continue;
-          const n = normalizePath(p);
-          const b = baseName(p);
-          byPath[p] = note;   // as-is
-          byPath[n] = note;   // normalized
-          byPath[b] = note;   // basename fallback
-        }
-
-        setFixNotes({
-          byPath,
-          overall: String(overall || ''),
-          count: Object.keys(byPath).length
-        });
-
-        // Optional debug keys
-        if (typeof window !== 'undefined') {
-          window.__CAPTURE_DEBUG__ = window.__CAPTURE_DEBUG__ || {};
-          window.__CAPTURE_DEBUG__.notesKeys = Object.keys(byPath);
-        }
+        list.forEach(it => { if (it?.path && (it.note || it.notes)) byPath[it.path] = it.note || it.notes; });
+        setFixNotes({ byPath, overall: String(overall || ''), count: Object.keys(byPath).length });
       } catch {}
     })();
   }, [turnId]);
@@ -647,22 +559,12 @@ export default function Capture() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ turnId, photos })
       });
-      const json = await resp.json().catch(() => ({}));
-
-      if (resp.status === 409 && json.code === 'SCAN_REQUIRED') {
-        alert('Please run AI Scan before submitting this turn.');
-        // bring the scan panel into view
-        try { document.getElementById('scan')?.scrollIntoView({ behavior: 'smooth' }); } catch {}
-        return;
-      }
-
       if (!resp.ok) {
-        alert('Submit failed: ' + (json.error || resp.statusText));
+        const err = await resp.json().catch(() => ({}));
+        alert('Submit failed: ' + (err.error || resp.statusText));
         return;
       }
-
       window.location.href = `/turns/${turnId}/done`;
-      
     } finally {
       setTimeout(() => setSubmitting(false), 300);
     }
@@ -741,84 +643,6 @@ export default function Capture() {
             {templateRules?.property || ''}
           </h2>
 
-          {/* AI helper actions (only for first-time capture, not during needs-fix) */}
-          {tab !== 'needs-fix' && (
-            <div
-              id="scan"
-              style={{
-                margin:'8px 0 12px',
-                padding:'10px 12px',
-                border:'1px solid #2563eb',
-                background:'#0b1736',
-                borderRadius:10,
-                display:'grid',
-                gap:10
-              }}
-            >
-              <div style={{ display:'flex', gap:8, flexWrap:'wrap', alignItems:'center' }}>
-                <button
-                  type="button"
-                  onClick={runPrecheck}
-                  disabled={precheckBusy}
-                  style={{ ...ui.btnPrimary, opacity: precheckBusy ? 0.75 : 1 }}
-                >
-                  {precheckBusy ? 'Checking…' : 'AI Pre-check'}
-                </button>
-
-                <button
-                  type="button"
-                  onClick={runScan}
-                  disabled={scanBusy}
-                  style={{ ...ui.btnSecondary, opacity: scanBusy ? 0.75 : 1 }}
-                >
-                  {scanBusy ? 'Scanning…' : 'AI Scan'}
-                </button>
-
-                {scanMarked && (
-                  <span
-                    aria-live="polite"
-                    style={{
-                      fontSize:12, padding:'4px 8px', borderRadius:999,
-                      border:'1px solid #065f46', background:'#052e2b', color:'#86efac'
-                    }}
-                  >
-                    ✓ Scan complete
-                  </span>
-                )}
-              </div>
-
-              {/* Pre-check flags */}
-              {!!precheckFlags.length && (
-                <div style={{ fontSize:13, color:'#bfdbfe' }}>
-                  <div style={{ fontWeight:700, marginBottom:4 }}>Pre-check:</div>
-                  <ul style={{ margin:'6px 0 0 18px' }}>
-                    {precheckFlags.map((t, i) => (<li key={i}>{t}</li>))}
-                  </ul>
-                </div>
-              )}
-
-              {/* Vision findings */}
-              {!!scanFindings.length && (
-                <div style={{ fontSize:13, color:'#bfdbfe' }}>
-                  <div style={{ fontWeight:700, marginBottom:4 }}>Vision findings:</div>
-                  <ul style={{ margin:'6px 0 0 18px' }}>
-                    {scanFindings.flatMap((r, i) => {
-                      const issues = Array.isArray(r.issues) ? r.issues : [];
-                      if (!issues.length) return [];
-                      const area = r.area_key || 'unknown';
-                      return issues.map((iss, j) => (
-                        <li key={`${i}:${j}`}>
-                          [{area}] {iss.label || 'Issue'}{iss.severity ? ` • ${iss.severity}` : ''}
-                          {typeof iss.confidence === 'number' ? ` (${Math.round(iss.confidence*100)}%)` : ''}
-                        </li>
-                      ));
-                    })}
-                  </ul>
-                </div>
-              )}
-            </div>
-          )}
-
           {/* Needs-fix banner (if any) */}
           {hasFixes && !hideFixBanner && (
             <div
@@ -890,55 +714,21 @@ export default function Capture() {
                   </ThemedButton>
                 </div>
 
-                {/* Placeholder (shows when nothing uploaded yet for this shot) */}
-                {files.length === 0 && (
-                  <div
-                    onClick={() => openPicker(s.shot_id)}
-                    role="button"
-                    aria-label={`Add first photo for ${s.label}`}
-                    style={{
-                      marginTop:10,
-                      border:'1px dashed #4977f6',
-                      background:'#0b1220',
-                      borderRadius:10,
-                      height:120,
-                      display:'flex',
-                      alignItems:'center',
-                      justifyContent:'center',
-                      cursor:'pointer',
-                      userSelect:'none'
-                    }}
-                  >
-                    <div style={{ textAlign:'center', color:'#93c5fd' }}>
-                      <div style={{ fontSize:28, lineHeight:1 }}>＋</div>
-                      <div style={{ fontSize:12 }}>Tap to add photo</div>
-                    </div>
-                  </div>
-                )}
-
                 {/* File cards */}
                 <div style={{ marginTop:10, display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(260px,1fr))', gap:16 }}>
                   {files.map(f => {
                     if (!f.preview && !thumbByPath[f.url]) ensureThumb(f.url);
                     const thumb = f.preview || thumbByPath[f.url] || null;
-
-                    // (CHANGED) widen lookup to normalized path / basename
-                    const managerNote =
-                      fixNotes?.byPath?.[f.url] ||
-                      fixNotes?.byPath?.[normalizePath(f.url)] ||
-                      fixNotes?.byPath?.[baseName(f.url)];
-
-                    // Only originals show amber "Needs fix"
-                    const showNeedsFix = !!managerNote && !f.isFix;
+                    const managerNote = fixNotes?.byPath?.[f.url];
 
                     return (
                       <div
                         key={f.url}
                         style={{
-                          border: f.isFix ? '1px solid #065f46' : (showNeedsFix ? '1px solid #d97706' : ui.card.border),
+                          border: f.isFix ? '1px solid #065f46' : (managerNote ? '1px solid #d97706' : ui.card.border),
                           boxShadow: f.isFix
                             ? '0 0 0 3px rgba(5, 150, 105, 0.20) inset'
-                            : (showNeedsFix ? '0 0 0 3px rgba(217,119,6,0.15)' : 'none'),
+                            : (managerNote ? '0 0 0 3px rgba(217,119,6,0.15)' : 'none'),
                           borderRadius:10,
                           padding:10,
                           background: f.isFix ? '#071a16' : '#0b1220'
@@ -957,7 +747,7 @@ export default function Capture() {
                           )}
 
                           {/* badges */}
-                          {showNeedsFix && (
+                          {managerNote && (
                             <span style={{
                               position:'absolute', top:8, left:8,
                               background:'#4a2f04', color:'#fcd34d',
@@ -990,8 +780,8 @@ export default function Capture() {
                           </ThemedButton>
                         </div>
 
-                        {/* Manager note (only on originals) */}
-                        {showNeedsFix && (
+                        {/* Manager note (if flagged) visible to cleaner */}
+                        {managerNote && (
                           <div style={{
                             marginTop:6, padding:'8px 10px',
                             border:'1px dashed #d97706', background:'#3a2b10',
