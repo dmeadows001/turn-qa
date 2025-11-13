@@ -176,6 +176,13 @@ useEffect(() => {
       const j = await r.json();
       const items = Array.isArray(j.photos) ? j.photos : [];
 
+        if (typeof window !== 'undefined') {
+        window.__CAPTURE_DEBUG__ = window.__CAPTURE_DEBUG__ || {};
+        window.__CAPTURE_DEBUG__.rawPhotos = items;
+        console.log('[capture] /api/list-turn-photos items:', items);
+      }
+
+
       // Build quick lookups for currently visible shots
       const shotIdSet = new Set(shots.map(s => s.shot_id));
       const areaToShotId = new Map(
@@ -207,16 +214,24 @@ useEffect(() => {
         // 3) If still not mapped to a visible shot, bucket to __extras__
         if (!targetShot) targetShot = '__extras__';
 
-        const file = {
-          name: path.split('/').pop() || 'photo.jpg',
-          url: path,
-          width: null,
-          height: null,
-          shotId: targetShot,
-          preview: null,
-          isFix: !!it.is_fix,
-          cleanerNote: it.cleaner_note || null,
-        };
+              const file = {
+        name: path.split('/').pop() || 'photo.jpg',
+        url: path,
+        width: null,
+        height: null,
+        shotId: targetShot,
+        preview: null,
+
+        // fix photo?
+        isFix: !!(it.is_fix ?? it.isFix ?? it.fix),
+
+        // cleaner per-photo note (for FIX photos)
+        cleanerNote: it.cleaner_note ?? it.cleanerNote ?? null,
+
+        // manager per-photo note (for ORIGINAL photos marked needs-fix)
+        managerNote: it.manager_notes ?? it.manager_note ?? it.note ?? null,
+      };
+
 
         (byShot[targetShot] ||= []).push(file);
       }
@@ -719,7 +734,13 @@ useEffect(() => {
                   {files.map(f => {
                     if (!f.preview && !thumbByPath[f.url]) ensureThumb(f.url);
                     const thumb = f.preview || thumbByPath[f.url] || null;
-                    const managerNote = fixNotes?.byPath?.[f.url];
+                    const managerNote =
+                      // prefer per-photo managerNote from this row (for originals)
+                      (!f.isFix && f.managerNote) ||
+                      // fallback to the notes API map keyed by path
+                      fixNotes?.byPath?.[f.url] ||
+                      null;
+
 
                     return (
                       <div
