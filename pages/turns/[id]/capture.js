@@ -130,7 +130,7 @@ export default function Capture() {
   // ------- helpers -------
   const smallMeta = { fontSize: 12, color: '#94a3b8' };
 
-  // ✅ signs an existing storage path for viewing/thumbnail
+  // ✅ FIXED: sign existing storage paths to display thumbnails / open originals
   async function signPath(path) {
     const resp = await fetch('/api/sign-photo', {
       method: 'POST',
@@ -162,7 +162,34 @@ export default function Capture() {
       }
     });
   }
-  
+
+  // --- Path normalization helpers for matching notes to photos (ADDED) ---
+  function stripQuery(u = '') {
+    const i = u.indexOf('?');
+    return i >= 0 ? u.slice(0, i) : u;
+  }
+  function stripProtoHost(u = '') {
+    try {
+      if (u.startsWith('http://') || u.startsWith('https://')) {
+        const url = new URL(u);
+        return url.pathname || '';
+      }
+    } catch {}
+    return u;
+  }
+  function normalizePath(raw = '') {
+    let p = raw || '';
+    p = stripQuery(p);
+    p = stripProtoHost(p);
+    if (p.startsWith('/')) p = p.slice(1);
+    return p;
+  }
+  function baseName(p = '') {
+    const n = normalizePath(p);
+    const parts = n.split('/');
+    return parts[parts.length - 1] || n;
+  }
+
   function ensureThumb(path) {
     if (!path || requestedThumbsRef.current.has(path) || thumbByPath[path]) return;
     requestedThumbsRef.current.add(path);
@@ -410,7 +437,7 @@ export default function Capture() {
           const merged = { ...byShot };
           // Keep any new (unsaved) fix uploads already in state
           for (const [shotId, localFiles = []] of Object.entries(prev || {})) {
-            const previews = localFiles.filter(f => f.preview);
+            const previews = localFiles.filter(f => f.preview); // unsaved FIX uploads
             if (previews.length) merged[shotId] = [ ...(merged[shotId] || []), ...previews ];
           }
           return merged;
@@ -441,9 +468,31 @@ export default function Capture() {
           (Array.isArray(j.items) ? j.items :
           Array.isArray(j?.notes?.items) ? j.notes.items :
           Array.isArray(j.photos) ? j.photos : []);
+
+        // Build a multi-key index: exact path, normalized path, and basename (ADDED)
         const byPath = {};
-        list.forEach(it => { if (it?.path && (it.note || it.notes)) byPath[it.path] = it.note || it.notes; });
-        setFixNotes({ byPath, overall: String(overall || ''), count: Object.keys(byPath).length });
+        for (const it of list) {
+          const p = it?.path || '';
+          const note = it?.note || it?.notes || '';
+          if (!p || !note) continue;
+          const n = normalizePath(p);
+          const b = baseName(p);
+          byPath[p] = note;   // as-is
+          byPath[n] = note;   // normalized
+          byPath[b] = note;   // basename fallback
+        }
+
+        setFixNotes({
+          byPath,
+          overall: String(overall || ''),
+          count: Object.keys(byPath).length
+        });
+
+        // Optional debug keys
+        if (typeof window !== 'undefined') {
+          window.__CAPTURE_DEBUG__ = window.__CAPTURE_DEBUG__ || {};
+          window.__CAPTURE_DEBUG__.notesKeys = Object.keys(byPath);
+        }
       } catch {}
     })();
   }, [turnId]);
@@ -477,14 +526,7 @@ export default function Capture() {
         const resp = await fetch('/api/upload-url', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            turnId,
-            shotId,
-            filename: f.name,
-            mime: f.type || 'image/jpeg',
-            // 🔑 minimal fix: make fix uploads get a unique storage key
-            variant: isFixMode ? 'fix' : undefined
-          })
+          body: JSON.stringify({ turnId, shotId, filename: f.name, mime: f.type || 'image/jpeg' })
         });
         meta = await resp.json();
       } catch {
@@ -502,10 +544,12 @@ export default function Capture() {
 
       // 3) Upload using whichever shape the API returned
       try {
+        // Tiny trace id for this file attempt
         const traceId = Math.random().toString(36).slice(2, 8);
         let done = false;
         const tried = [];
 
+        // Helper to expose what happened when ?debug=1
         const trace = (obj) => {
           try {
             if (typeof window !== 'undefined' && window.__CAPTURE_DEBUG__) {
@@ -518,6 +562,7 @@ export default function Capture() {
           console.debug('[capture upload]', traceId, obj);
         };
 
+        // Try proxy PUT first (keeps existing preference)
         if (meta.uploadUrl && !done) {
           const up = await fetch(meta.uploadUrl, {
             method: 'PUT',
@@ -534,6 +579,7 @@ export default function Capture() {
           }
         }
 
+        // Fallback: Supabase signed upload (multipart/form-data)
         if (!done && meta.signedUploadUrl) {
           const fd = new FormData();
           fd.append('file', f);
@@ -574,6 +620,7 @@ export default function Capture() {
       setUploadsByShot(prev => ({ ...prev, [shotId]: [ ...(prev[shotId] || []), ...uploaded ] }));
     }
 
+    // Allow selecting the same file again if needed
     try {
       const el = inputRefs.current[shotId];
       if (el) el.value = '';
@@ -583,6 +630,7 @@ export default function Capture() {
   // -------- Submit initial turn --------
   async function submitAll() {
     if (submitting) return;
+    // minimal: ensure each shot meets min_count
     const unmet = (shots || []).filter(s => (s.min_count || 1) > (uploadsByShot[s.shot_id]?.length || 0));
     if (unmet.length) {
       alert('Please add required photos before submitting:\n' + unmet.map(a => `• ${a.label}`).join('\n'));
@@ -603,6 +651,7 @@ export default function Capture() {
 
       if (resp.status === 409 && json.code === 'SCAN_REQUIRED') {
         alert('Please run AI Scan before submitting this turn.');
+        // bring the scan panel into view
         try { document.getElementById('scan')?.scrollIntoView({ behavior: 'smooth' }); } catch {}
         return;
       }
@@ -623,12 +672,14 @@ export default function Capture() {
   async function submitFixes() {
     if (submitting) return;
 
+    // new photos are those with preview present
     const newPhotos = Object.values(uploadsByShot)
       .flat()
       .filter(f => !!f.preview)
       .map(f => ({
         url: f.url,
         shotId: f.shotId,
+        // send per-photo cleaner note
         note: (cleanerNoteByNewPath[f.url] || '').trim() || null,
       }));
 
@@ -645,7 +696,7 @@ export default function Capture() {
         body: JSON.stringify({
           turn_id: turnId,
           reply: reply || '',
-          photos: newPhotos,
+          photos: newPhotos,   // API will store is_fix + cleaner_note now
         })
       });
       const json = await resp.json().catch(() => ({}));
@@ -655,6 +706,7 @@ export default function Capture() {
       }
 
       alert('Fixes submitted for review ✅');
+      // Refresh to fetch persisted is_fix + notes (and manager status change)
       window.location.reload();
     } finally {
       setTimeout(() => setSubmitting(false), 200);
@@ -735,6 +787,7 @@ export default function Capture() {
                 )}
               </div>
 
+              {/* Pre-check flags */}
               {!!precheckFlags.length && (
                 <div style={{ fontSize:13, color:'#bfdbfe' }}>
                   <div style={{ fontWeight:700, marginBottom:4 }}>Pre-check:</div>
@@ -744,6 +797,7 @@ export default function Capture() {
                 </div>
               )}
 
+              {/* Vision findings */}
               {!!scanFindings.length && (
                 <div style={{ fontSize:13, color:'#bfdbfe' }}>
                   <div style={{ fontWeight:700, marginBottom:4 }}>Vision findings:</div>
@@ -867,7 +921,12 @@ export default function Capture() {
                   {files.map(f => {
                     if (!f.preview && !thumbByPath[f.url]) ensureThumb(f.url);
                     const thumb = f.preview || thumbByPath[f.url] || null;
-                    const managerNote = fixNotes?.byPath?.[f.url];
+
+                    // (CHANGED) widen lookup to normalized path / basename
+                    const managerNote =
+                      fixNotes?.byPath?.[f.url] ||
+                      fixNotes?.byPath?.[normalizePath(f.url)] ||
+                      fixNotes?.byPath?.[baseName(f.url)];
 
                     // Only originals show amber "Needs fix"
                     const showNeedsFix = !!managerNote && !f.isFix;
