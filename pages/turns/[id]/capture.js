@@ -52,7 +52,7 @@ export default function Capture() {
   const turnId = typeof query.id === 'string' ? query.id : '';
   const tab = typeof query.tab === 'string' ? query.tab : 'capture'; // 'needs-fix' when coming from SMS
 
-  // Guard: define isFixMode for banners/badges and upload variant
+  // --- Guard: define isFixMode so incidental references don't crash (e.g., in alerts/traces) ---
   const isFixMode = (() => {
     try {
       const sp = new URLSearchParams(window.location.search);
@@ -77,6 +77,7 @@ export default function Capture() {
         const j = await r.json().catch(() => ({}));
         const t = j && (j.turn || null);
         if (t && t.status === 'in_progress') {
+          // If launcher initiated this visit, do NOT bounce (prevents loop).
           try {
             const sp = new URLSearchParams(window.location.search);
             if (sp.get('from') === 'capture') return;
@@ -114,12 +115,13 @@ export default function Capture() {
   // Per-new-photo cleaner notes (keyed by storage path)
   const [cleanerNoteByNewPath, setCleanerNoteByNewPath] = useState({});
 
-  // --- AI pre-check + scan state ---
+  // --- AI pre-check + scan state (non-invasive) ---
   const [precheckBusy, setPrecheckBusy] = useState(false);
-  const [precheckFlags, setPrecheckFlags] = useState([]);
+  const [precheckFlags, setPrecheckFlags] = useState([]);     // array of strings
 
   const [scanBusy, setScanBusy] = useState(false);
-  const [scanFindings, setScanFindings] = useState([]);
+  const [scanFindings, setScanFindings] = useState([]);       // [{ path, area_key, issues: [...] }]
+  // Marks that we've told the server this turn's AI Scan is complete
   const [scanMarked, setScanMarked] = useState(false);
 
   // One hidden file input per shot
@@ -128,7 +130,7 @@ export default function Capture() {
   // ------- helpers -------
   const smallMeta = { fontSize: 12, color: '#94a3b8' };
 
-  // signs an existing storage path for viewing/thumbnail
+  // ✅ signs an existing storage path for viewing/thumbnail
   async function signPath(path) {
     const resp = await fetch('/api/sign-photo', {
       method: 'POST',
@@ -140,7 +142,7 @@ export default function Capture() {
     return json.url;
   }
 
-  // Image dimension helper (safe if load fails)
+  // --- Image dimension helper (safe if load fails) ---
   async function getDims(file) {
     return new Promise((resolve) => {
       try {
@@ -150,7 +152,10 @@ export default function Capture() {
           URL.revokeObjectURL(img.src);
           resolve(dims);
         };
-        img.onerror = () => resolve({ width: 0, height: 0 });
+        img.onerror = () => {
+          // If we can't read dimensions (e.g., HEIC on some desktops), don't block upload
+          resolve({ width: 0, height: 0 });
+        };
         img.src = URL.createObjectURL(file);
       } catch {
         resolve({ width: 0, height: 0 });
@@ -172,7 +177,7 @@ export default function Capture() {
     inputRefs.current[shotId]?.click();
   }
 
-  // Map shot_id -> { area_key, label, notes }
+  // Map shot_id -> { area_key, label, notes } for quick lookup
   function shotMetaById() {
     const list = Array.isArray(shots) ? shots : [];
     const map = {};
@@ -180,6 +185,7 @@ export default function Capture() {
     return map;
   }
 
+  // Build uploads grouped by area for pre-check
   function buildUploadsByArea() {
     const meta = shotMetaById();
     const byArea = {};
@@ -193,6 +199,7 @@ export default function Capture() {
     return byArea;
   }
 
+  // Build a flat "items" array for AI scan with context
   function buildScanItems() {
     const meta = shotMetaById();
     const items = [];
@@ -210,7 +217,7 @@ export default function Capture() {
     return items;
   }
 
-  // --- Actions: AI Pre-check ---
+  // --- Actions: AI Pre-check (fast, local heuristics) ---
   async function runPrecheck() {
     try {
       setPrecheckBusy(true);
@@ -237,7 +244,7 @@ export default function Capture() {
     }
   }
 
-  // --- Actions: AI Vision Scan ---
+  // --- Actions: AI Vision Scan (OpenAI) ---
   async function runScan() {
     try {
       setScanBusy(true);
@@ -256,12 +263,14 @@ export default function Capture() {
       if (!r.ok) throw new Error(j.error || 'scan failed');
       const results = Array.isArray(j.results) ? j.results : [];
       setScanFindings(results);
+      // mark scan done server-side (enables submit)
       try {
         if (turnId) {
           const rr = await fetch(`/api/turns/${turnId}/scan-done`, { method: 'POST' });
           if (rr.ok) setScanMarked(true);
         }
       } catch {}
+
     } catch (e) {
       alert('Vision scan failed. ' + (e?.message || ''));
     } finally {
@@ -291,6 +300,7 @@ export default function Capture() {
           nextShots = DEFAULT_SHOTS;
         }
 
+        // Guarantee at least one visible section
         if (!nextShots.length) {
           nextShots = [{
             shot_id: '__extras__',
@@ -305,6 +315,7 @@ export default function Capture() {
         setTemplateRules(json.rules || { property: '', template: '' });
         setShots(nextShots);
 
+        // optional debug
         if (typeof window !== 'undefined') {
           window.__CAPTURE_DEBUG__ = window.__CAPTURE_DEBUG__ || {};
           window.__CAPTURE_DEBUG__.shots = nextShots;
@@ -330,7 +341,7 @@ export default function Capture() {
     loadTemplate();
   }, [turnId]);
 
-  // --- Load existing photos for this turn ---
+  // --- Load existing photos for this turn (bucket only into visible shots; else __extras__) ---
   useEffect(() => {
     async function loadExisting() {
       if (!turnId) return;
@@ -351,34 +362,32 @@ export default function Capture() {
 
         for (const it of items) {
           const path = it.path || '';
-          // 👇 Use (path + is_fix) as the dedupe key so original and fix can coexist
-          const key = path ? `${path}|${it?.is_fix ? 1 : 0}` : '';
-          if (!path || seen.has(key)) continue;
-          seen.add(key);
+          if (!path || seen.has(path)) continue;
+          seen.add(path);
 
           let targetShot = null;
           if (it.shot_id && shotIdSet.has(it.shot_id)) {
             targetShot = it.shot_id;
           } else {
-          const ak = String(it.area_key || '').toLowerCase();
-          if (ak && areaToShotId.has(ak)) targetShot = areaToShotId.get(ak);
+            const ak = String(it.area_key || '').toLowerCase();
+            if (ak && areaToShotId.has(ak)) targetShot = areaToShotId.get(ak);
+          }
+          if (!targetShot) targetShot = '__extras__';
+
+          const file = {
+            name: path.split('/').pop() || 'photo.jpg',
+            url: path,
+            width: null,
+            height: null,
+            shotId: targetShot,
+            preview: null,
+            isFix: !!it.is_fix,
+            cleanerNote: it.cleaner_note || null,
+          };
+          (byShot[targetShot] ||= []).push(file);
         }
-        if (!targetShot) targetShot = '__extras__';
 
-        const file = {
-          name: path.split('/').pop() || 'photo.jpg',
-          url: path,
-          width: null,
-          height: null,
-          shotId: targetShot,
-          preview: null,
-          isFix: !!it.is_fix,
-          cleanerNote: it.cleaner_note || null,
-        };
-        (byShot[targetShot] ||= []).push(file);
-      }
-
-
+        // ensure __extras__ visible if needed
         if (byShot['__extras__'] && !shotList.some(s => s.shot_id === '__extras__')) {
           setShots(prev => {
             const cur = Array.isArray(prev) ? prev : [];
@@ -418,7 +427,7 @@ export default function Capture() {
     loadExisting();
   }, [turnId, shots]);
 
-  // --- Fetch needs-fix notes ---
+  // --- Fetch needs-fix notes (overall + per-photo) for the banner ---
   useEffect(() => {
     if (!turnId) return;
     (async () => {
@@ -465,23 +474,15 @@ export default function Capture() {
       // 2) Ask backend for upload target
       let meta = {};
       try {
-        // Unique name for fix uploads so we never reuse original key
-        const filenameForUpload = (() => {
-          if (!isFixMode) return f.name;
-          const dot = f.name.lastIndexOf('.');
-          const base = dot > 0 ? f.name.slice(0, dot) : f.name;
-          const ext  = dot > 0 ? f.name.slice(dot) : '';
-          return `${base}__fix__${Date.now().toString(36)}${ext}`;
-        })();
-
         const resp = await fetch('/api/upload-url', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             turnId,
             shotId,
-            filename: filenameForUpload,
+            filename: f.name,
             mime: f.type || 'image/jpeg',
+            // 🔑 minimal fix: make fix uploads get a unique storage key
             variant: isFixMode ? 'fix' : undefined
           })
         });
@@ -556,7 +557,7 @@ export default function Capture() {
         uploaded.push({
           name: f.name,
           shotId,
-          url: finalPath,           // object key (used later for signing/preview)
+          url: finalPath,           // store the object key (used later for signing/preview)
           width: dims.width,
           height: dims.height,
           preview,
@@ -835,7 +836,7 @@ export default function Capture() {
                   </ThemedButton>
                 </div>
 
-                {/* Placeholder */}
+                {/* Placeholder (shows when nothing uploaded yet for this shot) */}
                 {files.length === 0 && (
                   <div
                     onClick={() => openPicker(s.shot_id)}
