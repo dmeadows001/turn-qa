@@ -40,15 +40,15 @@ export default async function handler(req, res) {
     let tpErr = null;
 
     const trySelect = async (withOptional, baseCols) => {
-    // keep shapes backwards-compatible; only add columns if present
-    const opt = withOptional
-      ? ', is_fix, cleaner_note, manager_note, orig_path, orig_url, original_path, original_url, orig_shotid, orig_shot_id'
-      : '';
-    return await supa
-      .from('turn_photos')
-      .select(baseCols + opt)
-      .eq('turn_id', turnId)
-      .order('created_at', { ascending: true });
+      // keep shapes backwards-compatible; only add columns if present
+      const opt = withOptional
+        ? ', is_fix, cleaner_note, manager_note, manager_notes, orig_path, orig_url, original_path, original_url, orig_shotid, orig_shot_id'
+        : '';
+      return await supa
+        .from('turn_photos')
+        .select(baseCols + opt)
+        .eq('turn_id', turnId)
+        .order('created_at', { ascending: true });
     };
 
     // Try widest set of path columns; on “column does not exist” retry with smaller sets
@@ -164,25 +164,28 @@ export default async function handler(req, res) {
         created_at: r.created_at,
         area_key: areaKey,
         signedUrl,
+
         // carry-through if present (undefined if not selected)
         is_fix: r.is_fix ?? undefined,
         cleaner_note: r.cleaner_note ?? undefined,
-         manager_note: r.manager_note ?? undefined,
+        manager_notes: r.manager_notes ?? undefined,
+        manager_note: r.manager_note ?? undefined,
+
         // pass through any “origin” fields if they exist (undefined otherwise)
         orig_path: r.orig_path ?? r.original_path ?? undefined,
         orig_url: r.orig_url ?? r.original_url ?? undefined,
         orig_shotid: r.orig_shotid ?? r.orig_shot_id ?? undefined,
-        });
+      });
     }
 
-   // 4) Do NOT dedupe — return everything, oldest -> newest
-  const finalOut = out
-    .slice()
-    .sort((a, b) => {
-      const ta = new Date(a.created_at || 0).getTime();
-      const tb = new Date(b.created_at || 0).getTime();
-      return ta - tb;
-    });
+    // 4) Do NOT dedupe — return everything, oldest -> newest
+    const finalOut = out
+      .slice()
+      .sort((a, b) => {
+        const ta = new Date(a.created_at || 0).getTime();
+        const tb = new Date(b.created_at || 0).getTime();
+        return ta - tb;
+      });
 
     // 5) Best-effort backfill
     if (updates.length) {
