@@ -189,58 +189,47 @@ useEffect(() => {
         shots.map(s => [String(s.area_key || '').toLowerCase(), s.shot_id])
       );
 
-      // Group by *currently visible* shot; otherwise bucket to __extras__
-      const byShot = {};
-      const seen = new Set(); // de-dupe by storage path
+// Group by *currently visible* shot; otherwise bucket to __extras__
+const byShot = {};
 
-      for (const it of items) {
-        const path = it.path || '';
-        if (!path || seen.has(path)) continue;
-        seen.add(path);
+for (const it of items) {
+  const path = it.path || '';
+  if (!path) continue; // only skip truly empty paths
 
-        let targetShot = null;
+  let targetShot = null;
+  // 1) Prefer a valid shot_id if it exists in current shots
+  if (it.shot_id && shotIdSet.has(it.shot_id)) {
+    targetShot = it.shot_id;
+  } else {
+    // 2) Else soft-match by area_key only if that area exists in current shots
+    const ak = String(it.area_key || '').toLowerCase();
+    if (ak && areaToShotId.has(ak)) {
+      targetShot = areaToShotId.get(ak);
+    }
+  }
 
-        // 1) Prefer a valid shot_id if it exists in current shots
-        if (it.shot_id && shotIdSet.has(it.shot_id)) {
-          targetShot = it.shot_id;
-        } else {
-          // 2) Else soft-match by area_key only if that area exists in current shots
-          const ak = String(it.area_key || '').toLowerCase();
-          if (ak && areaToShotId.has(ak)) {
-            targetShot = areaToShotId.get(ak);
-          }
-        }
+  // 3) If still not mapped to a visible shot, bucket to __extras__
+  if (!targetShot) targetShot = '__extras__';
 
-        // 3) If still not mapped to a visible shot, bucket to __extras__
-        if (!targetShot) targetShot = '__extras__';
+  // Decide if this row is a FIX photo
+  const isFixRow =
+    !!(it.is_fix ?? it.isFix ?? it.fix) ||
+    (!!it.cleaner_note && it.needs_fix === false);
 
-      // Decide if this row is a FIX photo
-      const isFixRow =
-        !!(it.is_fix ?? it.isFix ?? it.fix) ||
-        // extra safety: any row with a cleaner_note and NOT marked needs_fix
-        (!!it.cleaner_note && it.needs_fix === false);
+  const file = {
+    name: path.split('/').pop() || 'photo.jpg',
+    url: path,
+    width: null,
+    height: null,
+    shotId: targetShot,
+    preview: null,
+    isFix: isFixRow,
+    cleanerNote: it.cleaner_note ?? it.cleanerNote ?? null,
+    managerNote: it.manager_note ?? it.manager_notes ?? it.note ?? null,
+  };
 
-      const file = {
-        name: path.split('/').pop() || 'photo.jpg',
-        url: path,
-        width: null,
-        height: null,
-        shotId: targetShot,
-        preview: null,
-
-        // FIX vs original
-        isFix: isFixRow,
-
-        // cleaner per-photo note (for FIX photos)
-        cleanerNote: it.cleaner_note ?? it.cleanerNote ?? null,
-
-        // manager per-photo note (for ORIGINAL photos marked needs-fix)
-        managerNote: it.manager_note ?? it.manager_notes ?? it.note ?? null,
-      };
-
-
-        (byShot[targetShot] ||= []).push(file);
-      }
+  (byShot[targetShot] ||= []).push(file);
+}
 
       // Ensure __extras__ shows up if we’ve placed files there and the template didn’t include it
       if (byShot['__extras__'] && !shots.some(s => s.shot_id === '__extras__')) {
