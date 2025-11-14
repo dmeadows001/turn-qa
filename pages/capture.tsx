@@ -15,4 +15,5 @@ export const getServerSideProps: GetServerSideProps = async ({ query }) => {
   };
 };
 
+
 export default function CaptureRedirect() { return null; }
