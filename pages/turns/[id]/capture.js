@@ -214,7 +214,13 @@ useEffect(() => {
         // 3) If still not mapped to a visible shot, bucket to __extras__
         if (!targetShot) targetShot = '__extras__';
 
-              const file = {
+      // Decide if this row is a FIX photo
+      const isFixRow =
+        !!(it.is_fix ?? it.isFix ?? it.fix) ||
+        // extra safety: any row with a cleaner_note and NOT marked needs_fix
+        (!!it.cleaner_note && it.needs_fix === false);
+
+      const file = {
         name: path.split('/').pop() || 'photo.jpg',
         url: path,
         width: null,
@@ -222,14 +228,14 @@ useEffect(() => {
         shotId: targetShot,
         preview: null,
 
-        // fix photo?
-        isFix: !!(it.is_fix ?? it.isFix ?? it.fix),
+        // FIX vs original
+        isFix: isFixRow,
 
         // cleaner per-photo note (for FIX photos)
         cleanerNote: it.cleaner_note ?? it.cleanerNote ?? null,
 
         // manager per-photo note (for ORIGINAL photos marked needs-fix)
-        managerNote: it.manager_notes ?? it.manager_note ?? it.note ?? null,
+        managerNote: it.manager_note ?? it.manager_notes ?? it.note ?? null,
       };
 
 
