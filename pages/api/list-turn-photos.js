@@ -47,6 +47,7 @@ export default async function handler(req, res) {
         path,
         storage_path,
         is_fix,
+        needs_fix,
         cleaner_note,
         manager_notes
       `
@@ -136,13 +137,16 @@ export default async function handler(req, res) {
         created_at: r.created_at,
         area_key: areaKey,
         signedUrl,
-        // carry-through flags/notes
-        is_fix: r.is_fix ?? false,
-        cleaner_note: r.cleaner_note ?? null,
-        // normalize plural -> singular for the front-end
-        manager_note: r.manager_notes ?? null,
+        // carry-through if present (undefined if not selected)
+        is_fix: r.is_fix ?? undefined,
+        needs_fix: r.needs_fix ?? undefined,
+        cleaner_note: r.cleaner_note ?? undefined,
+        manager_note: (r.manager_note ?? r.manager_notes) ?? undefined,
+        // pass through any “origin” fields if they exist (undefined otherwise)
+        orig_path: r.orig_path ?? r.original_path ?? undefined,
+        orig_url: r.orig_url ?? r.original_url ?? undefined,
+        orig_shotid: r.orig_shotid ?? r.orig_shot_id ?? undefined,
       });
-    }
 
     // 4) Do NOT dedupe — return everything, oldest -> newest
     const finalOut = out
