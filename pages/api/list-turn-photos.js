@@ -34,56 +34,28 @@ export default async function handler(req, res) {
     const turnId = String(req.query.id || req.query.turn_id || '').trim();
     if (!turnId) return res.status(400).json({ error: 'missing turn id' });
 
-    // 1) Try to select with optional columns; if that fails because the columns
-    // don't exist in this env, retry with the minimal select.
-    let tpRows = [];
-    let tpErr = null;
+    // 1) Select all photos for this turn, including fix + note columns
+    const { data: tpRows, error: tpErr } = await supa
+      .from('turn_photos')
+      .select(
+        `
+        id,
+        turn_id,
+        shot_id,
+        created_at,
+        area_key,
+        path,
+        storage_path,
+        is_fix,
+        cleaner_note,
+        manager_notes
+      `
+      )
+      .eq('turn_id', turnId)
+      .order('created_at', { ascending: true });
 
-    const trySelect = async (withOptional, baseCols) => {
-      // keep shapes backwards-compatible; only add columns if present
-      const opt = withOptional
-        ? ', is_fix, cleaner_note, manager_note, manager_notes, orig_path, orig_url, original_path, original_url, orig_shotid, orig_shot_id'
-        : '';
-      return await supa
-        .from('turn_photos')
-        .select(baseCols + opt)
-        .eq('turn_id', turnId)
-        .order('created_at', { ascending: true });
-    };
-
-    // Try widest set of path columns; on “column does not exist” retry with smaller sets
-    const bases = [
-      // widest
-      'id, turn_id, shot_id, created_at, area_key, path, storage_path, photo_path, url, file',
-      // medium
-      'id, turn_id, shot_id, created_at, area_key, path, storage_path, url, file',
-      // minimal (most common)
-      'id, turn_id, shot_id, created_at, area_key, path',
-    ];
-
-    for (const baseCols of bases) {
-      const resp = await trySelect(true, baseCols);
-      if (!resp.error) {
-        tpRows = resp.data || [];
-        break;
-      }
-      const msg = String(resp.error.message || '').toLowerCase();
-      if (!/column .* does not exist/.test(msg)) {
-        tpErr = resp.error;
-        break;
-      }
-      // else: loop and try a smaller base
-    }
-    if (!tpRows.length && !tpErr) {
-      // last-ditch attempt with the minimal base and no optional columns
-      const last = await trySelect(
-        false,
-        'id, turn_id, shot_id, created_at, area_key, path'
-      );
-      tpErr = last.error || null;
-      tpRows = Array.isArray(last.data) ? last.data : [];
-    }
     if (tpErr) throw tpErr;
+
 
     // 2) Lookup missing area_key via template_shots if needed
     const missingShotIds = Array.from(
@@ -164,17 +136,11 @@ export default async function handler(req, res) {
         created_at: r.created_at,
         area_key: areaKey,
         signedUrl,
-
-        // carry-through if present (undefined if not selected)
-        is_fix: r.is_fix ?? undefined,
-        cleaner_note: r.cleaner_note ?? undefined,
-        manager_notes: r.manager_notes ?? undefined,
-        manager_note: r.manager_note ?? undefined,
-
-        // pass through any “origin” fields if they exist (undefined otherwise)
-        orig_path: r.orig_path ?? r.original_path ?? undefined,
-        orig_url: r.orig_url ?? r.original_url ?? undefined,
-        orig_shotid: r.orig_shotid ?? r.orig_shot_id ?? undefined,
+        // carry-through flags/notes
+        is_fix: r.is_fix ?? false,
+        cleaner_note: r.cleaner_note ?? null,
+        // normalize plural -> singular for the front-end
+        manager_note: r.manager_notes ?? null,
       });
     }
 
