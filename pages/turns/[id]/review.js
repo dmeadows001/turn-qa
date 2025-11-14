@@ -16,20 +16,26 @@ async function fetchPhotos(turnId) {
   if (!r.ok) throw new Error((await r.json()).error || 'list-turn-photos failed');
   const j = await r.json();
 
-  // Map and include persisted is_fix/cleaner_note if present (undefined-safe).
-  const mapped = (j.photos || []).map(p => ({
-    shot_id: p.shot_id || null,
-    id: p.id,
-    area_key: p.area_key || '',
-    created_at: p.created_at,
-    url: p.signedUrl || '',
-    path: p.path || '',
-    is_fix: !!p.is_fix,
-    cleaner_note: p.cleaner_note || '',
-  }));
+  const raw = Array.isArray(j.photos) ? j.photos : [];
 
-  // Dedupe by final resolved storage path to prevent UI duplicates.
-  return Array.from(new Map(mapped.map(x => [x.path || '', x])).values());
+  // Keep *all* rows (no dedupe) and normalize flags/notes
+  return raw
+    .slice()
+    .sort((a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0))
+    .map(p => ({
+      ...p,
+      shot_id: p.shot_id || null,
+      id: p.id,
+      area_key: p.area_key || '',
+      created_at: p.created_at,
+      // use signedUrl for display, but keep path for keys/findings
+      url: p.signedUrl || p.url || '',
+      path: p.path || '',
+      is_fix: !!(p.is_fix ?? p.isFix ?? p.fix),
+      needs_fix: !!(p.needs_fix ?? p.needsFix ?? p.flagged),
+      cleaner_note: p.cleaner_note ?? p.cleanerNote ?? '',
+      manager_note: p.manager_note ?? p.manager_notes ?? p.note ?? '',
+    }));
 }
 
 // Load existing findings for this turn: { findings: [{ path, note, severity? }] }
@@ -172,8 +178,14 @@ const PhotoCard = memo(function PhotoCard({
   const k = keyFor(p);
   const selected = selectedKeys.has(k);
   const noteVal = notesByKey[k] || '';
-  const flagged = !!findingsByKey[k];
+
   const isFix = !!p.is_fix;
+
+  const flaggedFromFindings = !!findingsByKey[k];
+  const flaggedFromRow = !!p.needs_fix;
+  const flagged = flaggedFromFindings || flaggedFromRow;
+
+  const managerNote = p.manager_note || (findingsByKey[k]?.note || '');
 
   const styleCard = isFix ? fixCardStyle : (flagged ? flaggedCardStyle : null);
 
@@ -257,7 +269,7 @@ const PhotoCard = memo(function PhotoCard({
           </div>
         )}
 
-        {isManagerMode && flagged && findingsByKey[k]?.note && (
+        {isManagerMode && flagged && managerNote && (
           <div
             style={{
               marginTop: 8,
@@ -271,7 +283,7 @@ const PhotoCard = memo(function PhotoCard({
             <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 4, fontWeight: 700 }}>
               Manager note (sent to cleaner)
             </div>
-            <div style={{ whiteSpace: 'pre-wrap' }}>{findingsByKey[k].note}</div>
+            <div style={{ whiteSpace: 'pre-wrap' }}>{managerNote}</div>
           </div>
         )}
 
@@ -289,7 +301,7 @@ const PhotoCard = memo(function PhotoCard({
           </div>
         )}
 
-        {!isManagerMode && flagged && findingsByKey[k] && findingsByKey[k].note && (
+        {!isManagerMode && flagged && managerNote && (
           <div style={{
             marginTop:8,
             padding:'8px 10px',
@@ -299,7 +311,7 @@ const PhotoCard = memo(function PhotoCard({
             color:'#cbd5e1'
           }}>
             <div style={{ fontSize:11, color:'#94a3b8', marginBottom:4, fontWeight:700 }}>Manager note</div>
-            <div style={{ whiteSpace:'pre-wrap' }}>{findingsByKey[k].note}</div>
+            <div style={{ whiteSpace:'pre-wrap' }}>{managerNote}</div>
           </div>
         )}
       </div>
