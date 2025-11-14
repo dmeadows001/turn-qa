@@ -147,6 +147,7 @@ export default async function handler(req, res) {
         orig_url: r.orig_url ?? r.original_url ?? undefined,
         orig_shotid: r.orig_shotid ?? r.orig_shot_id ?? undefined,
       });
+    }
 
     // 4) Do NOT dedupe — return everything, oldest -> newest
     const finalOut = out
