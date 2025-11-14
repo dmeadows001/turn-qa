@@ -183,7 +183,8 @@ const PhotoCard = memo(function PhotoCard({
 
   const flaggedFromFindings = !!findingsByKey[k];
   const flaggedFromRow = !!p.needs_fix;
-  const flagged = flaggedFromFindings || flaggedFromRow;
+  // Only ORIGINAL photos can be “needs fix”
+  const flagged = !isFix && (flaggedFromFindings || flaggedFromRow);
 
   const managerNote = p.manager_note || (findingsByKey[k]?.note || '');
 
