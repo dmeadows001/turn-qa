@@ -118,6 +118,13 @@ export default function Capture() {
   // One hidden file input per shot
   const inputRefs = useRef({});
 
+  // ------- AI pre-check / scan state -------
+  const [aiPhase, setAiPhase] = useState('idle'); // 'idle' | 'precheck' | 'scan' | 'ready'
+  const [aiFlags, setAiFlags] = useState([]);     // from /api/vision-precheck
+  const [aiFindings, setAiFindings] = useState([]); // from /api/vision-scan
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState('');
+
   // ------- helpers -------
   const smallMeta = { fontSize: 12, color: '#94a3b8' };
 
@@ -167,141 +174,115 @@ export default function Capture() {
     inputRefs.current[shotId]?.click();
   }
 
- // --- Load existing photos for this turn (ensures we only bucket into *visible* shots) ---
-useEffect(() => {
-  async function loadExisting() {
-    if (!turnId || !Array.isArray(shots)) return;
-    try {
-      const r = await fetch(`/api/list-turn-photos?id=${turnId}`);
-      const j = await r.json();
-      const items = Array.isArray(j.photos) ? j.photos : [];
+  // --- Load existing photos for this turn (ensures we only bucket into *visible* shots) ---
+  useEffect(() => {
+    async function loadExisting() {
+      if (!turnId || !Array.isArray(shots)) return;
+      try {
+        const r = await fetch(`/api/list-turn-photos?id=${turnId}`);
+        const j = await r.json();
+        const items = Array.isArray(j.photos) ? j.photos : [];
 
         if (typeof window !== 'undefined') {
-        window.__CAPTURE_DEBUG__ = window.__CAPTURE_DEBUG__ || {};
-        window.__CAPTURE_DEBUG__.rawPhotos = items;
-        console.log('[capture] /api/list-turn-photos items:', items);
+          window.__CAPTURE_DEBUG__ = window.__CAPTURE_DEBUG__ || {};
+          window.__CAPTURE_DEBUG__.rawPhotos = items;
+          console.log('[capture] /api/list-turn-photos items:', items);
+        }
+
+        // Build quick lookups for currently visible shots
+        const shotIdSet = new Set(shots.map(s => s.shot_id));
+        const areaToShotId = new Map(
+          shots.map(s => [String(s.area_key || '').toLowerCase(), s.shot_id])
+        );
+
+        // Group by *currently visible* shot; otherwise bucket to __extras__
+        const byShot = {};
+
+        for (const it of items) {
+          const path = it.path || '';
+          if (!path) continue; // only skip truly empty paths
+
+          let targetShot = null;
+          // 1) Prefer a valid shot_id if it exists in current shots
+          if (it.shot_id && shotIdSet.has(it.shot_id)) {
+            targetShot = it.shot_id;
+          } else {
+            // 2) Else soft-match by area_key only if that area exists in current shots
+            const ak = String(it.area_key || '').toLowerCase();
+            if (ak && areaToShotId.has(ak)) {
+              targetShot = areaToShotId.get(ak);
+            }
+          }
+
+          // 3) If still not mapped to a visible shot, bucket to __extras__
+          if (!targetShot) targetShot = '__extras__';
+
+          // Decide if this row is a FIX photo
+          const isFixRow =
+            !!(it.is_fix ?? it.isFix ?? it.fix) ||
+            (!!it.cleaner_note && it.needs_fix === false);
+
+          const file = {
+            name: path.split('/').pop() || 'photo.jpg',
+            url: path,
+            width: null,
+            height: null,
+            shotId: targetShot,
+            preview: null,
+            isFix: isFixRow,
+            cleanerNote: it.cleaner_note ?? it.cleanerNote ?? null,
+            managerNote: it.manager_note ?? it.manager_notes ?? it.note ?? null,
+          };
+
+          (byShot[targetShot] ||= []).push(file);
+        }
+
+        // Ensure __extras__ shows up if we’ve placed files there and the template didn’t include it
+        if (byShot['__extras__'] && !shots.some(s => s.shot_id === '__extras__')) {
+          // We only surface files via uploadsByShot; no setShots here to avoid loops.
+        }
+
+        setUploadsByShot(byShot);
+
+        // kick off signing for thumbnails we’ll render
+        Object.values(byShot).flat().forEach(f => ensureThumb(f.url));
+
+        // Debug overlay hooks (if you’re using debug=1)
+        if (typeof window !== 'undefined' && window.__CAPTURE_DEBUG__) {
+          window.__CAPTURE_DEBUG__.byShot = byShot;
+        }
+      } catch {
+        // ignore
       }
-
-
-      // Build quick lookups for currently visible shots
-      const shotIdSet = new Set(shots.map(s => s.shot_id));
-      const areaToShotId = new Map(
-        shots.map(s => [String(s.area_key || '').toLowerCase(), s.shot_id])
-      );
-
-// Group by *currently visible* shot; otherwise bucket to __extras__
-const byShot = {};
-
-for (const it of items) {
-  const path = it.path || '';
-  if (!path) continue; // only skip truly empty paths
-
-  let targetShot = null;
-  // 1) Prefer a valid shot_id if it exists in current shots
-  if (it.shot_id && shotIdSet.has(it.shot_id)) {
-    targetShot = it.shot_id;
-  } else {
-    // 2) Else soft-match by area_key only if that area exists in current shots
-    const ak = String(it.area_key || '').toLowerCase();
-    if (ak && areaToShotId.has(ak)) {
-      targetShot = areaToShotId.get(ak);
     }
-  }
-
-  // 3) If still not mapped to a visible shot, bucket to __extras__
-  if (!targetShot) targetShot = '__extras__';
-
-  // Decide if this row is a FIX photo
-  const isFixRow =
-    !!(it.is_fix ?? it.isFix ?? it.fix) ||
-    (!!it.cleaner_note && it.needs_fix === false);
-
-  const file = {
-    name: path.split('/').pop() || 'photo.jpg',
-    url: path,
-    width: null,
-    height: null,
-    shotId: targetShot,
-    preview: null,
-    isFix: isFixRow,
-    cleanerNote: it.cleaner_note ?? it.cleanerNote ?? null,
-    managerNote: it.manager_note ?? it.manager_notes ?? it.note ?? null,
-  };
-
-  (byShot[targetShot] ||= []).push(file);
-}
-
-      // Ensure __extras__ shows up if we’ve placed files there and the template didn’t include it
-      if (byShot['__extras__'] && !shots.some(s => s.shot_id === '__extras__')) {
-        // Append the pseudo section without touching other shots
-        // (keeps your existing shape/labels)
-        // NOTE: this only adds the section; it does not change shots that already exist.
-        // You already added a similar guard in loadTemplate; this is a belt-and-suspenders check.
-        // We DO NOT call setShots here to avoid loops; we only surface files via uploadsByShot.
-      }
-
-      setUploadsByShot(byShot);
-
-      // kick off signing for thumbnails we’ll render
-      Object.values(byShot).flat().forEach(f => ensureThumb(f.url));
-
-      // Debug overlay hooks (if you’re using debug=1)
-      if (typeof window !== 'undefined' && window.__CAPTURE_DEBUG__) {
-        window.__CAPTURE_DEBUG__.byShot = byShot;
-      }
-    } catch {
-      // ignore
-    }
-  }
-  loadExisting();
-}, [turnId, shots]);
+    loadExisting();
+  }, [turnId, shots]);
 
   // -------- Load template (required shots) --------
-useEffect(() => {
-  async function loadTemplate() {
-    if (!turnId) return;
-    try {
-      const r = await fetch(`/api/turn-template?turnId=${turnId}`);
-      const json = await r.json();
+  useEffect(() => {
+    async function loadTemplate() {
+      if (!turnId) return;
+      try {
+        const r = await fetch(`/api/turn-template?turnId=${turnId}`);
+        const json = await r.json();
 
-      let nextShots = [];
-      if (Array.isArray(json.shots) && json.shots.length) {
-        nextShots = json.shots.map(s => ({
-          shot_id: s.shot_id,
-          area_key: s.area_key,
-          label: s.label,
-          min_count: s.min_count || 1,
-          notes: s.notes || '',
-          rules_text: s.rules_text || ''
-        }));
-      } else {
-        nextShots = DEFAULT_SHOTS;
-      }
+        let nextShots = [];
+        if (Array.isArray(json.shots) && json.shots.length) {
+          nextShots = json.shots.map(s => ({
+            shot_id: s.shot_id,
+            area_key: s.area_key,
+            label: s.label,
+            min_count: s.min_count || 1,
+            notes: s.notes || '',
+            rules_text: s.rules_text || ''
+          }));
+        } else {
+          nextShots = DEFAULT_SHOTS;
+        }
 
-      // Guarantee at least one visible section
-      if (!nextShots.length) {
-        nextShots = [{
-          shot_id: '__extras__',
-          area_key: 'existing_uploads',
-          label: 'Additional uploads',
-          min_count: 0,
-          notes: 'Previously uploaded',
-          rules_text: ''
-        }];
-      }
-
-      setTemplateRules(json.rules || { property: '', template: '' });
-      setShots(nextShots);
-
-      // optional debug
-      if (typeof window !== 'undefined') {
-        window.__CAPTURE_DEBUG__ = window.__CAPTURE_DEBUG__ || {};
-        window.__CAPTURE_DEBUG__.shots = nextShots;
-      }
-    } catch {
-      const nextShots = (DEFAULT_SHOTS && DEFAULT_SHOTS.length)
-        ? DEFAULT_SHOTS
-        : [{
+        // Guarantee at least one visible section
+        if (!nextShots.length) {
+          nextShots = [{
             shot_id: '__extras__',
             area_key: 'existing_uploads',
             label: 'Additional uploads',
@@ -309,15 +290,36 @@ useEffect(() => {
             notes: 'Previously uploaded',
             rules_text: ''
           }];
-      setShots(nextShots);
-      if (typeof window !== 'undefined') {
-        window.__CAPTURE_DEBUG__ = window.__CAPTURE_DEBUG__ || {};
-        window.__CAPTURE_DEBUG__.shots = nextShots;
+        }
+
+        setTemplateRules(json.rules || { property: '', template: '' });
+        setShots(nextShots);
+
+        // optional debug
+        if (typeof window !== 'undefined') {
+          window.__CAPTURE_DEBUG__ = window.__CAPTURE_DEBUG__ || {};
+          window.__CAPTURE_DEBUG__.shots = nextShots;
+        }
+      } catch {
+        const nextShots = (DEFAULT_SHOTS && DEFAULT_SHOTS.length)
+          ? DEFAULT_SHOTS
+          : [{
+              shot_id: '__extras__',
+              area_key: 'existing_uploads',
+              label: 'Additional uploads',
+              min_count: 0,
+              notes: 'Previously uploaded',
+              rules_text: ''
+            }];
+        setShots(nextShots);
+        if (typeof window !== 'undefined') {
+          window.__CAPTURE_DEBUG__ = window.__CAPTURE_DEBUG__ || {};
+          window.__CAPTURE_DEBUG__.shots = nextShots;
+        }
       }
     }
-  }
-  loadTemplate();
-}, [turnId]);
+    loadTemplate();
+  }, [turnId]);
 
   // --- Fetch needs-fix notes (overall + per-photo) for the banner ---
   useEffect(() => {
@@ -339,6 +341,47 @@ useEffect(() => {
       } catch {}
     })();
   }, [turnId]);
+
+  // -------- AI helpers: build payloads for pre-check + scan --------
+  function buildPrecheckPayload() {
+    // Group by area for precheck: { [area_key]: [files] }
+    const uploadsByArea = {};
+
+    (shots || []).forEach(s => {
+      const areaKey = s.area_key || s.shot_id || 'unknown';
+      const files = uploadsByShot[s.shot_id] || [];
+      if (!files.length) return;
+      uploadsByArea[areaKey] = files.map(f => ({
+        name: f.name,
+        path: f.url,
+      }));
+    });
+
+    const required = (shots || []).map(s => ({
+      key: s.area_key || s.shot_id || 'unknown',
+      title: s.label || s.area_key || 'Section',
+      minPhotos: s.min_count || 1,
+    }));
+
+    return { uploadsByArea, required };
+  }
+
+  function buildScanPayload() {
+    const items = [];
+    (shots || []).forEach(s => {
+      const areaKey = s.area_key || s.shot_id || 'unknown';
+      const files = uploadsByShot[s.shot_id] || [];
+      files.forEach(f => {
+        items.push({
+          url: f.url,
+          area_key: areaKey,
+          label: s.label || '',
+          notes: s.notes || '',
+        });
+      });
+    });
+    return { items };
+  }
 
   // -------- Add files (quality + upload to Storage) --------
   async function addFiles(shotId, fileList) {
@@ -470,33 +513,123 @@ useEffect(() => {
     } catch {}
   }
 
-  // -------- Submit initial turn --------
+  // -------- Submit initial turn WITH AI pre-check + scan --------
   async function submitAll() {
-    if (submitting) return;
-    // minimal: ensure each shot meets min_count
-    const unmet = (shots || []).filter(s => (s.min_count || 1) > (uploadsByShot[s.shot_id]?.length || 0));
+    if (submitting || aiLoading) return;
+
+    // 1) Ensure each shot meets min_count (same as before)
+    const unmet = (shots || []).filter(
+      s => (s.min_count || 1) > (uploadsByShot[s.shot_id]?.length || 0)
+    );
     if (unmet.length) {
-      alert('Please add required photos before submitting:\n' + unmet.map(a => `• ${a.label}`).join('\n'));
+      alert(
+        'Please add required photos before submitting:\n' +
+        unmet.map(a => `• ${a.label}`).join('\n')
+      );
       return;
     }
 
-    setSubmitting(true);
+    // At least one file overall
+    const anyFiles = Object.values(uploadsByShot || {}).some(
+      list => (list || []).length > 0
+    );
+    if (!anyFiles) {
+      alert('Please add at least one photo before submitting.');
+      return;
+    }
+
+    // Reset AI state
+    setAiError('');
+    setAiFlags([]);
+    setAiFindings([]);
+    setAiPhase('idle');
+    setAiLoading(true);
+
     try {
+      // 2) Run pre-check
+      const preBody = buildPrecheckPayload();
+      const preResp = await fetch('/api/vision-precheck', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(preBody),
+      });
+      const preJson = await preResp.json().catch(() => ({}));
+      if (!preResp.ok) {
+        throw new Error(preJson.error || 'Pre-check failed');
+      }
+
+      const flags = Array.isArray(preJson.flags) ? preJson.flags : [];
+      setAiFlags(flags);
+      setAiPhase('precheck');
+      setAiLoading(false);
+
+      // At this point, we stop and let the UI show pre-check results.
+      // Cleaner will click "Continue to AI Scan & Submit" to proceed.
+    } catch (e) {
+      console.error('pre-check error', e);
+      setAiError(e.message || 'Pre-check failed');
+      setAiLoading(false);
+    }
+  }
+
+  // ---- Second step: run AI scan + mark scan_ok + submit turn ----
+  async function runAiScanAndSubmit() {
+    if (submitting || aiLoading) return;
+
+    setAiError('');
+    setAiLoading(true);
+    setAiPhase('scan');
+
+    try {
+      // 3) Call vision-scan
+      const scanBody = buildScanPayload();
+      const scanResp = await fetch('/api/vision-scan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(scanBody),
+      });
+      const scanJson = await scanResp.json().catch(() => ({}));
+      if (!scanResp.ok) {
+        throw new Error(scanJson.error || 'AI scan failed');
+      }
+
+      const findings = Array.isArray(scanJson.results) ? scanJson.results : [];
+      setAiFindings(findings);
+
+      // 4) Mark scan_ok = true on this turn (you'll want /api/turns/[id]/scan-done] to set scan_ok + scan_checked_at)
+      try {
+        await fetch(`/api/turns/${encodeURIComponent(turnId)}/scan-done`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+        });
+      } catch {
+        // ignore; if this fails, /api/submit-turn will still enforce SCAN_REQUIRED
+      }
+
+      // 5) Finally, call submit-turn with your original payload
+      setSubmitting(true);
       const photos = Object.values(uploadsByShot).flat().map(f => ({
-        url: f.url, shotId: f.shotId, area_key: null
+        url: f.url,
+        shotId: f.shotId,
+        area_key: null
       }));
       const resp = await fetch('/api/submit-turn', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ turnId, photos })
       });
+      const json = await resp.json().catch(() => ({}));
       if (!resp.ok) {
-        const err = await resp.json().catch(() => ({}));
-        alert('Submit failed: ' + (err.error || resp.statusText));
-        return;
+        throw new Error(json.error || resp.statusText || 'Submit failed');
       }
+
+      setAiPhase('ready');
       window.location.href = `/turns/${turnId}/done`;
+    } catch (e) {
+      console.error('AI scan/submit error', e);
+      setAiError(e.message || 'AI scan / submit failed');
     } finally {
+      setAiLoading(false);
       setTimeout(() => setSubmitting(false), 300);
     }
   }
@@ -657,7 +790,6 @@ useEffect(() => {
                       fixNotes?.byPath?.[f.url] ||
                       null;
 
-
                     return (
                       <div
                         key={f.url}
@@ -760,6 +892,76 @@ useEffect(() => {
             );
           })}
 
+          {/* AI Pre-check / Scan panel (only for initial capture, not needs-fix) */}
+          {tab !== 'needs-fix' && (
+            <div style={{ marginTop: 16, padding: 12, borderRadius: 10, background: '#020617' }}>
+              <h3 style={{ marginTop: 0, marginBottom: 6, fontSize: 14 }}>AI quality check</h3>
+
+              {aiError && (
+                <div style={{ marginBottom: 8, color: '#fca5a5', fontSize: 13 }}>
+                  {aiError}
+                </div>
+              )}
+
+              {aiPhase === 'idle' && (
+                <div style={{ fontSize: 13, color: '#94a3b8' }}>
+                  When you submit, we’ll run a quick pre-check and AI scan to spot obvious issues before your manager sees the photos.
+                </div>
+              )}
+
+              {aiPhase === 'precheck' && (
+                <div style={{ fontSize: 13, color: '#e5e7eb' }}>
+                  <div style={{ marginBottom: 6 }}>Pre-check results:</div>
+                  {!aiFlags.length ? (
+                    <div style={{ color: '#22c55e' }}>No extra issues detected by pre-check.</div>
+                  ) : (
+                    <ul style={{ margin: 0, paddingLeft: 18 }}>
+                      {aiFlags.map((f, i) => (
+                        <li key={i}>{f}</li>
+                      ))}
+                    </ul>
+                  )}
+                  <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <ThemedButton kind="secondary" onClick={() => setAiPhase('idle')}>
+                      ⬅ Back to photos
+                    </ThemedButton>
+                    <ThemedButton onClick={runAiScanAndSubmit} loading={aiLoading}>
+                      🤖 Continue to AI Scan & Submit
+                    </ThemedButton>
+                  </div>
+                </div>
+              )}
+
+              {aiPhase === 'scan' && (
+                <div style={{ fontSize: 13, color: '#e5e7eb' }}>
+                  <div style={{ marginBottom: 6 }}>AI scan findings (per photo):</div>
+                  {!aiFindings.length ? (
+                    <div style={{ color: '#22c55e' }}>No visible issues detected by AI.</div>
+                  ) : (
+                    <ul style={{ margin: 0, paddingLeft: 18 }}>
+                      {aiFindings.map((r, i) => (
+                        <li key={i}>
+                          <code style={{ fontSize: 11 }}>{r.path}</code>
+                          {Array.isArray(r.issues) && r.issues.length ? (
+                            <ul style={{ marginTop: 4, paddingLeft: 18 }}>
+                              {r.issues.map((iss, j) => (
+                                <li key={j}>
+                                  {iss.label} ({iss.severity}{iss.confidence != null ? `, ${(iss.confidence * 100).toFixed(0)}%` : ''})
+                                </li>
+                              ))}
+                            </ul>
+                          ) : (
+                            <span> — no issues</span>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Footer: submit buttons */}
           <div style={{ display:'flex', flexDirection:'column', gap:12, marginTop:16, maxWidth:520 }}>
             {tab === 'needs-fix' ? (
@@ -779,7 +981,13 @@ useEffect(() => {
                 </ThemedButton>
               </>
             ) : (
-              <ThemedButton onClick={submitAll} loading={submitting} kind="secondary" ariaLabel="Submit Turn" full>
+              <ThemedButton
+                onClick={submitAll}
+                loading={submitting || aiLoading}
+                kind="secondary"
+                ariaLabel="Submit Turn"
+                full
+              >
                 ✅ Submit Turn
               </ThemedButton>
             )}
@@ -798,6 +1006,7 @@ useEffect(() => {
             <div>sections with files: {
               Object.entries(uploadsByShot || {}).filter(([,list]) => (list||[]).length>0).length
             }</div>
+            <div>aiPhase: {aiPhase}</div>
           </div>
         )}
       </section>
