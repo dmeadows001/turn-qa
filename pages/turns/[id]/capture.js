@@ -716,6 +716,13 @@ export default function Capture() {
       <section style={ui.sectionGrid}>
         <div style={ui.card}>
           {/* Property name */}
+<h3 style={{ textAlign: 'center', color: '#a5b4fc', marginBottom: 4 }}>
+  DEBUG: AI SCAN VERSION
+</h3>
+<h2 style={{ textAlign:'center', margin:'0 0 4px', color: ui.title?.color || '#fff', fontWeight:700 }}>
+  {templateRules?.property || ''}
+</h2>
+
           <h2 style={{ textAlign:'center', margin:'0 0 4px', color: ui.title?.color || '#fff', fontWeight:700 }}>
             {templateRules?.property || ''}
           </h2>
