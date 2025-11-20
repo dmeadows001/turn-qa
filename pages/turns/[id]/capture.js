@@ -67,6 +67,8 @@ export default function Capture() {
     window.__CAPTURE_DEBUG__.isFixMode = isFixMode;
   }
 
+  // If the turn is still in_progress and we weren't launched by /capture?turn=,
+  // bounce back to that launcher so the AI flow can run there.
   useEffect(() => {
     if (!turnId) return;
     if (tab === 'needs-fix') return; // allow fix flow to use this page
@@ -118,12 +120,9 @@ export default function Capture() {
   // One hidden file input per shot
   const inputRefs = useRef({});
 
-  // ------- AI pre-check / scan state -------
-  const [aiPhase, setAiPhase] = useState('idle'); // 'idle' | 'precheck' | 'scan' | 'ready'
-  const [aiFlags, setAiFlags] = useState([]);     // from /api/vision-precheck
-  const [aiFindings, setAiFindings] = useState([]); // from /api/vision-scan
-  const [aiLoading, setAiLoading] = useState(false);
-  const [aiError, setAiError] = useState('');
+  // --- AI scan state ---
+  const [scanStatus, setScanStatus] = useState('idle'); // 'idle' | 'running' | 'passed' | 'failed'
+  const [scanMessage, setScanMessage] = useState('');
 
   // ------- helpers -------
   const smallMeta = { fontSize: 12, color: '#94a3b8' };
@@ -159,7 +158,7 @@ export default function Capture() {
       }
     });
   }
-  
+
   function ensureThumb(path) {
     if (!path || requestedThumbsRef.current.has(path) || thumbByPath[path]) return;
     requestedThumbsRef.current.add(path);
@@ -239,7 +238,7 @@ export default function Capture() {
 
         // Ensure __extras__ shows up if we’ve placed files there and the template didn’t include it
         if (byShot['__extras__'] && !shots.some(s => s.shot_id === '__extras__')) {
-          // We only surface files via uploadsByShot; no setShots here to avoid loops.
+          // We only surface files via uploadsByShot; no need to mutate shots here.
         }
 
         setUploadsByShot(byShot);
@@ -341,47 +340,6 @@ export default function Capture() {
       } catch {}
     })();
   }, [turnId]);
-
-  // -------- AI helpers: build payloads for pre-check + scan --------
-  function buildPrecheckPayload() {
-    // Group by area for precheck: { [area_key]: [files] }
-    const uploadsByArea = {};
-
-    (shots || []).forEach(s => {
-      const areaKey = s.area_key || s.shot_id || 'unknown';
-      const files = uploadsByShot[s.shot_id] || [];
-      if (!files.length) return;
-      uploadsByArea[areaKey] = files.map(f => ({
-        name: f.name,
-        path: f.url,
-      }));
-    });
-
-    const required = (shots || []).map(s => ({
-      key: s.area_key || s.shot_id || 'unknown',
-      title: s.label || s.area_key || 'Section',
-      minPhotos: s.min_count || 1,
-    }));
-
-    return { uploadsByArea, required };
-  }
-
-  function buildScanPayload() {
-    const items = [];
-    (shots || []).forEach(s => {
-      const areaKey = s.area_key || s.shot_id || 'unknown';
-      const files = uploadsByShot[s.shot_id] || [];
-      files.forEach(f => {
-        items.push({
-          url: f.url,
-          area_key: areaKey,
-          label: s.label || '',
-          notes: s.notes || '',
-        });
-      });
-    });
-    return { items };
-  }
 
   // -------- Add files (quality + upload to Storage) --------
   async function addFiles(shotId, fileList) {
@@ -504,6 +462,9 @@ export default function Capture() {
 
     if (uploaded.length) {
       setUploadsByShot(prev => ({ ...prev, [shotId]: [ ...(prev[shotId] || []), ...uploaded ] }));
+      // Any new photos mean we should require a fresh scan
+      setScanStatus('idle');
+      setScanMessage('');
     }
 
     // Allow selecting the same file again if needed
@@ -513,123 +474,175 @@ export default function Capture() {
     } catch {}
   }
 
-  // -------- Submit initial turn WITH AI pre-check + scan --------
-  async function submitAll() {
-    if (submitting || aiLoading) return;
-
-    // 1) Ensure each shot meets min_count (same as before)
-    const unmet = (shots || []).filter(
-      s => (s.min_count || 1) > (uploadsByShot[s.shot_id]?.length || 0)
-    );
-    if (unmet.length) {
-      alert(
-        'Please add required photos before submitting:\n' +
-        unmet.map(a => `• ${a.label}`).join('\n')
-      );
+  // -------- AI Pre-check + Vision Scan --------
+  async function runAiScan() {
+    if (!turnId) return;
+    if (!Array.isArray(shots) || !shots.length) {
+      alert('Template not loaded yet. Try again in a moment.');
       return;
     }
 
-    // At least one file overall
-    const anyFiles = Object.values(uploadsByShot || {}).some(
-      list => (list || []).length > 0
-    );
-    if (!anyFiles) {
-      alert('Please add at least one photo before submitting.');
+    const allFiles = Object.values(uploadsByShot || {}).flat();
+    if (!allFiles.length) {
+      alert('Please add photos before running AI Scan.');
       return;
     }
-
-    // Reset AI state
-    setAiError('');
-    setAiFlags([]);
-    setAiFindings([]);
-    setAiPhase('idle');
-    setAiLoading(true);
 
     try {
-      // 2) Run pre-check
-      const preBody = buildPrecheckPayload();
+      setScanStatus('running');
+      setScanMessage('Running AI pre-check…');
+
+      // Map shot_id -> shot metadata
+      const shotMetaById = new Map((shots || []).map(s => [s.shot_id, s]));
+
+      // 1) Build uploadsByArea for vision-precheck
+      const uploadsByArea = {};
+      for (const [shotId, files] of Object.entries(uploadsByShot || {})) {
+        const meta = shotMetaById.get(shotId);
+        const areaKey = (meta?.area_key || 'unknown').toString();
+        if (!uploadsByArea[areaKey]) uploadsByArea[areaKey] = [];
+        for (const f of files) {
+          uploadsByArea[areaKey].push({
+            name: f.name || f.url.split('/').pop() || 'photo.jpg',
+            url: f.url,
+          });
+        }
+      }
+
+      // Build required list from template
+      const required = (shots || []).map(s => ({
+        key: s.area_key,
+        title: s.label,
+        minPhotos: s.min_count || 1,
+      }));
+
+      // --- Call vision-precheck ---
       const preResp = await fetch('/api/vision-precheck', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(preBody),
+        body: JSON.stringify({ uploadsByArea, required }),
       });
       const preJson = await preResp.json().catch(() => ({}));
-      if (!preResp.ok) {
-        throw new Error(preJson.error || 'Pre-check failed');
+      const flags = Array.isArray(preJson.flags) ? preJson.flags : [];
+
+      const missingFlags = flags.filter(f => /^add\s+\d+/i.test(String(f || '')));
+      if (missingFlags.length) {
+        setScanStatus('failed');
+        setScanMessage(
+          `AI pre-check found missing required photos:\n- ${missingFlags.join('\n- ')}`
+        );
+        alert(
+          'AI pre-check found missing required photos:\n' +
+          missingFlags.join('\n')
+        );
+        return;
       }
 
-      const flags = Array.isArray(preJson.flags) ? preJson.flags : [];
-      setAiFlags(flags);
-      setAiPhase('precheck');
-      setAiLoading(false);
+      // 2) Build items for vision-scan
+      setScanMessage('Running full AI vision scan…');
 
-      // At this point, we stop and let the UI show pre-check results.
-      // Cleaner will click "Continue to AI Scan & Submit" to proceed.
-    } catch (e) {
-      console.error('pre-check error', e);
-      setAiError(e.message || 'Pre-check failed');
-      setAiLoading(false);
-    }
-  }
+      const items = [];
+      for (const s of shots || []) {
+        const files = uploadsByShot[s.shot_id] || [];
+        for (const f of files) {
+          items.push({
+            url: f.url,
+            area_key: s.area_key,
+            label: s.label,
+            notes: s.notes || s.rules_text || '',
+          });
+        }
+      }
 
-  // ---- Second step: run AI scan + mark scan_ok + submit turn ----
-  async function runAiScanAndSubmit() {
-    if (submitting || aiLoading) return;
-
-    setAiError('');
-    setAiLoading(true);
-    setAiPhase('scan');
-
-    try {
-      // 3) Call vision-scan
-      const scanBody = buildScanPayload();
       const scanResp = await fetch('/api/vision-scan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(scanBody),
+        body: JSON.stringify({ items }),
       });
       const scanJson = await scanResp.json().catch(() => ({}));
-      if (!scanResp.ok) {
-        throw new Error(scanJson.error || 'AI scan failed');
+      const results = Array.isArray(scanJson.results) ? scanJson.results : [];
+
+      let hasFail = false;
+      const issueSummaries = [];
+
+      for (const r of results) {
+        const issues = Array.isArray(r.issues) ? r.issues : [];
+        for (const iss of issues) {
+          const label = iss.label || 'Issue';
+          const sev = (iss.severity || '').toLowerCase();
+          if (sev === 'fail') hasFail = true;
+          issueSummaries.push(`${sev || 'note'} · ${label}`);
+        }
       }
 
-      const findings = Array.isArray(scanJson.results) ? scanJson.results : [];
-      setAiFindings(findings);
+      const passed = !hasFail;
 
-      // 4) Mark scan_ok = true on this turn (you'll want /api/turns/[id]/scan-done] to set scan_ok + scan_checked_at)
-      try {
-        await fetch(`/api/turns/${encodeURIComponent(turnId)}/scan-done`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-        });
-      } catch {
-        // ignore; if this fails, /api/submit-turn will still enforce SCAN_REQUIRED
+      // 3) Tell backend the scan result (this is what submit-turn checks)
+      const sdResp = await fetch(`/api/turns/${encodeURIComponent(turnId)}/scan-done`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ passed }),
+      });
+      if (!sdResp.ok) {
+        const e = await sdResp.json().catch(() => ({}));
+        throw new Error(e.error || 'Failed to mark scan status');
       }
 
-      // 5) Finally, call submit-turn with your original payload
-      setSubmitting(true);
+      if (!passed) {
+        setScanStatus('failed');
+        const msg = issueSummaries.length
+          ? 'AI scan found issues that must be fixed before submitting:\n- ' + issueSummaries.join('\n- ')
+          : 'AI scan found blocking issues. Please review your photos.';
+        setScanMessage(msg);
+        alert(msg);
+      } else {
+        setScanStatus('passed');
+        const msg = issueSummaries.length
+          ? 'AI scan passed. Some minor notes:\n- ' + issueSummaries.join('\n- ')
+          : 'AI scan passed. No obvious issues detected.';
+        setScanMessage(msg);
+      }
+    } catch (e) {
+      console.error('runAiScan error', e);
+      setScanStatus('failed');
+      setScanMessage(e?.message || 'AI scan failed. Please try again.');
+      alert(`AI scan failed: ${e?.message || 'unknown error'}`);
+    }
+  }
+
+  // -------- Submit initial turn --------
+  async function submitAll() {
+    if (submitting) return;
+    // minimal: ensure each shot meets min_count
+    const unmet = (shots || []).filter(s => (s.min_count || 1) > (uploadsByShot[s.shot_id]?.length || 0));
+    if (unmet.length) {
+      alert('Please add required photos before submitting:\n' + unmet.map(a => `• ${a.label}`).join('\n'));
+      return;
+    }
+
+    // Extra guard: encourage running AI scan if not yet passed
+    if (scanStatus !== 'passed') {
+      alert('Please run the AI Scan and make sure it passes before submitting this turn.');
+      return;
+    }
+
+    setSubmitting(true);
+    try {
       const photos = Object.values(uploadsByShot).flat().map(f => ({
-        url: f.url,
-        shotId: f.shotId,
-        area_key: null
+        url: f.url, shotId: f.shotId, area_key: null
       }));
       const resp = await fetch('/api/submit-turn', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ turnId, photos })
       });
-      const json = await resp.json().catch(() => ({}));
       if (!resp.ok) {
-        throw new Error(json.error || resp.statusText || 'Submit failed');
+        const err = await resp.json().catch(() => ({}));
+        alert('Submit failed: ' + (err.error || resp.statusText));
+        return;
       }
-
-      setAiPhase('ready');
       window.location.href = `/turns/${turnId}/done`;
-    } catch (e) {
-      console.error('AI scan/submit error', e);
-      setAiError(e.message || 'AI scan / submit failed');
     } finally {
-      setAiLoading(false);
       setTimeout(() => setSubmitting(false), 300);
     }
   }
@@ -892,77 +905,7 @@ export default function Capture() {
             );
           })}
 
-          {/* AI Pre-check / Scan panel (only for initial capture, not needs-fix) */}
-          {tab !== 'needs-fix' && (
-            <div style={{ marginTop: 16, padding: 12, borderRadius: 10, background: '#020617' }}>
-              <h3 style={{ marginTop: 0, marginBottom: 6, fontSize: 14 }}>AI quality check</h3>
-
-              {aiError && (
-                <div style={{ marginBottom: 8, color: '#fca5a5', fontSize: 13 }}>
-                  {aiError}
-                </div>
-              )}
-
-              {aiPhase === 'idle' && (
-                <div style={{ fontSize: 13, color: '#94a3b8' }}>
-                  When you submit, we’ll run a quick pre-check and AI scan to spot obvious issues before your manager sees the photos.
-                </div>
-              )}
-
-              {aiPhase === 'precheck' && (
-                <div style={{ fontSize: 13, color: '#e5e7eb' }}>
-                  <div style={{ marginBottom: 6 }}>Pre-check results:</div>
-                  {!aiFlags.length ? (
-                    <div style={{ color: '#22c55e' }}>No extra issues detected by pre-check.</div>
-                  ) : (
-                    <ul style={{ margin: 0, paddingLeft: 18 }}>
-                      {aiFlags.map((f, i) => (
-                        <li key={i}>{f}</li>
-                      ))}
-                    </ul>
-                  )}
-                  <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                    <ThemedButton kind="secondary" onClick={() => setAiPhase('idle')}>
-                      ⬅ Back to photos
-                    </ThemedButton>
-                    <ThemedButton onClick={runAiScanAndSubmit} loading={aiLoading}>
-                      🤖 Continue to AI Scan & Submit
-                    </ThemedButton>
-                  </div>
-                </div>
-              )}
-
-              {aiPhase === 'scan' && (
-                <div style={{ fontSize: 13, color: '#e5e7eb' }}>
-                  <div style={{ marginBottom: 6 }}>AI scan findings (per photo):</div>
-                  {!aiFindings.length ? (
-                    <div style={{ color: '#22c55e' }}>No visible issues detected by AI.</div>
-                  ) : (
-                    <ul style={{ margin: 0, paddingLeft: 18 }}>
-                      {aiFindings.map((r, i) => (
-                        <li key={i}>
-                          <code style={{ fontSize: 11 }}>{r.path}</code>
-                          {Array.isArray(r.issues) && r.issues.length ? (
-                            <ul style={{ marginTop: 4, paddingLeft: 18 }}>
-                              {r.issues.map((iss, j) => (
-                                <li key={j}>
-                                  {iss.label} ({iss.severity}{iss.confidence != null ? `, ${(iss.confidence * 100).toFixed(0)}%` : ''})
-                                </li>
-                              ))}
-                            </ul>
-                          ) : (
-                            <span> — no issues</span>
-                          )}
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Footer: submit buttons */}
+          {/* Footer: submit buttons + AI scan */}
           <div style={{ display:'flex', flexDirection:'column', gap:12, marginTop:16, maxWidth:520 }}>
             {tab === 'needs-fix' ? (
               <>
@@ -981,15 +924,32 @@ export default function Capture() {
                 </ThemedButton>
               </>
             ) : (
-              <ThemedButton
-                onClick={submitAll}
-                loading={submitting || aiLoading}
-                kind="secondary"
-                ariaLabel="Submit Turn"
-                full
-              >
-                ✅ Submit Turn
-              </ThemedButton>
+              <>
+                <ThemedButton
+                  onClick={runAiScan}
+                  loading={scanStatus === 'running'}
+                  kind="primary"
+                  ariaLabel="Run AI Scan"
+                  full
+                >
+                  🔍 Run AI Scan
+                </ThemedButton>
+                <ThemedButton
+                  onClick={submitAll}
+                  loading={submitting}
+                  kind="secondary"
+                  ariaLabel="Submit Turn"
+                  full
+                  disabled={scanStatus !== 'passed'}
+                >
+                  ✅ Submit Turn
+                </ThemedButton>
+                {scanMessage && (
+                  <div style={{ fontSize:12, whiteSpace:'pre-wrap', color: scanStatus === 'passed' ? '#22c55e' : '#facc15' }}>
+                    {scanMessage}
+                  </div>
+                )}
+              </>
             )}
           </div>
         </div>
@@ -1006,7 +966,7 @@ export default function Capture() {
             <div>sections with files: {
               Object.entries(uploadsByShot || {}).filter(([,list]) => (list||[]).length>0).length
             }</div>
-            <div>aiPhase: {aiPhase}</div>
+            <div>scanStatus: {scanStatus}</div>
           </div>
         )}
       </section>
