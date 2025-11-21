@@ -672,9 +672,9 @@ export default function Capture() {
         return;
       }
 
-      alert('Fixes submitted for review ✅');
-      // Refresh to fetch persisted is_fix + notes (and manager status change)
-      window.location.reload();
+           alert('Fixes submitted for review ✅');
+      // After submitting fixes, send cleaner back to the capture dashboard
+      window.location.href = '/capture';
     } finally {
       setTimeout(() => setSubmitting(false), 200);
     }
