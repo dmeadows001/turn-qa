@@ -619,17 +619,17 @@ export default function Review() {
                 <div style={{
                   marginTop:10,
                   padding:12,
-                  border:'1px solid #334155',
+                  border:'1px solid #16a34a',   // green border
                   borderRadius:8,
-                  background:'#0b1220',
-                  color:'#cbd5e1'
-                }}>
-                  <div style={{ fontSize:12, fontWeight:700, color:'#9ca3af', marginBottom:6 }}>
-                    Cleaner note
-                  </div>
-                  <div style={{ whiteSpace:'pre-wrap' }}>{lastCleanerNote}</div>
+                  background:'#052e2b',          // dark green bg
+                  color:'#bbf7d0'                // light green text
+              }}>
+                <div style={{ fontSize:12, fontWeight:700, color:'#bbf7d0', marginBottom:6 }}>
+                  Cleaner note
                 </div>
-              )}
+                <div style={{ whiteSpace:'pre-wrap' }}>{lastCleanerNote}</div>
+              </div>
+            )}
 
               <div style={{ marginTop:10 }}>
                 <div style={{ fontSize:12, fontWeight:700, color:'#9ca3af', marginBottom:6 }}>
