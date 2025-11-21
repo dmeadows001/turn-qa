@@ -72,7 +72,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const body = parseBody(req.body);
     const turnId = String(body.turnId || body.turn_id || '').trim();
     const photos = Array.isArray(body.photos) ? body.photos : [];
-    // optional overall cleaner reply (we keep same shape, even if unused)
+    // optional overall cleaner reply (from cleaner capture needs-fix textarea)
     const _reply: string = String(body.reply || body.cleaner_reply || '').trim();
 
     if (!turnId) return res.status(400).json({ error: 'turnId is required' });
@@ -90,22 +90,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (!ins.ok) return res.status(500).json({ error: ins.error?.message || 'could not save fix photos' });
     }
 
-    // 2) Mark last_fix_submitted_at and set status -> 'submitted' (with tolerant fallbacks)
+    // 2) Mark last_fix_submitted_at, status, AND store the cleaner reply on the turn
     const when = nowIso();
     let newStatus = 'submitted';
     try {
       const { error: e1 } = await supa
         .from('turns')
-        .update({ status: newStatus, last_fix_submitted_at: when })
+        .update({
+          status: newStatus,
+          last_fix_submitted_at: when,
+          cleaner_reply: _reply || null,      // ✅ store cleaner’s message
+        })
         .eq('id', turnId);
       if (e1) throw e1;
     } catch (e:any) {
-      // fallback: some installs may not have both columns; try independent updates
+      // fallback: some installs may not have all columns; try independent updates
       try {
-        await supa.from('turns').update({ last_fix_submitted_at: when }).eq('id', turnId);
+        await supa
+          .from('turns')
+          .update({ last_fix_submitted_at: when, cleaner_reply: _reply || null })
+          .eq('id', turnId);
       } catch {}
       try {
-        await supa.from('turns').update({ status: newStatus }).eq('id', turnId);
+        await supa
+          .from('turns')
+          .update({ status: newStatus })
+          .eq('id', turnId);
       } catch (e2:any) {
         console.warn('[submit-fix] could not set status=submitted:', e2?.message || e2);
         // don’t hard-fail the request; keep newStatus best-effort
