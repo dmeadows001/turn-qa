@@ -490,7 +490,8 @@ export default function Review() {
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error || 'update failed');
       setStatus('approved');
-      alert('Turn approved ✅');
+       // redirect manager back to dashboard
+      window.location.href = backHref;
     } catch (e) {
       alert(e.message || 'Could not update status.');
     } finally {
@@ -550,7 +551,8 @@ export default function Review() {
       setSelectedKeys(sel);
       setNotesByKey(prev => ({ ...prev, ...newNotes }));
 
-      alert('Marked Needs Fix. Cleaner notified via SMS.');
+      // redirect manager back to dashboard
+      window.location.href = backHref;
     } catch (e) {
       alert(e.message || 'Could not send needs-fix.');
     } finally {
