@@ -379,17 +379,6 @@ export default function Review() {
   const [uploadingFix] = useState(false);
   const [submittingFixes, setSubmittingFixes] = useState(false);
   const fileInputRef = useRef(null);
-    // Toast for smooth success feedback
-  const [toast, setToast] = useState(null); // { message, type }
-
-  const showToast = useCallback((message, type = 'success') => {
-    setToast({ message, type });
-    // auto-hide after a short delay
-    setTimeout(() => {
-      setToast(null);
-    }, 2500);
-  }, []);
-
 
   // manager-side display of the most recent cleaner message
   const [lastCleanerNote, setLastCleanerNote] = useState('');
@@ -410,7 +399,7 @@ export default function Review() {
         setTemplateShots(ts);
 
         const cleanerNote =
-          (t && (t.cleaner_note ?? t.cleaner_reply ?? t.cleaner_message)) || '';
+          (t && (t.cleaner_reply ?? t.cleaner_note ?? t.cleaner_message)) || '';
         setLastCleanerNote(cleanerNote);
         setCleanerReply('');
 
@@ -501,12 +490,10 @@ export default function Review() {
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error || 'update failed');
       setStatus('approved');
-      // ✅ Toast + redirect to dashboard
-      showToast('Turn approved ✅', 'success');
-      setTimeout(() => {
-        window.location.href = backHref;  // /managers/turns
-      }, 900);
+      alert('Turn approved ✅');
 
+      // Redirect manager back to dashboard
+      window.location.href = '/managers/turns';
     } catch (e) {
       alert(e.message || 'Could not update status.');
     } finally {
@@ -566,18 +553,16 @@ export default function Review() {
       setSelectedKeys(sel);
       setNotesByKey(prev => ({ ...prev, ...newNotes }));
 
-      // ✅ Toast + redirect to dashboard
-      showToast('Marked Needs Fix. Cleaner notified via SMS.', 'success');
-      setTimeout(() => {
-        window.location.href = backHref;  // /managers/turns
-      }, 900);
+      alert('Marked Needs Fix. Cleaner notified via SMS.');
 
+      // Redirect manager back to dashboard
+      window.location.href = '/managers/turns';
     } catch (e) {
       alert(e.message || 'Could not send needs-fix.');
     } finally {
       setActing(false);
     }
-
+  }
 
   if (!turnId) {
     return (
@@ -640,17 +625,17 @@ export default function Review() {
                 <div style={{
                   marginTop:10,
                   padding:12,
-                  border:'1px solid #16a34a',   // green border
+                  border:'1px solid #334155',
                   borderRadius:8,
-                  background:'#052e2b',          // dark green bg
-                  color:'#bbf7d0'                // light green text
-              }}>
-                <div style={{ fontSize:12, fontWeight:700, color:'#bbf7d0', marginBottom:6 }}>
-                  Cleaner note
+                  background:'#0b1220',
+                  color:'#cbd5e1'
+                }}>
+                  <div style={{ fontSize:12, fontWeight:700, color:'#9ca3af', marginBottom:6 }}>
+                    Cleaner note
+                  </div>
+                  <div style={{ whiteSpace:'pre-wrap' }}>{lastCleanerNote}</div>
                 </div>
-                <div style={{ whiteSpace:'pre-wrap' }}>{lastCleanerNote}</div>
-              </div>
-            )}
+              )}
 
               <div style={{ marginTop:10 }}>
                 <div style={{ fontSize:12, fontWeight:700, color:'#9ca3af', marginBottom:6 }}>
@@ -786,27 +771,6 @@ export default function Review() {
           </div>
         )}
       </section>
-
-      {toast && (
-        <div
-          style={{
-            position: 'fixed',
-            right: 16,
-            bottom: 16,
-            zIndex: 9999,
-            padding: '10px 14px',
-            borderRadius: 8,
-            background: toast.type === 'error' ? '#7f1d1d' : '#064e3b',
-            color: '#e5e7eb',
-            border: '1px solid #334155',
-            boxShadow: '0 12px 30px rgba(0,0,0,0.55)',
-            fontSize: 14,
-            maxWidth: 320,
-          }}
-        >
-          {toast.message}
-        </div>
-      )}
     </ChromeDark>
   );
 }
