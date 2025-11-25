@@ -786,7 +786,6 @@ export default function Review() {
           </div>
         )}
       </section>
-      </section>
 
       {toast && (
         <div
