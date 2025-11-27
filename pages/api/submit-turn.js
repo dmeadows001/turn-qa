@@ -101,28 +101,27 @@ export default async function handler(req, res) {
     const { turnId, photos } = parseBody(req.body);
     if (!turnId) return res.status(400).json({ error: 'turnId is required' });
 
-// --- Guard: require AI Scan completion before submission ---
-    // We expect a boolean column `scan_ok` on turns (default false).
+    // --- Guard: require AI Scan to have been RUN at least once ---
     const { data: turnRow, error: turnErr } = await supa
       .from('turns')
-      .select('id, status, scan_ok')
+      .select('id, status, scan_ok, scan_checked_at')
       .eq('id', turnId)
       .single();
+
     if (turnErr) {
       return res.status(500).json({ error: turnErr.message || 'Failed to load turn' });
     }
     if (!turnRow) {
       return res.status(404).json({ error: 'Turn not found' });
     }
-    if (!turnRow.scan_ok) {
-      // Block submission until AI Scan marks scan_ok = true (via /api/turns/[id]/scan-done).
+    if (!turnRow.scan_checked_at) {
+      // Only enforce that a scan has been *performed* (even if it found issues).
       return res.status(409).json({
         error: 'AI Scan is required before submitting this turn.',
         code: 'SCAN_REQUIRED',
       });
     }
     // ----------------------------------------------------------
-    
 
     // 1) Insert photos (tolerant)
     const rows = buildRows(turnId, photos);
