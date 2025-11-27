@@ -399,7 +399,7 @@ export default function Review() {
         setTemplateShots(ts);
 
         const cleanerNote =
-          (t && (t.cleaner_note ?? t.cleaner_reply ?? t.cleaner_message)) || '';
+          (t && (t.cleaner_reply ?? t.cleaner_note ?? t.cleaner_message)) || '';
         setLastCleanerNote(cleanerNote);
         setCleanerReply('');
 
@@ -491,6 +491,9 @@ export default function Review() {
       if (!r.ok) throw new Error(j.error || 'update failed');
       setStatus('approved');
       alert('Turn approved ✅');
+
+      // Redirect manager back to dashboard
+      window.location.href = '/managers/turns';
     } catch (e) {
       alert(e.message || 'Could not update status.');
     } finally {
@@ -551,6 +554,9 @@ export default function Review() {
       setNotesByKey(prev => ({ ...prev, ...newNotes }));
 
       alert('Marked Needs Fix. Cleaner notified via SMS.');
+
+      // Redirect manager back to dashboard
+      window.location.href = '/managers/turns';
     } catch (e) {
       alert(e.message || 'Could not send needs-fix.');
     } finally {
