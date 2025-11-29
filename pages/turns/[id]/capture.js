@@ -118,12 +118,13 @@ export default function Capture() {
   // One hidden file input per shot
   const inputRefs = useRef({});
 
-  // --- AI scan state ---
-  // scanStatus: 'idle' | 'running' | 'ready'
-  const [scanStatus, setScanStatus] = useState('idle');
-  const [scanMessage, setScanMessage] = useState('');
-  const [scanIssues, setScanIssues] = useState([]); // array of strings
-  const [scanProgress, setScanProgress] = useState(0); // 0–100 while scanning
+// --- AI scan state ---
+// scanStatus: 'idle' | 'running' | 'ready'
+const [scanStatus, setScanStatus] = useState('idle');
+const [scanMessage, setScanMessage] = useState('');
+const [scanIssues, setScanIssues] = useState([]); // array of strings (summary list)
+const [scanProgress, setScanProgress] = useState(0); // 0–100 while scanning
+const [scanIssuesByArea, setScanIssuesByArea] = useState({}); // { areaKey: [msg, ...] }
 
   // ------- helpers -------
   const smallMeta = { fontSize: 12, color: '#94a3b8' };
@@ -467,137 +468,155 @@ export default function Capture() {
     } catch {}
   }
 
-  // -------- AI Scan: PRECHECK + VISION + mark scan-done --------
-  async function runAiScan() {
-    if (!turnId) return;
-    if (!Array.isArray(shots) || shots.length === 0) {
-      alert('No checklist sections are loaded yet. Please wait a moment and try again.');
-      return;
-    }
-
-    // Flatten all current photos from uploadsByShot
-    const allFiles = [];
-    const uploads = uploadsByShot || {};
-    const shotsArr = Array.isArray(shots) ? shots : [];
-
-    shotsArr.forEach(s => {
-      const files = uploads[s.shot_id] || [];
-      files.forEach(f => {
-        allFiles.push({ file: f, shot: s });
-      });
-    });
-
-    if (!allFiles.length) {
-      alert('No photos to scan yet. Please add at least one photo first.');
-      return;
-    }
-
-    setScanStatus('running');
-    setScanMessage('Running AI Scan…');
-    setScanIssues([]);
-    setScanProgress(5);
-
-    let progress = 5;
-    const timer = setInterval(() => {
-      // creep toward 90% while we wait for the backend
-      progress = Math.min(progress + Math.random() * 12, 90);
-      setScanProgress(progress);
-    }, 400);
-
-    try {
-      // 1) Build payload for pre-check
-      const uploadsByArea = {};
-      const requiredList = shotsArr.map(s => ({
-        key: s.area_key || s.shot_id,
-        title: s.label,
-        minPhotos: s.min_count || 1,
-      }));
-
-      for (const { file, shot } of allFiles) {
-        const key = shot.area_key || shot.shot_id || 'unknown';
-        if (!uploadsByArea[key]) uploadsByArea[key] = [];
-        uploadsByArea[key].push({
-          name: file.name || (file.url ? file.url.split('/').pop() : 'photo'),
-        });
-      }
-
-      const preResp = await fetch('/api/vision-precheck', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          uploadsByArea,
-          required: requiredList,
-        }),
-      });
-      const preJson = await preResp.json().catch(() => ({}));
-      const preFlags = Array.isArray(preJson.flags) ? preJson.flags : [];
-
-      // 2) Build payload for vision-scan
-      const scanItems = allFiles.map(({ file, shot }) => ({
-        url: file.url,
-        area_key: shot.area_key || shot.shot_id || 'unknown',
-        label: shot.label,
-        notes: shot.notes || '',
-      }));
-
-      const scanResp = await fetch('/api/vision-scan', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items: scanItems }),
-      });
-      const scanJson = await scanResp.json().catch(() => ({}));
-      const results = Array.isArray(scanJson.results) ? scanJson.results : [];
-
-      const visionIssues = [];
-      for (const r of results) {
-        const area = r.area_key || 'Area';
-        const issues = Array.isArray(r.issues) ? r.issues : [];
-        for (const issue of issues) {
-          if (!issue || !issue.label) continue;
-          const sev = issue.severity || 'info';
-          visionIssues.push(`${area}: ${issue.label} (${sev})`);
-        }
-      }
-
-      const allIssues = [...preFlags, ...visionIssues];
-
-      // 3) Mark scan-done in the DB
-      //    passed = true only if no issues; API guard now only needs scan_checked_at
-      try {
-        await fetch(`/api/turns/${encodeURIComponent(turnId)}/scan-done`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ passed: allIssues.length === 0 }),
-        });
-      } catch (e) {
-        console.warn('scan-done failed (non-fatal):', e?.message || e);
-      }
-
-      // Finish the progress bar smoothly
-      setScanProgress(100);
-
-      if (allIssues.length === 0) {
-        setScanStatus('ready');
-        setScanIssues([]);
-        setScanMessage('AI Scan finished. No obvious issues detected. ✅');
-      } else {
-        setScanStatus('ready');
-        setScanIssues(allIssues);
-        setScanMessage(
-          'WARNING: AI Scan found potential issues:\n' +
-          allIssues.map(x => `• ${x}`).join('\n') +
-          '\n\nBy submitting this turn, you confirm you have reviewed these items and addressed anything important.'
-        );
-      }
-    } catch (e) {
-      console.error('runAiScan error:', e);
-      setScanStatus('idle');
-      setScanProgress(0);
-      setScanMessage('AI Scan failed. You can still submit, but consider trying again if you need the extra check.');
-    } finally {
-      clearInterval(timer);
-    }
+// -------- AI Scan: PRECHECK + VISION + mark scan-done --------
+async function runAiScan() {
+  if (!turnId) return;
+  if (!Array.isArray(shots) || shots.length === 0) {
+    alert('No checklist sections are loaded yet. Please wait a moment and try again.');
+    return;
   }
+
+  // Flatten all current photos from uploadsByShot
+  const allFiles = [];
+  const uploads = uploadsByShot || {};
+  const shotsArr = Array.isArray(shots) ? shots : [];
+
+  shotsArr.forEach(s => {
+    const files = uploads[s.shot_id] || [];
+    files.forEach(f => {
+      allFiles.push({ file: f, shot: s });
+    });
+  });
+
+  if (!allFiles.length) {
+    alert('No photos to scan yet. Please add at least one photo first.');
+    return;
+  }
+
+  setScanStatus('running');
+  setScanMessage('Running AI Scan…');
+  setScanIssues([]);
+  setScanIssuesByArea({});
+  setScanProgress(5);
+
+  let progress = 5;
+  const timer = setInterval(() => {
+    // creep toward 90% while we wait for the backend
+    progress = Math.min(progress + Math.random() * 12, 90);
+    setScanProgress(progress);
+  }, 400);
+
+  try {
+    // 1) Build payload for pre-check
+    const uploadsByArea = {};
+    const requiredList = shotsArr.map(s => ({
+      key: s.area_key || s.shot_id,
+      title: s.label,
+      minPhotos: s.min_count || 1,
+    }));
+
+    for (const { file, shot } of allFiles) {
+      const key = shot.area_key || shot.shot_id || 'unknown';
+      if (!uploadsByArea[key]) uploadsByArea[key] = [];
+      uploadsByArea[key].push({
+        name: file.name || (file.url ? file.url.split('/').pop() : 'photo'),
+      });
+    }
+
+    const preResp = await fetch('/api/vision-precheck', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        uploadsByArea,
+        required: requiredList,
+      }),
+    });
+    const preJson = await preResp.json().catch(() => ({}));
+    const preFlags = Array.isArray(preJson.flags) ? preJson.flags : [];
+
+    // 2) Build payload for vision-scan
+    const scanItems = allFiles.map(({ file, shot }) => ({
+      url: file.url,
+      area_key: shot.area_key || shot.shot_id || 'unknown',
+      label: shot.label,
+      notes: shot.notes || '',
+    }));
+
+    const scanResp = await fetch('/api/vision-scan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items: scanItems }),
+    });
+    const scanJson = await scanResp.json().catch(() => ({}));
+    const results = Array.isArray(scanJson.results) ? scanJson.results : [];
+
+    // Build both the flat summary list and a per-area map
+    const visionIssues = [];
+    const issuesByArea = {};
+
+    for (const r of results) {
+      const rawArea = r.area_key || r.area || '';
+      const areaLabel = rawArea || 'Area';
+      const areaKey = (rawArea || '').toLowerCase() || 'unknown-area';
+
+      const issues = Array.isArray(r.issues) ? r.issues : [];
+      if (!issuesByArea[areaKey]) issuesByArea[areaKey] = [];
+
+      for (const issue of issues) {
+        if (!issue || !issue.label) continue;
+        const sev = issue.severity || 'info';
+
+        // Full message (for summary at bottom)
+        const summaryMsg = `${areaLabel}: ${issue.label} (${sev})`;
+        visionIssues.push(summaryMsg);
+
+        // Short message for per-area box
+        const shortMsg = `${issue.label} (${sev})`;
+        issuesByArea[areaKey].push(shortMsg);
+      }
+    }
+
+    setScanIssuesByArea(issuesByArea);
+
+    const allIssues = [...preFlags, ...visionIssues];
+
+    // 3) Mark scan-done in the DB
+    try {
+      await fetch(`/api/turns/${encodeURIComponent(turnId)}/scan-done`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ passed: allIssues.length === 0 }),
+      });
+    } catch (e) {
+      console.warn('scan-done failed (non-fatal):', e?.message || e);
+    }
+
+    // Finish the progress bar smoothly
+    setScanProgress(100);
+
+    if (allIssues.length === 0) {
+      setScanStatus('ready');
+      setScanIssues([]);
+      setScanMessage('AI Scan finished. No obvious issues detected. ✅');
+    } else {
+      setScanStatus('ready');
+      setScanIssues(allIssues);
+      setScanMessage(
+        'WARNING: AI Scan found potential issues:\n' +
+        allIssues.map(x => `• ${x}`).join('\n') +
+        '\n\nBy submitting this turn, you confirm you have reviewed these items and addressed anything important.'
+      );
+    }
+  } catch (e) {
+    console.error('runAiScan error:', e);
+    setScanStatus('idle');
+    setScanProgress(0);
+    setScanIssuesByArea({});
+    setScanMessage('AI Scan failed. You can still submit, but consider trying again if you need the extra check.');
+  } finally {
+    clearInterval(timer);
+  }
+}
 
   // -------- Submit initial turn --------
   async function submitAll() {
@@ -756,6 +775,11 @@ export default function Capture() {
             const required = s.min_count || 1;
             const missing = Math.max(0, required - files.length);
 
+            // Normalize area key and label for AI summaries
+            const areaKey = String(s.area_key || s.shot_id || '').toLowerCase();
+            const areaIssues = scanIssuesByArea[areaKey] || [];
+            const areaLabel = s.label || s.area_key || 'This area';
+
             return (
               <div
                 key={s.shot_id}
@@ -774,6 +798,48 @@ export default function Capture() {
                   style={{ display:'none' }}
                   onChange={(e)=>addFiles(s.shot_id, e.target.files)}
                 />
+
+                {/* AI Scan message for this area (once per section) */}
+                {scanStatus === 'ready' && (
+                  <div
+                    style={{
+                      marginBottom: 10,
+                      padding: '8px 10px',
+                      borderRadius: 8,
+                      border: areaIssues.length
+                        ? '1px solid #d97706'
+                        : '1px solid #065f46',
+                      background: areaIssues.length
+                        ? '#3a2b10'
+                        : '#052e2b',
+                      color: areaIssues.length
+                        ? '#fde68a'
+                        : '#bbf7d0',
+                      fontSize: 12,
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontWeight: 700,
+                        marginBottom: areaIssues.length ? 4 : 0,
+                      }}
+                    >
+                      {areaIssues.length
+                        ? `AI Scan: potential issues in ${areaLabel}`
+                        : `AI Scan: ${areaLabel} photos look good ✅`}
+                    </div>
+
+                    {areaIssues.length > 0 && (
+                      <ul style={{ margin: 0, paddingLeft: 18 }}>
+                        {areaIssues.map((msg, idx) => (
+                          <li key={idx} style={{ marginBottom: 2 }}>
+                            {msg}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
 
                 <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:12 }}>
                   <div>
