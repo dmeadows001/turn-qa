@@ -468,6 +468,30 @@ const [scanIssuesByArea, setScanIssuesByArea] = useState({}); // { areaKey: [msg
     } catch {}
   }
 
+    // Allow cleaner to "retake" a photo by removing it from this shot
+  function removePhoto(shotId, fileToRemove) {
+    try {
+      if (fileToRemove.preview) {
+        URL.revokeObjectURL(fileToRemove.preview);
+      }
+    } catch {}
+
+    // Remove from uploadsByShot so AI Scan + submit won't see it
+    setUploadsByShot(prev => {
+      const next = { ...prev };
+      next[shotId] = (next[shotId] || []).filter(f => f.url !== fileToRemove.url);
+      return next;
+    });
+
+    // Also clear any per-photo cleaner note for that path
+    setCleanerNoteByNewPath(prev => {
+      if (!prev[fileToRemove.url]) return prev;
+      const { [fileToRemove.url]: _omit, ...rest } = prev;
+      return rest;
+    });
+  }
+
+
 // -------- AI Scan: PRECHECK + VISION + mark scan-done --------
 async function runAiScan() {
   if (!turnId) return;
@@ -923,16 +947,42 @@ async function runAiScan() {
                           )}
                         </div>
 
-                        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:6 }}>
-                          <div style={{ fontSize:13, maxWidth:'70%' }}>
+                        <div
+                          style={{
+                            display:'flex',
+                            justifyContent:'space-between',
+                            alignItems:'baseline',
+                            marginBottom:6
+                          }}
+                        >
+                          <div style={{ fontSize:13, maxWidth:'60%' }}>
                             <b title={f.name}>{f.name}</b>
                           </div>
-                          <ThemedButton kind="secondary" onClick={async () => {
-                            try { const url = await signPath(f.url); window.open(url, '_blank'); } catch {}
-                          }} ariaLabel={`View ${f.name}`}>
-                            👁️ View
-                          </ThemedButton>
+
+                          <div style={{ display:'flex', gap:8 }}>
+                            <ThemedButton
+                              kind="secondary"
+                              onClick={async () => {
+                                try {
+                                  const url = await signPath(f.url);
+                                  window.open(url, '_blank');
+                                } catch {}
+                              }}
+                              ariaLabel={`View ${f.name}`}
+                            >
+                              👁️ View
+                            </ThemedButton>
+
+                            <ThemedButton
+                              kind="secondary"
+                              onClick={() => removePhoto(s.shot_id, f)}
+                              ariaLabel={`Retake ${f.name}`}
+                            >
+                              🔁 Retake
+                            </ThemedButton>
+                          </div>
                         </div>
+
 
                         {/* Manager note (if flagged) visible to cleaner */}
                         {managerNote && (
