@@ -597,14 +597,13 @@ async function runAiScan() {
     if (allIssues.length === 0) {
       setScanStatus('ready');
       setScanIssues([]);
-      setScanMessage('AI Scan finished. No obvious issues detected. ✅');
+      setScanMessage('🎉 Congratulations: AI Scan found no issues.');
     } else {
       setScanStatus('ready');
       setScanIssues(allIssues);
       setScanMessage(
-        'WARNING: AI Scan found potential issues:\n' +
-        allIssues.map(x => `• ${x}`).join('\n') +
-        '\n\nBy submitting this turn, you confirm you have reviewed these items and addressed anything important.'
+        'WARNING: AI Scan found potential issues. Please see the AI notes above.\n\n' +
+        allIssues.map(x => `• ${x}`).join('\n')
       );
     }
   } catch (e) {
