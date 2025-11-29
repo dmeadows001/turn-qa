@@ -594,11 +594,15 @@ async function runAiScan() {
     // Finish the progress bar smoothly
     setScanProgress(100);
 
-    if (allIssues.length === 0) {
+    const hasVisionIssues = visionIssues.length > 0;
+
+    if (!hasVisionIssues) {
+      // No per-photo AI issues → show the happy message
       setScanStatus('ready');
-      setScanIssues([]);
+      setScanIssues([]); // no warning bullets needed
       setScanMessage('🎉 Congratulations: AI Scan found no issues.');
     } else {
+      // At least one real AI photo issue → show warning + bullets (preFlags + visionIssues)
       setScanStatus('ready');
       setScanIssues(allIssues);
       setScanMessage(
