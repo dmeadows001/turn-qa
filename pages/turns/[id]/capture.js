@@ -263,18 +263,22 @@ const [scanIssuesByArea, setScanIssuesByArea] = useState({}); // { areaKey: [msg
         const json = await r.json();
 
         let nextShots = [];
-        if (Array.isArray(json.shots) && json.shots.length) {
-          nextShots = json.shots.map(s => ({
-            shot_id: s.shot_id,
-            area_key: s.area_key,
-            label: s.label,
-            min_count: s.min_count || 1,
-            notes: s.notes || '',
-            rules_text: s.rules_text || ''
-          }));
-        } else {
-          nextShots = DEFAULT_SHOTS;
-        }
+if (Array.isArray(json.shots) && json.shots.length) {
+  nextShots = json.shots.map(s => ({
+    shot_id: s.shot_id,
+    area_key: s.area_key,
+    label: s.label,
+    min_count: s.min_count || 1,
+    notes: s.notes || '',
+    rules_text: s.rules_text || '',
+    // NEW: reference listing / staging photos for this shot (optional)
+    reference_paths: Array.isArray(s.reference_paths || s.referencePhotos)
+      ? (s.reference_paths || s.referencePhotos)
+      : []
+  }));
+} else {
+  nextShots = DEFAULT_SHOTS;
+}
 
         // Guarantee at least one visible section
         if (!nextShots.length) {
@@ -806,6 +810,8 @@ async function runAiScan() {
             const areaKey = String(s.area_key || s.shot_id || '').toLowerCase();
             const areaIssues = scanIssuesByArea[areaKey] || [];
             const areaLabel = s.label || s.area_key || 'This area';
+            // Reference listing photos for this shot (optional)
+            const referencePaths = Array.isArray(s.reference_paths) ? s.reference_paths : [];
 
             return (
               <div
@@ -825,6 +831,84 @@ async function runAiScan() {
                   style={{ display:'none' }}
                   onChange={(e)=>addFiles(s.shot_id, e.target.files)}
                 />
+
+      {/* Reference listing photo(s) for this area */}
+      {referencePaths.length > 0 && (
+        <div
+          style={{
+            margin: '4px 0 10px',
+            padding: '8px 10px',
+            borderRadius: 8,
+            border: '1px solid #334155',
+            background: '#020617'
+          }}
+        >
+          <div
+            style={{
+              fontSize: 12,
+              fontWeight: 700,
+              color: '#e5e7eb',
+              marginBottom: 6
+            }}
+          >
+            Reference photo{referencePaths.length > 1 ? 's' : ''} – how this
+            area should look
+          </div>
+
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {referencePaths.map((path) => {
+              if (!thumbByPath[path]) ensureThumb(path);
+              const refThumb = thumbByPath[path] || null;
+
+              return (
+                <button
+                  key={path}
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      const full = await signPath(path);
+                      window.open(full, '_blank');
+                    } catch {
+                      // non-fatal
+                    }
+                  }}
+                  style={{
+                    padding: 0,
+                    border: 'none',
+                    background: 'transparent',
+                    cursor: 'pointer'
+                  }}
+                >
+                  {refThumb ? (
+                    <img
+                      src={refThumb}
+                      alt="Reference"
+                      style={{
+                        width: 80,
+                        height: 80,
+                        objectFit: 'cover',
+                        borderRadius: 6,
+                        border: '1px solid #334155'
+                      }}
+                    />
+                  ) : (
+                    <div
+                      style={{
+                        width: 80,
+                        height: 80,
+                        borderRadius: 6,
+                        border: '1px solid #334155',
+                        background: '#0f172a'
+                      }}
+                    />
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
 
                 {/* AI Scan message for this area (once per section) */}
                 {scanStatus === 'ready' && (
