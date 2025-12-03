@@ -1,12 +1,11 @@
 // pages/properties/[id]/template.js
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useRouter } from 'next/router';
 import { supabaseBrowser } from '@/lib/supabaseBrowser';
 import ChromeDark from '../../../components/ChromeDark';
 import { ui } from '../../../lib/theme';
 
 const supabase = supabaseBrowser();
-
 
 // Opinionated areas; tweak as needed
 const AREAS = [
@@ -32,6 +31,9 @@ export default function TemplateBuilder() {
   const [newLabel, setNewLabel] = useState('');
   const [newArea, setNewArea]   = useState('general');
   const [newRequired, setNewRequired] = useState(1);
+
+  // one hidden file input per shot for reference uploads
+  const refInputs = useRef({});
 
   useEffect(() => {
     if (!propertyId) return;
@@ -69,10 +71,10 @@ export default function TemplateBuilder() {
         }
         setTemplate(tpl);
 
-        // 3) Load template shots
+        // 3) Load template shots (NOW including reference_paths)
         const { data: s, error: sErr } = await supabase
           .from('template_shots')
-          .select('id, template_id, label, min_count, area_key, created_at')
+          .select('id, template_id, label, min_count, area_key, reference_paths, created_at')
           .eq('template_id', tpl.id)
           .order('created_at', { ascending: true });
         if (sErr) throw sErr;
@@ -101,9 +103,10 @@ export default function TemplateBuilder() {
           template_id: template.id,
           label,
           area_key: newArea,
-          min_count: required
+          min_count: required,
+          // reference_paths will default to NULL / empty
         })
-        .select('id, template_id, label, min_count, area_key, created_at')
+        .select('id, template_id, label, min_count, area_key, reference_paths, created_at')
         .single();
       if (error) throw error;
 
@@ -156,6 +159,56 @@ export default function TemplateBuilder() {
       if (error) throw error;
     } catch (e) {
       setMsg(e.message || 'Delete failed');
+    }
+  }
+
+  // --- NEW: add a reference photo for a specific shot ---
+  async function handleRefFileChange(shot, event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    try {
+      setMsg('');
+
+      // Build a stable-ish safe filename
+      const safeName = file.name.replace(/[^\w.\-]/g, '_');
+      const path = `refs/${shot.id}/${Date.now()}-${safeName}`;
+
+      // 1) upload to photos bucket
+      const { error: uploadErr } = await supabase
+        .storage
+        .from('photos')
+        .upload(path, file, {
+          cacheControl: '3600',
+          upsert: false,
+        });
+      if (uploadErr) throw uploadErr;
+
+      // 2) append to reference_paths in DB
+      const existing = Array.isArray(shot.reference_paths) ? shot.reference_paths : [];
+      const nextRefs = [...existing, path];
+
+      const { error: dbErr } = await supabase
+        .from('template_shots')
+        .update({ reference_paths: nextRefs })
+        .eq('id', shot.id);
+      if (dbErr) throw dbErr;
+
+      // 3) update local state so UI reflects new count
+      setShots(prev =>
+        prev.map(s => (s.id === shot.id ? { ...s, reference_paths: nextRefs } : s))
+      );
+
+      setMsg('Reference photo added.');
+      setTimeout(() => setMsg(''), 1200);
+    } catch (e) {
+      console.error(e);
+      setMsg(e.message || 'Failed to add reference photo');
+    } finally {
+      // allow re-selecting the same file again
+      if (event?.target) {
+        event.target.value = '';
+      }
     }
   }
 
@@ -238,54 +291,85 @@ export default function TemplateBuilder() {
             {shots.length === 0 ? (
               <div style={ui.muted}>No items yet — add your first checklist item above.</div>
             ) : (
-              <table style={{ width:'100%', minWidth: 720, borderCollapse:'collapse' }}>
+              <table style={{ width:'100%', minWidth: 900, borderCollapse:'collapse' }}>
                 <thead>
                   <tr style={{ textAlign:'left', borderBottom:'1px solid #1f2937' }}>
                     <th style={{ padding:'10px 8px' }}>Label</th>
                     <th style={{ padding:'10px 8px' }}>Area</th>
                     <th style={{ padding:'10px 8px', width:120 }}>Required</th>
+                    <th style={{ padding:'10px 8px', width:220 }}>Reference photos</th>
                     <th style={{ padding:'10px 8px', width:120 }}></th>
                   </tr>
                 </thead>
                 <tbody>
-                  {shots.map(s => (
-                    <tr key={s.id} style={{ borderBottom:'1px solid #111827' }}>
-                      <td style={{ padding:'10px 8px' }}>
-                        <input
-                          type="text"
-                          value={s.label || ''}
-                          onChange={e => updateLabel(s.id, e.target.value)}
-                          style={{ ...ui.input }}
-                        />
-                      </td>
-                      <td style={{ padding:'10px 8px' }}>
-                        <select
-                          value={s.area_key || 'general'}
-                          onChange={e => updateArea(s.id, e.target.value)}
-                          style={{ ...ui.input, background: '#0b1220', cursor:'pointer' }}
-                        >
-                          {AREAS.map(([v, label]) => (
-                            <option key={v} value={v}>{label}</option>
-                          ))}
-                        </select>
-                      </td>
-                      <td style={{ padding:'10px 8px' }}>
-                        <input
-                          type="number"
-                          min={1}
-                          step={1}
-                          value={s.min_count || 1}
-                          onChange={e => updateRequired(s.id, e.target.value)}
-                          style={{ ...ui.input }}
-                        />
-                      </td>
-                      <td style={{ padding:'10px 8px' }}>
-                        <button onClick={() => deleteShot(s.id)} style={ui.btnSecondary}>
-                          Delete
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                  {shots.map(s => {
+                    const refCount = Array.isArray(s.reference_paths) ? s.reference_paths.length : 0;
+                    return (
+                      <tr key={s.id} style={{ borderBottom:'1px solid #111827' }}>
+                        <td style={{ padding:'10px 8px' }}>
+                          <input
+                            type="text"
+                            value={s.label || ''}
+                            onChange={e => updateLabel(s.id, e.target.value)}
+                            style={{ ...ui.input }}
+                          />
+                        </td>
+                        <td style={{ padding:'10px 8px' }}>
+                          <select
+                            value={s.area_key || 'general'}
+                            onChange={e => updateArea(s.id, e.target.value)}
+                            style={{ ...ui.input, background: '#0b1220', cursor:'pointer' }}
+                          >
+                            {AREAS.map(([v, label]) => (
+                              <option key={v} value={v}>{label}</option>
+                            ))}
+                          </select>
+                        </td>
+                        <td style={{ padding:'10px 8px' }}>
+                          <input
+                            type="number"
+                            min={1}
+                            step={1}
+                            value={s.min_count || 1}
+                            onChange={e => updateRequired(s.id, e.target.value)}
+                            style={{ ...ui.input }}
+                          />
+                        </td>
+
+                        {/* NEW column: reference photo uploader */}
+                        <td style={{ padding:'10px 8px' }}>
+                          {/* hidden input for this shot */}
+                          <input
+                            type="file"
+                            accept="image/*"
+                            style={{ display:'none' }}
+                            ref={el => { refInputs.current[s.id] = el; }}
+                            onChange={e => handleRefFileChange(s, e)}
+                          />
+                          <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
+                            <div style={{ fontSize:12, color:'#9ca3af' }}>
+                              {refCount === 0 && 'None yet'}
+                              {refCount === 1 && '1 photo'}
+                              {refCount > 1 && `${refCount} photos`}
+                            </div>
+                            <button
+                              type="button"
+                              style={ui.btnSecondary}
+                              onClick={() => refInputs.current[s.id]?.click()}
+                            >
+                              + Add reference photo
+                            </button>
+                          </div>
+                        </td>
+
+                        <td style={{ padding:'10px 8px' }}>
+                          <button onClick={() => deleteShot(s.id)} style={ui.btnSecondary}>
+                            Delete
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             )}
