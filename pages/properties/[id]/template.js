@@ -1,5 +1,5 @@
 // pages/properties/[id]/template.js
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, Fragment } from 'react';
 import { useRouter } from 'next/router';
 import { supabaseBrowser } from '@/lib/supabaseBrowser';
 import ChromeDark from '../../../components/ChromeDark';
@@ -34,6 +34,10 @@ export default function TemplateBuilder() {
 
   // one hidden file input per shot for reference uploads
   const refInputs = useRef({});
+
+  // thumbnail cache for reference photos
+  const [thumbByPath, setThumbByPath] = useState({});
+  const requestedThumbsRef = useRef(new Set());
 
   useEffect(() => {
     if (!propertyId) return;
@@ -162,7 +166,49 @@ export default function TemplateBuilder() {
     }
   }
 
-  // --- NEW: add a reference photo for a specific shot ---
+  // --- sign-photo helper (same idea as cleaner side) ---
+  async function signPath(path) {
+    const resp = await fetch('/api/sign-photo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path, expires: 600 })
+    });
+    if (!resp.ok) throw new Error('sign failed');
+    const json = await resp.json();
+    return json.url;
+  }
+
+  function ensureThumb(path) {
+    if (!path || requestedThumbsRef.current.has(path) || thumbByPath[path]) return;
+    requestedThumbsRef.current.add(path);
+    signPath(path)
+      .then(url => {
+        if (url) {
+          setThumbByPath(prev =>
+            prev[path] ? prev : { ...prev, [path]: url }
+          );
+        }
+      })
+      .catch(() => {
+        requestedThumbsRef.current.delete(path);
+      });
+  }
+
+  async function openSigned(path) {
+    try {
+      const popup = typeof window !== 'undefined' ? window.open('', '_blank') : null;
+      const url = await signPath(path);
+      if (!popup) {
+        window.location.href = url;
+      } else {
+        popup.location.href = url;
+      }
+    } catch (e) {
+      console.error('openSigned error:', e);
+    }
+  }
+
+  // --- add a reference photo for a specific shot ---
   async function handleRefFileChange(shot, event) {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -194,7 +240,7 @@ export default function TemplateBuilder() {
         .eq('id', shot.id);
       if (dbErr) throw dbErr;
 
-      // 3) update local state so UI reflects new count/list
+      // 3) update local state so UI reflects new set
       setShots(prev =>
         prev.map(s => (s.id === shot.id ? { ...s, reference_paths: nextRefs } : s))
       );
@@ -212,64 +258,24 @@ export default function TemplateBuilder() {
     }
   }
 
-  // --- NEW: sign + open a reference photo ---
-  async function signRefPath(path) {
-    const resp = await fetch('/api/sign-photo', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path, expires: 600 }),
-    });
-    if (!resp.ok) throw new Error('Could not sign photo');
-    const json = await resp.json();
-    return json.url;
-  }
-
-    // --- NEW: open a signed reference photo in a mobile-friendly way ---
-  async function openSignedRefPhoto(path) {
+  // --- delete a single reference photo for a shot ---
+  async function deleteReferencePath(shot, pathToRemove) {
     try {
-      // Open a blank tab/window immediately (so browsers treat it as user-initiated)
-      const popup = typeof window !== 'undefined' ? window.open('', '_blank') : null;
-      const url = await signRefPath(path);
+      const existing = Array.isArray(shot.reference_paths) ? shot.reference_paths : [];
+      const nextRefs = existing.filter(p => p !== pathToRemove);
 
-      if (!popup) {
-        // Fallback if popup was blocked – at least navigate current tab
-        window.location.href = url;
-      } else {
-        popup.location.href = url;
-      }
-    } catch (e) {
-      console.error(e);
-      setMsg(e.message || 'Could not open photo');
-    }
-  }
-
-  // --- NEW: remove a specific reference photo from a shot ---
-  async function removeReferencePhoto(shotId, pathToRemove) {
-    try {
-      // 1) Find the current shot and compute the new reference list
-      const shot = shots.find(s => s.id === shotId);
-      const current = Array.isArray(shot?.reference_paths) ? shot.reference_paths : [];
-      const nextRefs = current.filter(p => p !== pathToRemove);
-
-      // 2) Update local state so UI reflects the change
-      setShots(prev =>
-        prev.map(s =>
-          s.id === shotId ? { ...s, reference_paths: nextRefs } : s
-        )
-      );
-
-      // 3) Persist the new array to Supabase
-      const { error } = await supabase
+      const { error: dbErr } = await supabase
         .from('template_shots')
         .update({ reference_paths: nextRefs })
-        .eq('id', shotId);
-      if (error) throw error;
+        .eq('id', shot.id);
+      if (dbErr) throw dbErr;
 
-      setMsg('Reference photo removed.');
-      setTimeout(() => setMsg(''), 1200);
+      setShots(prev =>
+        prev.map(s => (s.id === shot.id ? { ...s, reference_paths: nextRefs } : s))
+      );
     } catch (e) {
       console.error(e);
-      setMsg(e.message || 'Could not remove reference photo');
+      setMsg(e.message || 'Failed to delete reference photo');
     }
   }
 
@@ -342,7 +348,7 @@ export default function TemplateBuilder() {
           </form>
 
           {msg && (
-            <div style={{ marginTop: 10, color: msg.match(/Added|Saved|Updated|removed/i) ? '#22c55e' : '#fca5a5' }}>
+            <div style={{ marginTop: 10, color: msg.match(/Added|Saved|Updated/i) ? '#22c55e' : '#fca5a5' }}>
               {msg}
             </div>
           )}
@@ -358,108 +364,88 @@ export default function TemplateBuilder() {
                     <th style={{ padding:'10px 8px' }}>Label</th>
                     <th style={{ padding:'10px 8px' }}>Area</th>
                     <th style={{ padding:'10px 8px', width:120 }}>Required</th>
-                    <th style={{ padding:'10px 8px', width:260 }}>Reference photos</th>
+                    <th style={{ padding:'10px 8px', width:220 }}>Reference photos</th>
                     <th style={{ padding:'10px 8px', width:120 }}></th>
                   </tr>
                 </thead>
                 <tbody>
-                  {shots.map(s => {
-                    const refs = Array.isArray(s.reference_paths) ? s.reference_paths : [];
-                    const refCount = refs.length;
+                  {shots.map(shot => {
+                    const refPaths = Array.isArray(shot.reference_paths) ? shot.reference_paths : [];
+                    const refCount = refPaths.length;
 
                     return (
-                      <tr key={s.id} style={{ borderBottom:'1px solid #111827' }}>
-                        <td style={{ padding:'10px 8px' }}>
-                          <input
-                            type="text"
-                            value={s.label || ''}
-                            onChange={e => updateLabel(s.id, e.target.value)}
-                            style={{ ...ui.input }}
-                          />
-                        </td>
-                        <td style={{ padding:'10px 8px' }}>
-                          <select
-                            value={s.area_key || 'general'}
-                            onChange={e => updateArea(s.id, e.target.value)}
-                            style={{ ...ui.input, background: '#0b1220', cursor:'pointer' }}
-                          >
-                            {AREAS.map(([v, label]) => (
-                              <option key={v} value={v}>{label}</option>
-                            ))}
-                          </select>
-                        </td>
-                        <td style={{ padding:'10px 8px' }}>
-                          <input
-                            type="number"
-                            min={1}
-                            step={1}
-                            value={s.min_count || 1}
-                            onChange={e => updateRequired(s.id, e.target.value)}
-                            style={{ ...ui.input }}
-                          />
-                        </td>
+                      <Fragment key={shot.id}>
+                        {/* Row for thumbnails ABOVE the actual checklist row */}
+                        {refCount > 0 && (
+                          <tr>
+                            <td colSpan={5} style={{ padding:'6px 8px 2px' }}>
+                              <div
+                                style={{
+                                  display: 'flex',
+                                  flexWrap: 'wrap',
+                                  gap: 8,
+                                  padding: 6,
+                                  borderRadius: 8,
+                                  border: '1px solid #1f2937',
+                                  background: '#020617'
+                                }}
+                              >
+                                {refPaths.map(path => {
+                                  if (!thumbByPath[path]) ensureThumb(path);
+                                  const thumb = thumbByPath[path] || null;
 
-                        {/* Reference photo list + uploader */}
-                        <td style={{ padding:'10px 8px' }}>
-                          {/* hidden input for this shot */}
-                          <input
-                            type="file"
-                            accept="image/*"
-                            style={{ display:'none' }}
-                            ref={el => { refInputs.current[s.id] = el; }}
-                            onChange={e => handleRefFileChange(s, e)}
-                          />
-
-                          <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
-                            {refCount === 0 ? (
-                              <div style={{ fontSize:12, color:'#9ca3af' }}>None yet</div>
-                            ) : (
-                              <div style={{ display:'flex', flexWrap:'wrap', gap:6 }}>
-                                {refs.map(path => {
-                                  const short = path.split('/').pop() || path;
                                   return (
                                     <div
                                       key={path}
                                       style={{
-                                        display:'flex',
-                                        alignItems:'center',
-                                        gap:4,
-                                        padding:'3px 6px',
-                                        borderRadius:999,
+                                        position:'relative',
+                                        width:70,
+                                        height:70,
+                                        borderRadius:8,
+                                        overflow:'hidden',
                                         border:'1px solid #334155',
-                                        background:'#020617',
-                                        maxWidth:220,
+                                        background:'#0f172a',
+                                        cursor:'pointer'
                                       }}
+                                      onClick={() => openSigned(path)}
                                     >
+                                      {thumb ? (
+                                        <img
+                                          src={thumb}
+                                          alt="Reference"
+                                          style={{
+                                            width:'100%',
+                                            height:'100%',
+                                            objectFit:'cover'
+                                          }}
+                                        />
+                                      ) : null}
+
+                                      {/* red X delete button */}
                                       <button
                                         type="button"
-                                        onClick={() => openSignedRefPhoto(path)}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          deleteReferencePath(shot, path);
+                                        }}
                                         style={{
+                                          position:'absolute',
+                                          top:2,
+                                          right:2,
+                                          width:18,
+                                          height:18,
+                                          borderRadius:'999px',
                                           border:'none',
-                                          background:'transparent',
-                                          color:'#e5e7eb',
+                                          background:'#b91c1c',
+                                          color:'#fee2e2',
                                           fontSize:11,
+                                          fontWeight:700,
+                                          display:'flex',
+                                          alignItems:'center',
+                                          justifyContent:'center',
                                           cursor:'pointer',
-                                          textOverflow:'ellipsis',
-                                          whiteSpace:'nowrap',
-                                          overflow:'hidden',
-                                          maxWidth:170,
+                                          boxShadow:'0 0 0 1px rgba(0,0,0,0.5)'
                                         }}
-                                        title={short}
-                                      >
-                                        {short}
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => removeReferencePhoto(s.id, path)}
-                                        style={{
-                                          border:'none',
-                                          background:'transparent',
-                                          color:'#f97373',
-                                          fontSize:13,
-                                          cursor:'pointer',
-                                        }}
-                                        title="Remove reference photo"
                                       >
                                         ✕
                                       </button>
@@ -467,24 +453,75 @@ export default function TemplateBuilder() {
                                   );
                                 })}
                               </div>
-                            )}
+                            </td>
+                          </tr>
+                        )}
 
-                            <button
-                              type="button"
-                              style={ui.btnSecondary}
-                              onClick={() => refInputs.current[s.id]?.click()}
+                        {/* Main checklist row */}
+                        <tr style={{ borderBottom:'1px solid #111827' }}>
+                          <td style={{ padding:'10px 8px' }}>
+                            <input
+                              type="text"
+                              value={shot.label || ''}
+                              onChange={e => updateLabel(shot.id, e.target.value)}
+                              style={{ ...ui.input }}
+                            />
+                          </td>
+                          <td style={{ padding:'10px 8px' }}>
+                            <select
+                              value={shot.area_key || 'general'}
+                              onChange={e => updateArea(shot.id, e.target.value)}
+                              style={{ ...ui.input, background: '#0b1220', cursor:'pointer' }}
                             >
-                              + Add reference photo
-                            </button>
-                          </div>
-                        </td>
+                              {AREAS.map(([v, label]) => (
+                                <option key={v} value={v}>{label}</option>
+                              ))}
+                            </select>
+                          </td>
+                          <td style={{ padding:'10px 8px' }}>
+                            <input
+                              type="number"
+                              min={1}
+                              step={1}
+                              value={shot.min_count || 1}
+                              onChange={e => updateRequired(shot.id, e.target.value)}
+                              style={{ ...ui.input }}
+                            />
+                          </td>
 
-                        <td style={{ padding:'10px 8px' }}>
-                          <button onClick={() => deleteShot(s.id)} style={ui.btnSecondary}>
-                            Delete
-                          </button>
-                        </td>
-                      </tr>
+                          {/* Reference photo column */}
+                          <td style={{ padding:'10px 8px' }}>
+                            {/* hidden input for this shot */}
+                            <input
+                              type="file"
+                              accept="image/*"
+                              style={{ display:'none' }}
+                              ref={el => { refInputs.current[shot.id] = el; }}
+                              onChange={e => handleRefFileChange(shot, e)}
+                            />
+                            <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
+                              <div style={{ fontSize:12, color:'#9ca3af' }}>
+                                {refCount === 0 && 'No reference photos yet'}
+                                {refCount === 1 && '1 reference photo'}
+                                {refCount > 1 && `${refCount} reference photos`}
+                              </div>
+                              <button
+                                type="button"
+                                style={ui.btnSecondary}
+                                onClick={() => refInputs.current[shot.id]?.click()}
+                              >
+                                + Add reference photo
+                              </button>
+                            </div>
+                          </td>
+
+                          <td style={{ padding:'10px 8px' }}>
+                            <button onClick={() => deleteShot(shot.id)} style={ui.btnSecondary}>
+                              Delete
+                            </button>
+                          </td>
+                        </tr>
+                      </Fragment>
                     );
                   })}
                 </tbody>
