@@ -71,7 +71,7 @@ export default function TemplateBuilder() {
         }
         setTemplate(tpl);
 
-        // 3) Load template shots (NOW including reference_paths)
+        // 3) Load template shots (including reference_paths)
         const { data: s, error: sErr } = await supabase
           .from('template_shots')
           .select('id, template_id, label, min_count, area_key, reference_paths, created_at')
@@ -194,7 +194,7 @@ export default function TemplateBuilder() {
         .eq('id', shot.id);
       if (dbErr) throw dbErr;
 
-      // 3) update local state so UI reflects new count
+      // 3) update local state so UI reflects new count/list
       setShots(prev =>
         prev.map(s => (s.id === shot.id ? { ...s, reference_paths: nextRefs } : s))
       );
@@ -209,6 +209,47 @@ export default function TemplateBuilder() {
       if (event?.target) {
         event.target.value = '';
       }
+    }
+  }
+
+  // --- NEW: sign + open a reference photo ---
+  async function signRefPath(path) {
+    const resp = await fetch('/api/sign-photo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path, expires: 600 }),
+    });
+    if (!resp.ok) throw new Error('Could not sign photo');
+    const json = await resp.json();
+    return json.url;
+  }
+
+  // --- NEW: remove a specific reference photo from a shot ---
+  async function removeReferencePhoto(shotId, pathToRemove) {
+    try {
+      let nextForDb = [];
+
+      setShots(prev =>
+        prev.map(s => {
+          if (s.id !== shotId) return s;
+          const current = Array.isArray(s.reference_paths) ? s.reference_paths : [];
+          const next = current.filter(p => p !== pathToRemove);
+          nextForDb = next;
+          return { ...s, reference_paths: next };
+        })
+      );
+
+      const { error } = await supabase
+        .from('template_shots')
+        .update({ reference_paths: nextForDb })
+        .eq('id', shotId);
+      if (error) throw error;
+
+      setMsg('Reference photo removed.');
+      setTimeout(() => setMsg(''), 1200);
+    } catch (e) {
+      console.error(e);
+      setMsg(e.message || 'Could not remove reference photo');
     }
   }
 
@@ -281,7 +322,7 @@ export default function TemplateBuilder() {
           </form>
 
           {msg && (
-            <div style={{ marginTop: 10, color: msg.match(/Added|Saved|Updated/i) ? '#22c55e' : '#fca5a5' }}>
+            <div style={{ marginTop: 10, color: msg.match(/Added|Saved|Updated|removed/i) ? '#22c55e' : '#fca5a5' }}>
               {msg}
             </div>
           )}
@@ -297,13 +338,15 @@ export default function TemplateBuilder() {
                     <th style={{ padding:'10px 8px' }}>Label</th>
                     <th style={{ padding:'10px 8px' }}>Area</th>
                     <th style={{ padding:'10px 8px', width:120 }}>Required</th>
-                    <th style={{ padding:'10px 8px', width:220 }}>Reference photos</th>
+                    <th style={{ padding:'10px 8px', width:260 }}>Reference photos</th>
                     <th style={{ padding:'10px 8px', width:120 }}></th>
                   </tr>
                 </thead>
                 <tbody>
                   {shots.map(s => {
-                    const refCount = Array.isArray(s.reference_paths) ? s.reference_paths.length : 0;
+                    const refs = Array.isArray(s.reference_paths) ? s.reference_paths : [];
+                    const refCount = refs.length;
+
                     return (
                       <tr key={s.id} style={{ borderBottom:'1px solid #111827' }}>
                         <td style={{ padding:'10px 8px' }}>
@@ -336,7 +379,7 @@ export default function TemplateBuilder() {
                           />
                         </td>
 
-                        {/* NEW column: reference photo uploader */}
+                        {/* Reference photo list + uploader */}
                         <td style={{ padding:'10px 8px' }}>
                           {/* hidden input for this shot */}
                           <input
@@ -346,12 +389,73 @@ export default function TemplateBuilder() {
                             ref={el => { refInputs.current[s.id] = el; }}
                             onChange={e => handleRefFileChange(s, e)}
                           />
-                          <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
-                            <div style={{ fontSize:12, color:'#9ca3af' }}>
-                              {refCount === 0 && 'None yet'}
-                              {refCount === 1 && '1 photo'}
-                              {refCount > 1 && `${refCount} photos`}
-                            </div>
+
+                          <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+                            {refCount === 0 ? (
+                              <div style={{ fontSize:12, color:'#9ca3af' }}>None yet</div>
+                            ) : (
+                              <div style={{ display:'flex', flexWrap:'wrap', gap:6 }}>
+                                {refs.map(path => {
+                                  const short = path.split('/').pop() || path;
+                                  return (
+                                    <div
+                                      key={path}
+                                      style={{
+                                        display:'flex',
+                                        alignItems:'center',
+                                        gap:4,
+                                        padding:'3px 6px',
+                                        borderRadius:999,
+                                        border:'1px solid #334155',
+                                        background:'#020617',
+                                        maxWidth:220,
+                                      }}
+                                    >
+                                      <button
+                                        type="button"
+                                        onClick={async () => {
+                                          try {
+                                            const url = await signRefPath(path);
+                                            window.open(url, '_blank');
+                                          } catch (e) {
+                                            setMsg(e.message || 'Could not open photo');
+                                          }
+                                        }}
+                                        style={{
+                                          border:'none',
+                                          background:'transparent',
+                                          color:'#e5e7eb',
+                                          fontSize:11,
+                                          cursor:'pointer',
+                                          textOverflow:'ellipsis',
+                                          whiteSpace:'nowrap',
+                                          overflow:'hidden',
+                                          maxWidth:170,
+                                        }}
+                                        title={short}
+                                      >
+                                        {short}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => removeReferencePhoto(s.id, path)}
+                                        style={{
+                                          border:'none',
+                                          background:'transparent',
+                                          color:'#f97373',
+                                          fontSize:13,
+                                          cursor:'pointer',
+                                        }}
+                                        title="Remove reference photo"
+                                      >
+                                        ✕
+                                      </button>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+
                             <button
                               type="button"
                               style={ui.btnSecondary}
