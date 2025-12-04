@@ -115,16 +115,20 @@ export default function Capture() {
   // Per-new-photo cleaner notes (keyed by storage path)
   const [cleanerNoteByNewPath, setCleanerNoteByNewPath] = useState({});
 
-  // One hidden file input per shot
-  const inputRefs = useRef({});
+  // --- AI scan state ---
+  // scanStatus: 'idle' | 'running' | 'ready'
+  const [scanStatus, setScanStatus] = useState('idle');
+  const [scanMessage, setScanMessage] = useState('');
+  const [scanIssues, setScanIssues] = useState([]); // array of strings (summary list)
+  const [scanProgress, setScanProgress] = useState(0); // 0–100 while scanning
+  const [scanIssuesByArea, setScanIssuesByArea] = useState({}); // { areaKey: [msg, ...] }
 
-// --- AI scan state ---
-// scanStatus: 'idle' | 'running' | 'ready'
-const [scanStatus, setScanStatus] = useState('idle');
-const [scanMessage, setScanMessage] = useState('');
-const [scanIssues, setScanIssues] = useState([]); // array of strings (summary list)
-const [scanProgress, setScanProgress] = useState(0); // 0–100 while scanning
-const [scanIssuesByArea, setScanIssuesByArea] = useState({}); // { areaKey: [msg, ...] }
+  // --- NEW: bottom-sheet picker state for cleaner photo uploads ---
+  const [pickerShot, setPickerShot] = useState(null);      // which shot_id is currently picking
+  const [pickerVisible, setPickerVisible] = useState(false);
+  const cameraInputRef = useRef(null);
+  const libraryInputRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   // ------- helpers -------
   const smallMeta = { fontSize: 12, color: '#94a3b8' };
@@ -138,22 +142,6 @@ const [scanIssuesByArea, setScanIssuesByArea] = useState({}); // { areaKey: [msg
     if (!resp.ok) throw new Error('sign failed');
     const json = await resp.json();
     return json.url;
-  }
-
-  // NEW: mobile-friendly opener for signed URLs
-  async function openSigned(path) {
-    try {
-      const popup = typeof window !== 'undefined' ? window.open('', '_blank') : null;
-      const url = await signPath(path);
-
-      if (!popup) {
-        window.location.href = url;
-      } else {
-        popup.location.href = url;
-      }
-    } catch (e) {
-      console.error('openSigned error:', e);
-    }
   }
 
   // --- Image dimension helper (safe if load fails) ---
@@ -187,8 +175,27 @@ const [scanIssuesByArea, setScanIssuesByArea] = useState({}); // { areaKey: [msg
     });
   }
 
+  // --- NEW: open custom bottom-sheet picker instead of direct file input ---
   function openPicker(shotId) {
-    inputRefs.current[shotId]?.click();
+    setPickerShot(shotId);
+    setPickerVisible(true);
+  }
+
+  // --- NEW: handle file selection from global hidden inputs ---
+  function handleGlobalFileChange(e) {
+    const files = e.target.files;
+    if (files && files.length && pickerShot) {
+      addFiles(pickerShot, files);
+    }
+    // reset input so same file can be re-selected
+    try { e.target.value = ''; } catch {}
+    setPickerVisible(false);
+    setPickerShot(null);
+  }
+
+  function closePicker() {
+    setPickerVisible(false);
+    setPickerShot(null);
   }
 
   // --- Load existing photos for this turn (ensures we only bucket into *visible* shots) ---
@@ -279,22 +286,22 @@ const [scanIssuesByArea, setScanIssuesByArea] = useState({}); // { areaKey: [msg
         const json = await r.json();
 
         let nextShots = [];
-if (Array.isArray(json.shots) && json.shots.length) {
-  nextShots = json.shots.map(s => ({
-    shot_id: s.shot_id,
-    area_key: s.area_key,
-    label: s.label,
-    min_count: s.min_count || 1,
-    notes: s.notes || '',
-    rules_text: s.rules_text || '',
-    // NEW: reference listing / staging photos for this shot (optional)
-    reference_paths: Array.isArray(s.reference_paths || s.referencePhotos)
-      ? (s.reference_paths || s.referencePhotos)
-      : []
-  }));
-} else {
-  nextShots = DEFAULT_SHOTS;
-}
+        if (Array.isArray(json.shots) && json.shots.length) {
+          nextShots = json.shots.map(s => ({
+            shot_id: s.shot_id,
+            area_key: s.area_key,
+            label: s.label,
+            min_count: s.min_count || 1,
+            notes: s.notes || '',
+            rules_text: s.rules_text || '',
+            // NEW: reference listing / staging photos for this shot (optional)
+            reference_paths: Array.isArray(s.reference_paths || s.referencePhotos)
+              ? (s.reference_paths || s.referencePhotos)
+              : []
+          }));
+        } else {
+          nextShots = DEFAULT_SHOTS;
+        }
 
         // Guarantee at least one visible section
         if (!nextShots.length) {
@@ -480,15 +487,9 @@ if (Array.isArray(json.shots) && json.shots.length) {
     if (uploaded.length) {
       setUploadsByShot(prev => ({ ...prev, [shotId]: [ ...(prev[shotId] || []), ...uploaded ] }));
     }
-
-    // Allow selecting the same file again if needed
-    try {
-      const el = inputRefs.current[shotId];
-      if (el) el.value = '';
-    } catch {}
   }
 
-    // Allow cleaner to "retake" a photo by removing it from this shot
+  // Allow cleaner to "retake" a photo by removing it from this shot
   function removePhoto(shotId, fileToRemove) {
     try {
       if (fileToRemove.preview) {
@@ -837,86 +838,82 @@ async function runAiScan() {
                   background: ui.card.background
                 }}
               >
-                {/* Hidden input per shot */}
-                <input
-                  ref={el => { inputRefs.current[s.shot_id] = el; }}
-                  type="file"
-                  accept="image/*"
-                  multiple
-                  style={{ display:'none' }}
-                  onChange={(e)=>addFiles(s.shot_id, e.target.files)}
-                />
-
-      {/* Reference listing photo(s) for this area */}
-      {referencePaths.length > 0 && (
-        <div
-          style={{
-            margin: '4px 0 10px',
-            padding: '8px 10px',
-            borderRadius: 8,
-            border: '1px solid #334155',
-            background: '#020617'
-          }}
-        >
-          <div
-            style={{
-              fontSize: 12,
-              fontWeight: 700,
-              color: '#e5e7eb',
-              marginBottom: 6
-            }}
-          >
-            Reference photo{referencePaths.length > 1 ? 's' : ''} – how this
-            area should look
-          </div>
-
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            {referencePaths.map((path) => {
-              if (!thumbByPath[path]) ensureThumb(path);
-              const refThumb = thumbByPath[path] || null;
-
-              return (
-                <button
-                  key={path}
-                  type="button"
-                  onClick={() => openSigned(path)}
-                  style={{
-                    padding: 0,
-                    border: 'none',
-                    background: 'transparent',
-                    cursor: 'pointer'
-                  }}
-                >
-                  {refThumb ? (
-                    <img
-                      src={refThumb}
-                      alt="Reference"
-                      style={{
-                        width: 80,
-                        height: 80,
-                        objectFit: 'cover',
-                        borderRadius: 6,
-                        border: '1px solid #334155'
-                      }}
-                    />
-                  ) : (
+                {/* Reference listing photo(s) for this area */}
+                {referencePaths.length > 0 && (
+                  <div
+                    style={{
+                      margin: '4px 0 10px',
+                      padding: '8px 10px',
+                      borderRadius: 8,
+                      border: '1px solid #334155',
+                      background: '#020617'
+                    }}
+                  >
                     <div
                       style={{
-                        width: 80,
-                        height: 80,
-                        borderRadius: 6,
-                        border: '1px solid #334155',
-                        background: '#0f172a'
+                        fontSize: 12,
+                        fontWeight: 700,
+                        color: '#e5e7eb',
+                        marginBottom: 6
                       }}
-                    />
-                  )}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
+                    >
+                      Reference photo{referencePaths.length > 1 ? 's' : ''} – how this
+                      area should look
+                    </div>
 
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      {referencePaths.map((path) => {
+                        if (!thumbByPath[path]) ensureThumb(path);
+                        const refThumb = thumbByPath[path] || null;
+
+                        return (
+                          <button
+                            key={path}
+                            type="button"
+                            onClick={async () => {
+                              try {
+                                const full = await signPath(path);
+                                window.open(full, '_blank');
+                              } catch {
+                                // non-fatal
+                              }
+                            }}
+                            style={{
+                              padding: 0,
+                              border: 'none',
+                              background: 'transparent',
+                              cursor: 'pointer'
+                            }}
+                          >
+                            {refThumb ? (
+                              <img
+                                src={refThumb}
+                                alt="Reference"
+                                style={{
+                                  width: 80,
+                                  height: 80,
+                                  objectFit: 'cover',
+                                  borderRadius: 6,
+                                  border: '1px solid #334155'
+                                }}
+                              />
+                            ) : (
+                              <div
+                                style={{
+                                  width: 80,
+                                  height: 80,
+                                  borderRadius: 6,
+                                  border: '1px solid #334155',
+                                  background: '#0f172a'
+                                }}
+                              />
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
 
                 {/* AI Scan message for this area (once per section) */}
                 {scanStatus === 'ready' && (
@@ -974,7 +971,11 @@ async function runAiScan() {
                     </div>
                   </div>
 
-                  <ThemedButton kind="secondary" onClick={() => openPicker(s.shot_id)} ariaLabel={`Add photo for ${s.label}`}>
+                  <ThemedButton
+                    kind="secondary"
+                    onClick={() => openPicker(s.shot_id)}
+                    ariaLabel={`Add photo for ${s.label}`}
+                  >
                     ➕ Add photo
                   </ThemedButton>
                 </div>
@@ -1054,7 +1055,12 @@ async function runAiScan() {
                           <div style={{ display:'flex', gap:8 }}>
                             <ThemedButton
                               kind="secondary"
-                              onClick={() => openSigned(f.url)}
+                              onClick={async () => {
+                                try {
+                                  const url = await signPath(f.url);
+                                  window.open(url, '_blank');
+                                } catch {}
+                              }}
                               ariaLabel={`View ${f.name}`}
                             >
                               👁️ View
@@ -1209,6 +1215,139 @@ async function runAiScan() {
               Object.entries(uploadsByShot || {}).filter(([,list]) => (list||[]).length>0).length
             }</div>
           </div>
+        )}
+
+        {/* NEW: Global hidden file inputs for the bottom-sheet picker */}
+        <input
+          type="file"
+          ref={cameraInputRef}
+          accept="image/*"
+          capture="environment"
+          style={{ display: 'none' }}
+          onChange={handleGlobalFileChange}
+        />
+        <input
+          type="file"
+          ref={libraryInputRef}
+          accept="image/*"
+          style={{ display: 'none' }}
+          onChange={handleGlobalFileChange}
+        />
+        <input
+          type="file"
+          ref={fileInputRef}
+          style={{ display: 'none' }}
+          onChange={handleGlobalFileChange}
+        />
+
+        {/* NEW: Bottom-sheet style picker overlay */}
+        {pickerVisible && pickerShot && (
+          <>
+            {/* dark backdrop */}
+            <div
+              onClick={closePicker}
+              style={{
+                position: 'fixed',
+                inset: 0,
+                background: 'rgba(15,23,42,0.65)',
+                zIndex: 9998,
+              }}
+            />
+            {/* sheet */}
+            <div
+              style={{
+                position: 'fixed',
+                left: 0,
+                right: 0,
+                bottom: 0,
+                zIndex: 9999,
+                background: '#020617',
+                borderTopLeftRadius: 16,
+                borderTopRightRadius: 16,
+                borderTop: '1px solid #1f2937',
+                boxShadow: '0 -8px 30px rgba(0,0,0,0.6)',
+                padding: '12px 16px 20px',
+              }}
+            >
+              <div
+                style={{
+                  width: 40,
+                  height: 4,
+                  borderRadius: 999,
+                  background: '#1f2937',
+                  margin: '0 auto 10px',
+                }}
+              />
+              <div style={{ fontSize: 14, fontWeight: 600, color: '#e5e7eb', textAlign: 'center', marginBottom: 10 }}>
+                Choose photo source
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const el = cameraInputRef.current;
+                    if (el) el.click();
+                  }}
+                  style={{
+                    ...ui.btnPrimary,
+                    width: '100%',
+                    justifyContent: 'flex-start',
+                    padding: '10px 12px',
+                    fontSize: 14,
+                  }}
+                >
+                  📷 Take Photo
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const el = libraryInputRef.current;
+                    if (el) el.click();
+                  }}
+                  style={{
+                    ...ui.btnSecondary,
+                    width: '100%',
+                    justifyContent: 'flex-start',
+                    padding: '10px 12px',
+                    fontSize: 14,
+                  }}
+                >
+                  🖼️ Photo Library
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const el = fileInputRef.current;
+                    if (el) el.click();
+                  }}
+                  style={{
+                    ...ui.btnSecondary,
+                    width: '100%',
+                    justifyContent: 'flex-start',
+                    padding: '10px 12px',
+                    fontSize: 14,
+                  }}
+                >
+                  📁 Browse Files
+                </button>
+                <button
+                  type="button"
+                  onClick={closePicker}
+                  style={{
+                    ...ui.btnSecondary,
+                    width: '100%',
+                    justifyContent: 'center',
+                    padding: '8px 12px',
+                    fontSize: 13,
+                    marginTop: 4,
+                    opacity: 0.85,
+                  }}
+                >
+                  ✕ Cancel
+                </button>
+              </div>
+            </div>
+          </>
         )}
       </section>
     </ChromeDark>
