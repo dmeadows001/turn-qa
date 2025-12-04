@@ -224,24 +224,44 @@ export default function TemplateBuilder() {
     return json.url;
   }
 
+    // --- NEW: open a signed reference photo in a mobile-friendly way ---
+  async function openSignedRefPhoto(path) {
+    try {
+      // Open a blank tab/window immediately (so browsers treat it as user-initiated)
+      const popup = typeof window !== 'undefined' ? window.open('', '_blank') : null;
+      const url = await signRefPath(path);
+
+      if (!popup) {
+        // Fallback if popup was blocked – at least navigate current tab
+        window.location.href = url;
+      } else {
+        popup.location.href = url;
+      }
+    } catch (e) {
+      console.error(e);
+      setMsg(e.message || 'Could not open photo');
+    }
+  }
+
   // --- NEW: remove a specific reference photo from a shot ---
   async function removeReferencePhoto(shotId, pathToRemove) {
     try {
-      let nextForDb = [];
+      // 1) Find the current shot and compute the new reference list
+      const shot = shots.find(s => s.id === shotId);
+      const current = Array.isArray(shot?.reference_paths) ? shot.reference_paths : [];
+      const nextRefs = current.filter(p => p !== pathToRemove);
 
+      // 2) Update local state so UI reflects the change
       setShots(prev =>
-        prev.map(s => {
-          if (s.id !== shotId) return s;
-          const current = Array.isArray(s.reference_paths) ? s.reference_paths : [];
-          const next = current.filter(p => p !== pathToRemove);
-          nextForDb = next;
-          return { ...s, reference_paths: next };
-        })
+        prev.map(s =>
+          s.id === shotId ? { ...s, reference_paths: nextRefs } : s
+        )
       );
 
+      // 3) Persist the new array to Supabase
       const { error } = await supabase
         .from('template_shots')
-        .update({ reference_paths: nextForDb })
+        .update({ reference_paths: nextRefs })
         .eq('id', shotId);
       if (error) throw error;
 
@@ -413,14 +433,7 @@ export default function TemplateBuilder() {
                                     >
                                       <button
                                         type="button"
-                                        onClick={async () => {
-                                          try {
-                                            const url = await signRefPath(path);
-                                            window.open(url, '_blank');
-                                          } catch (e) {
-                                            setMsg(e.message || 'Could not open photo');
-                                          }
-                                        }}
+                                        onClick={() => openSignedRefPhoto(path)}
                                         style={{
                                           border:'none',
                                           background:'transparent',
