@@ -842,7 +842,6 @@ async function runAiScan() {
                   ref={el => { inputRefs.current[s.shot_id] = el; }}
                   type="file"
                   accept="image/*"
-                  capture="environment"
                   multiple
                   style={{ display:'none' }}
                   onChange={(e)=>addFiles(s.shot_id, e.target.files)}
