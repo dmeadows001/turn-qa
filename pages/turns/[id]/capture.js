@@ -140,6 +140,22 @@ const [scanIssuesByArea, setScanIssuesByArea] = useState({}); // { areaKey: [msg
     return json.url;
   }
 
+  // NEW: mobile-friendly opener for signed URLs
+  async function openSigned(path) {
+    try {
+      const popup = typeof window !== 'undefined' ? window.open('', '_blank') : null;
+      const url = await signPath(path);
+
+      if (!popup) {
+        window.location.href = url;
+      } else {
+        popup.location.href = url;
+      }
+    } catch (e) {
+      console.error('openSigned error:', e);
+    }
+  }
+
   // --- Image dimension helper (safe if load fails) ---
   async function getDims(file) {
     return new Promise((resolve) => {
@@ -864,14 +880,7 @@ async function runAiScan() {
                 <button
                   key={path}
                   type="button"
-                  onClick={async () => {
-                    try {
-                      const full = await signPath(path);
-                      window.open(full, '_blank');
-                    } catch {
-                      // non-fatal
-                    }
-                  }}
+                  onClick={() => openSigned(path)}
                   style={{
                     padding: 0,
                     border: 'none',
@@ -1046,12 +1055,7 @@ async function runAiScan() {
                           <div style={{ display:'flex', gap:8 }}>
                             <ThemedButton
                               kind="secondary"
-                              onClick={async () => {
-                                try {
-                                  const url = await signPath(f.url);
-                                  window.open(url, '_blank');
-                                } catch {}
-                              }}
+                              onClick={() => openSigned(f.url)}
                               ariaLabel={`View ${f.name}`}
                             >
                               👁️ View
