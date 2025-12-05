@@ -35,10 +35,10 @@ export default function TemplateBuilder() {
   // one hidden file input per shot for reference uploads
   const refInputs = useRef({});
 
-  // NEW: drag state
+  // drag state
   const [draggingId, setDraggingId] = useState(null);
 
-  // NEW: thumbnail signing cache (for reference photos)
+  // thumbnail signing cache (for reference photos)
   const [thumbByPath, setThumbByPath] = useState({});
   const requestedThumbsRef = useRef(new Set());
 
@@ -51,6 +51,26 @@ export default function TemplateBuilder() {
     if (!resp.ok) throw new Error('sign failed');
     const json = await resp.json();
     return json.url;
+  }
+
+  // Open a signed URL in a way that works on mobile (Safari popup rules)
+  async function openSignedPath(path) {
+    try {
+      const win = window.open('', '_blank');
+      if (!win) {
+        const url = await signPath(path);
+        if (url) window.location.href = url;
+        return;
+      }
+      const url = await signPath(path);
+      if (!url) {
+        win.close();
+        return;
+      }
+      win.location = url;
+    } catch (e) {
+      console.error('openSignedPath error:', e);
+    }
   }
 
   function ensureThumb(path) {
@@ -104,7 +124,7 @@ export default function TemplateBuilder() {
         }
         setTemplate(tpl);
 
-        // 3) Load template shots (including reference_paths + sort_index)
+        // 3) Load template shots
         const { data: s, error: sErr } = await supabase
           .from('template_shots')
           .select(
@@ -135,35 +155,25 @@ export default function TemplateBuilder() {
     })();
   }, [propertyId]);
 
-  // --- helper: persist order to DB (UPDATE only, no UPSERT → no RLS insert) ---
+  // persist order (UPDATE only → RLS-friendly)
   async function persistSortOrder(nextShots) {
     try {
-      const updates = nextShots.map((s, idx) => ({
-        id: s.id,
-        sort_index: idx,
-      }));
-
-      // Run updates sequentially (simple & RLS-friendly)
-      for (const u of updates) {
+      for (const s of nextShots) {
         const { error } = await supabase
           .from('template_shots')
-          .update({ sort_index: u.sort_index })
-          .eq('id', u.id);
+          .update({ sort_index: s.sort_index })
+          .eq('id', s.id);
         if (error) throw error;
       }
-
       setMsg('Order saved.');
       setTimeout(() => setMsg(''), 1000);
     } catch (e) {
       console.error('Reorder failed:', e);
-      setMsg(
-        e.message ||
-          'Reorder failed. If you see a "column sort_index" error, add that column to template_shots.'
-      );
+      setMsg(e.message || 'Reorder failed.');
     }
   }
 
-  // --- drag handlers ---
+  // drag handlers (desktop)
   function handleDragStart(id) {
     setDraggingId(id);
   }
@@ -185,12 +195,29 @@ export default function TemplateBuilder() {
       list.splice(toIndex, 0, moved);
 
       const withIndex = list.map((s, idx) => ({ ...s, sort_index: idx }));
-      // fire-and-forget persist
       persistSortOrder(withIndex);
       return withIndex;
     });
 
     setDraggingId(null);
+  }
+
+  // tap-based move for mobile (Up / Down buttons)
+  function moveShot(id, delta) {
+    setShots((prev) => {
+      const list = [...prev];
+      const idx = list.findIndex((s) => s.id === id);
+      if (idx === -1) return prev;
+      const target = idx + delta;
+      if (target < 0 || target >= list.length) return prev;
+
+      const [item] = list.splice(idx, 1);
+      list.splice(target, 0, item);
+
+      const withIndex = list.map((s, i) => ({ ...s, sort_index: i }));
+      persistSortOrder(withIndex);
+      return withIndex;
+    });
   }
 
   async function addShot(e) {
@@ -314,7 +341,7 @@ export default function TemplateBuilder() {
     }
   }
 
-  // --- reference photos: add ---
+  // reference photos: add
   async function handleRefFileChange(shot, event) {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -361,7 +388,7 @@ export default function TemplateBuilder() {
     }
   }
 
-  // --- reference photos: delete a single ref path ---
+  // reference photos: delete single
   async function handleDeleteRefPhoto(shotId, pathToRemove) {
     try {
       const shot = shots.find((s) => s.id === shotId);
@@ -384,7 +411,6 @@ export default function TemplateBuilder() {
         .eq('id', shotId);
       if (error) throw error;
 
-      // Optional: delete from storage too (non-fatal)
       try {
         await supabase.storage.from('photos').remove([pathToRemove]);
       } catch {
@@ -510,7 +536,7 @@ export default function TemplateBuilder() {
                       borderBottom: '1px solid #1f2937',
                     }}
                   >
-                    <th style={{ padding: '10px 8px', width: 32 }}></th>
+                    <th style={{ padding: '10px 8px', width: 60 }}></th>
                     <th style={{ padding: '10px 8px' }}>Label</th>
                     <th style={{ padding: '10px 8px' }}>Area</th>
                     <th style={{ padding: '10px 8px', width: 120 }}>Required</th>
@@ -521,7 +547,7 @@ export default function TemplateBuilder() {
                   </tr>
                 </thead>
                 <tbody>
-                  {shots.map((s) => {
+                  {shots.map((s, idx) => {
                     const refCount = Array.isArray(s.reference_paths)
                       ? s.reference_paths.length
                       : 0;
@@ -529,7 +555,7 @@ export default function TemplateBuilder() {
 
                     const rows = [];
 
-                    // Row 0: reference thumbnails ABOVE the checklist row
+                    // Reference thumbnails row (above main row)
                     if (refCount > 0) {
                       rows.push(
                         <tr key={`${s.id}-refs`}>
@@ -575,6 +601,12 @@ export default function TemplateBuilder() {
                                         overflow: 'hidden',
                                         border: '1px solid #374151',
                                         background: '#020617',
+                                        cursor: 'pointer',
+                                      }}
+                                      onClick={(e) => {
+                                        // avoid triggering when tapping delete
+                                        if (e.target.dataset?.role === 'delete-ref') return;
+                                        openSignedPath(path);
                                       }}
                                     >
                                       {thumb ? (
@@ -598,6 +630,7 @@ export default function TemplateBuilder() {
                                       )}
                                       <button
                                         type="button"
+                                        data-role="delete-ref"
                                         onClick={() =>
                                           handleDeleteRefPhoto(s.id, path)
                                         }
@@ -631,7 +664,7 @@ export default function TemplateBuilder() {
                       );
                     }
 
-                    // Row 1: main checklist row (draggable)
+                    // Main row (draggable + up/down buttons)
                     rows.push(
                       <tr
                         key={s.id}
@@ -646,17 +679,77 @@ export default function TemplateBuilder() {
                           opacity: isDragging ? 0.85 : 1,
                         }}
                       >
-                        {/* drag handle */}
+                        {/* drag handle + up/down */}
                         <td
                           style={{
                             padding: '10px 8px',
-                            cursor: 'grab',
                             verticalAlign: 'top',
                           }}
                         >
-                          <span style={{ fontSize: 16, color: '#6b7280' }}>
-                            ⋮⋮
-                          </span>
+                          <div
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 6,
+                            }}
+                          >
+                            <span
+                              style={{
+                                fontSize: 16,
+                                color: '#6b7280',
+                                cursor: 'grab',
+                              }}
+                            >
+                              ⋮⋮
+                            </span>
+                            <div
+                              style={{
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: 2,
+                              }}
+                            >
+                              <button
+                                type="button"
+                                onClick={() => moveShot(s.id, -1)}
+                                disabled={idx === 0}
+                                style={{
+                                  width: 20,
+                                  height: 18,
+                                  borderRadius: 4,
+                                  border: '1px solid #374151',
+                                  background: '#020617',
+                                  color: '#9ca3af',
+                                  fontSize: 10,
+                                  cursor: idx === 0 ? 'default' : 'pointer',
+                                }}
+                                title="Move up"
+                              >
+                                ▲
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => moveShot(s.id, +1)}
+                                disabled={idx === shots.length - 1}
+                                style={{
+                                  width: 20,
+                                  height: 18,
+                                  borderRadius: 4,
+                                  border: '1px solid #374151',
+                                  background: '#020617',
+                                  color: '#9ca3af',
+                                  fontSize: 10,
+                                  cursor:
+                                    idx === shots.length - 1
+                                      ? 'default'
+                                      : 'pointer',
+                                }}
+                                title="Move down"
+                              >
+                                ▼
+                              </button>
+                            </div>
+                          </div>
                         </td>
 
                         <td style={{ padding: '10px 8px', verticalAlign: 'top' }}>
@@ -703,7 +796,7 @@ export default function TemplateBuilder() {
                           />
                         </td>
 
-                        {/* Reference photos column: count + Add button only */}
+                        {/* Reference photos column: count + Add button */}
                         <td style={{ padding: '10px 8px', verticalAlign: 'top' }}>
                           {/* hidden input for this shot */}
                           <input
