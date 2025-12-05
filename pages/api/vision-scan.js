@@ -14,13 +14,57 @@ General rules:
 - If an image looks acceptable, return an empty issues array for that image.
 - Use severities: "fail" (must fix before guest), "warn" (nice-to-fix), "info" (minor note).
 - When in doubt between "fail" and "warn", choose "warn".
+- When in doubt between "issue" and "no issue", especially for neat-looking rooms, choose **no issue**.
 - Do NOT flag artistic differences like time of day, lighting color, camera angle, or minor shadows.
 - Ignore tiny cosmetic flaws that a typical guest would not notice.
 
-Common checks by area (examples, not exhaustive):
+-------------------------------------------------------------------------------
+BEDROOM LOGIC (MOST IMPORTANT FOR THIS PROPERTY)
+-------------------------------------------------------------------------------
+We want to strongly distinguish between:
+
+1) A **professionally staged or nicely made bed**:
+   - Comforter or duvet is mostly smooth.
+   - Pillows are arranged in a deliberate way (rows of pillows, accent pillows, throw pillows).
+   - There may be a folded throw blanket at the foot of the bed.
+   - Nightstands may have decor (lamps, small plants, framed art, alarm clocks, etc.).
+   - Floor is mostly clear; maybe a single small object but overall looks tidy.
+
+2) A **messy, lived-in bed / cluttered room**:
+   - Sheets or comforter are obviously bunched, twisted, pulled back, or hanging off.
+   - Random items on the bed (mail, clothes, bags, toys, unfolded laundry, shopping bags, paperwork).
+   - Floor has multiple unrelated items scattered around (piles of clothes, bags, boxes, toys, trash).
+
+Rules:
+- ONLY flag **"Bed not made"** if the bedding clearly looks messy, bunched, or pulled back,
+  or if pillows and blankets look randomly thrown around.
+- Do **NOT** flag "Bed not made" if:
+  - The comforter/duvet looks smooth and intentional, EVEN IF there are many pillows or a throw blanket.
+  - The bed clearly looks like a professional listing photo or a well-staged guest-ready bed.
+
+- ONLY flag **"Items on bed"** if there are clearly non-decor items such as:
+  - clothes, towels, bags, toys, paperwork, electronics, food containers, or other clutter.
+- Do **NOT** flag "Items on bed" for:
+  - decorative pillows, accent pillows, or throw blankets that are neatly arranged.
+  - a single book or small decor object that looks intentionally placed.
+
+- ONLY flag **"Clutter on floor"** if:
+  - There are multiple items scattered (clothes piles, bags, boxes, trash, toys, etc.).
+  - The floor is obviously messy in a way a normal guest would notice immediately.
+- Do **NOT** flag clutter if:
+  - The floor is mostly clear and any items look intentional (e.g., a single basket, plant, or piece of furniture).
+  - You cannot clearly see the floor.
+
+If a bedroom photo looks like a clean, staged Airbnb listing photo (smooth bedding, centered bed,
+symmetrical lamps, decor above the bed, no obvious piles of stuff), then **RETURN NO ISSUES**
+for that image. Do not hallucinate "bed not made" or "items on bed" in that situation.
+
+-------------------------------------------------------------------------------
+OTHER COMMON CHECKS BY AREA (examples, not exhaustive)
+-------------------------------------------------------------------------------
 
 - bedroom_overall / "Bedroom":
-  - Bed made neatly, no visible wrinkles or bunching that look sloppy.
+  - Bed made neatly as above.
   - NO personal items or cleaning supplies on the bed.
   - Pillows arranged, floor free of clutter, no visible trash.
   - Drawers/closet doors closed.

@@ -115,14 +115,19 @@ export default function Capture() {
   // Per-new-photo cleaner notes (keyed by storage path)
   const [cleanerNoteByNewPath, setCleanerNoteByNewPath] = useState({});
 
-  // One hidden file input per shot
-  const inputRefs = useRef({});
-
   // --- AI scan state ---
   // scanStatus: 'idle' | 'running' | 'ready'
   const [scanStatus, setScanStatus] = useState('idle');
   const [scanMessage, setScanMessage] = useState('');
-  const [scanIssues, setScanIssues] = useState([]); // array of strings
+  const [scanIssues, setScanIssues] = useState([]); // array of strings (summary list)
+  const [scanProgress, setScanProgress] = useState(0); // 0–100 while scanning
+  const [scanIssuesByArea, setScanIssuesByArea] = useState({}); // { areaKey: [msg, ...] }
+
+  // --- NEW: bottom-sheet picker state for cleaner photo uploads ---
+  const [pickerShot, setPickerShot] = useState(null);      // which shot_id is currently picking
+  const [pickerVisible, setPickerVisible] = useState(false);
+  const cameraInputRef = useRef(null);
+  const fileInputRef = useRef(null); // generic "choose from device"
 
   // ------- helpers -------
   const smallMeta = { fontSize: 12, color: '#94a3b8' };
@@ -137,6 +142,30 @@ export default function Capture() {
     const json = await resp.json();
     return json.url;
   }
+
+    // Open a signed URL in a way that works on mobile (Safari popup rules)
+  async function openSignedPath(path) {
+    try {
+      // Open a blank tab/window synchronously
+      const win = window.open('', '_blank');
+      if (!win) {
+        // Fallback: same tab if popup blocked
+        const url = await signPath(path);
+        if (url) window.location.href = url;
+        return;
+      }
+      // Now fetch signed URL asynchronously and point the tab at it
+      const url = await signPath(path);
+      if (!url) {
+        win.close();
+        return;
+      }
+      win.location = url;
+    } catch (e) {
+      console.error('openSignedPath error:', e);
+    }
+  }
+
 
   // --- Image dimension helper (safe if load fails) ---
   async function getDims(file) {
@@ -169,8 +198,27 @@ export default function Capture() {
     });
   }
 
+  // --- NEW: open custom bottom-sheet picker instead of direct file input ---
   function openPicker(shotId) {
-    inputRefs.current[shotId]?.click();
+    setPickerShot(shotId);
+    setPickerVisible(true);
+  }
+
+  // --- NEW: handle file selection from global hidden inputs ---
+  function handleGlobalFileChange(e) {
+    const files = e.target.files;
+    if (files && files.length && pickerShot) {
+      addFiles(pickerShot, files);
+    }
+    // reset input so same file can be re-selected
+    try { e.target.value = ''; } catch {}
+    setPickerVisible(false);
+    setPickerShot(null);
+  }
+
+  function closePicker() {
+    setPickerVisible(false);
+    setPickerShot(null);
   }
 
   // --- Load existing photos for this turn (ensures we only bucket into *visible* shots) ---
@@ -268,7 +316,11 @@ export default function Capture() {
             label: s.label,
             min_count: s.min_count || 1,
             notes: s.notes || '',
-            rules_text: s.rules_text || ''
+            rules_text: s.rules_text || '',
+            // NEW: reference listing / staging photos for this shot (optional)
+            reference_paths: Array.isArray(s.reference_paths || s.referencePhotos)
+              ? (s.reference_paths || s.referencePhotos)
+              : []
           }));
         } else {
           nextShots = DEFAULT_SHOTS;
@@ -458,131 +510,184 @@ export default function Capture() {
     if (uploaded.length) {
       setUploadsByShot(prev => ({ ...prev, [shotId]: [ ...(prev[shotId] || []), ...uploaded ] }));
     }
-
-    // Allow selecting the same file again if needed
-    try {
-      const el = inputRefs.current[shotId];
-      if (el) el.value = '';
-    } catch {}
   }
 
-  // -------- AI Scan: PRECHECK + VISION + mark scan-done --------
-  async function runAiScan() {
-    if (!turnId) return;
-    if (!Array.isArray(shots) || shots.length === 0) {
-      alert('No checklist sections are loaded yet. Please wait a moment and try again.');
-      return;
-    }
+  // Allow cleaner to "retake" a photo by removing it from this shot
+  function removePhoto(shotId, fileToRemove) {
+    try {
+      if (fileToRemove.preview) {
+        URL.revokeObjectURL(fileToRemove.preview);
+      }
+    } catch {}
 
-    // Flatten all current photos from uploadsByShot
-    const allFiles = [];
-    const uploads = uploadsByShot || {};
-    const shotsArr = Array.isArray(shots) ? shots : [];
-
-    shotsArr.forEach(s => {
-      const files = uploads[s.shot_id] || [];
-      files.forEach(f => {
-        allFiles.push({ file: f, shot: s });
-      });
+    // Remove from uploadsByShot so AI Scan + submit won't see it
+    setUploadsByShot(prev => {
+      const next = { ...prev };
+      next[shotId] = (next[shotId] || []).filter(f => f.url !== fileToRemove.url);
+      return next;
     });
 
-    if (!allFiles.length) {
-      alert('No photos to scan yet. Please add at least one photo first.');
-      return;
-    }
-
-    setScanStatus('running');
-    setScanMessage('Running AI Scan…');
-    setScanIssues([]);
-
-    try {
-      // 1) Build payload for pre-check
-      const uploadsByArea = {};
-      const requiredList = shotsArr.map(s => ({
-        key: s.area_key || s.shot_id,
-        title: s.label,
-        minPhotos: s.min_count || 1,
-      }));
-
-      for (const { file, shot } of allFiles) {
-        const key = shot.area_key || shot.shot_id || 'unknown';
-        if (!uploadsByArea[key]) uploadsByArea[key] = [];
-        uploadsByArea[key].push({
-          name: file.name || (file.url ? file.url.split('/').pop() : 'photo'),
-        });
-      }
-
-      const preResp = await fetch('/api/vision-precheck', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          uploadsByArea,
-          required: requiredList,
-        }),
-      });
-      const preJson = await preResp.json().catch(() => ({}));
-      const preFlags = Array.isArray(preJson.flags) ? preJson.flags : [];
-
-      // 2) Build payload for vision-scan
-      const scanItems = allFiles.map(({ file, shot }) => ({
-        url: file.url,
-        area_key: shot.area_key || shot.shot_id || 'unknown',
-        label: shot.label,
-        notes: shot.notes || '',
-      }));
-
-      const scanResp = await fetch('/api/vision-scan', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items: scanItems }),
-      });
-      const scanJson = await scanResp.json().catch(() => ({}));
-      const results = Array.isArray(scanJson.results) ? scanJson.results : [];
-
-      const visionIssues = [];
-      for (const r of results) {
-        const area = r.area_key || 'Area';
-        const issues = Array.isArray(r.issues) ? r.issues : [];
-        for (const issue of issues) {
-          if (!issue || !issue.label) continue;
-          const sev = issue.severity || 'info';
-          visionIssues.push(`${area}: ${issue.label} (${sev})`);
-        }
-      }
-
-      const allIssues = [...preFlags, ...visionIssues];
-
-      // 3) Mark scan-done in the DB
-      //    passed = true only if no issues; API guard now only needs scan_checked_at
-      try {
-        await fetch(`/api/turns/${encodeURIComponent(turnId)}/scan-done`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ passed: allIssues.length === 0 }),
-        });
-      } catch (e) {
-        console.warn('scan-done failed (non-fatal):', e?.message || e);
-      }
-
-      if (allIssues.length === 0) {
-        setScanStatus('ready');
-        setScanIssues([]);
-        setScanMessage('AI Scan finished. No obvious issues detected. ✅');
-      } else {
-        setScanStatus('ready');
-        setScanIssues(allIssues);
-        setScanMessage(
-          'WARNING: AI Scan found potential issues:\n' +
-          allIssues.map(x => `• ${x}`).join('\n') +
-          '\n\nBy submitting this turn, you confirm you have reviewed these items and addressed anything important.'
-        );
-      }
-    } catch (e) {
-      console.error('runAiScan error:', e);
-      setScanStatus('idle');
-      setScanMessage('AI Scan failed. You can still submit, but consider trying again if you need the extra check.');
-    }
+    // Also clear any per-photo cleaner note for that path
+    setCleanerNoteByNewPath(prev => {
+      if (!prev[fileToRemove.url]) return prev;
+      const { [fileToRemove.url]: _omit, ...rest } = prev;
+      return rest;
+    });
   }
+
+
+// -------- AI Scan: PRECHECK + VISION + mark scan-done --------
+async function runAiScan() {
+  if (!turnId) return;
+  if (!Array.isArray(shots) || shots.length === 0) {
+    alert('No checklist sections are loaded yet. Please wait a moment and try again.');
+    return;
+  }
+
+  // Flatten all current photos from uploadsByShot
+  const allFiles = [];
+  const uploads = uploadsByShot || {};
+  const shotsArr = Array.isArray(shots) ? shots : [];
+
+  shotsArr.forEach(s => {
+    const files = uploads[s.shot_id] || [];
+    files.forEach(f => {
+      allFiles.push({ file: f, shot: s });
+    });
+  });
+
+  if (!allFiles.length) {
+    alert('No photos to scan yet. Please add at least one photo first.');
+    return;
+  }
+
+  setScanStatus('running');
+  setScanMessage('Running AI Scan…');
+  setScanIssues([]);
+  setScanIssuesByArea({});
+  setScanProgress(5);
+
+  let progress = 5;
+  const timer = setInterval(() => {
+    // creep toward 90% while we wait for the backend
+    progress = Math.min(progress + Math.random() * 12, 90);
+    setScanProgress(progress);
+  }, 400);
+
+  try {
+    // 1) Build payload for pre-check
+    const uploadsByArea = {};
+    const requiredList = shotsArr.map(s => ({
+      key: s.area_key || s.shot_id,
+      title: s.label,
+      minPhotos: s.min_count || 1,
+    }));
+
+    for (const { file, shot } of allFiles) {
+      const key = shot.area_key || shot.shot_id || 'unknown';
+      if (!uploadsByArea[key]) uploadsByArea[key] = [];
+      uploadsByArea[key].push({
+        name: file.name || (file.url ? file.url.split('/').pop() : 'photo'),
+      });
+    }
+
+    const preResp = await fetch('/api/vision-precheck', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        uploadsByArea,
+        required: requiredList,
+      }),
+    });
+    const preJson = await preResp.json().catch(() => ({}));
+    const preFlags = Array.isArray(preJson.flags) ? preJson.flags : [];
+
+    // 2) Build payload for vision-scan
+    const scanItems = allFiles.map(({ file, shot }) => ({
+      url: file.url,
+      area_key: shot.area_key || shot.shot_id || 'unknown',
+      label: shot.label,
+      notes: shot.notes || '',
+    }));
+
+    const scanResp = await fetch('/api/vision-scan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items: scanItems }),
+    });
+    const scanJson = await scanResp.json().catch(() => ({}));
+    const results = Array.isArray(scanJson.results) ? scanJson.results : [];
+
+    // Build both the flat summary list and a per-area map
+    const visionIssues = [];
+    const issuesByArea = {};
+
+    for (const r of results) {
+      const rawArea = r.area_key || r.area || '';
+      const areaLabel = rawArea || 'Area';
+      const areaKey = (rawArea || '').toLowerCase() || 'unknown-area';
+
+      const issues = Array.isArray(r.issues) ? r.issues : [];
+      if (!issuesByArea[areaKey]) issuesByArea[areaKey] = [];
+
+      for (const issue of issues) {
+        if (!issue || !issue.label) continue;
+        const sev = issue.severity || 'info';
+
+        // Full message (for summary at bottom)
+        const summaryMsg = `${areaLabel}: ${issue.label} (${sev})`;
+        visionIssues.push(summaryMsg);
+
+        // Short message for per-area box
+        const shortMsg = `${issue.label} (${sev})`;
+        issuesByArea[areaKey].push(shortMsg);
+      }
+    }
+
+    setScanIssuesByArea(issuesByArea);
+
+    const allIssues = [...preFlags, ...visionIssues];
+
+    // 3) Mark scan-done in the DB
+    try {
+      await fetch(`/api/turns/${encodeURIComponent(turnId)}/scan-done`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ passed: allIssues.length === 0 }),
+      });
+    } catch (e) {
+      console.warn('scan-done failed (non-fatal):', e?.message || e);
+    }
+
+    // Finish the progress bar smoothly
+    setScanProgress(100);
+
+    const hasVisionIssues = visionIssues.length > 0;
+
+    if (!hasVisionIssues) {
+      // No per-photo AI issues → show the happy message
+      setScanStatus('ready');
+      setScanIssues([]); // no warning bullets needed
+      setScanMessage('🎉 Congratulations: AI Scan found no issues.');
+    } else {
+      // At least one real AI photo issue → show warning + bullets (preFlags + visionIssues)
+      setScanStatus('ready');
+      setScanIssues(allIssues);
+      setScanMessage(
+        'WARNING: AI Scan found potential issues. Please see the AI notes above.\n\n' +
+        allIssues.map(x => `• ${x}`).join('\n')
+      );
+    }
+  } catch (e) {
+    console.error('runAiScan error:', e);
+    setScanStatus('idle');
+    setScanProgress(0);
+    setScanIssuesByArea({});
+    setScanMessage('AI Scan failed. You can still submit, but consider trying again if you need the extra check.');
+  } finally {
+    clearInterval(timer);
+  }
+}
 
   // -------- Submit initial turn --------
   async function submitAll() {
@@ -672,7 +777,7 @@ export default function Capture() {
         return;
       }
 
-           alert('Fixes submitted for review ✅');
+      alert('Fixes submitted for review ✅');
       // After submitting fixes, send cleaner back to the capture dashboard
       window.location.href = '/capture';
     } finally {
@@ -741,6 +846,13 @@ export default function Capture() {
             const required = s.min_count || 1;
             const missing = Math.max(0, required - files.length);
 
+            // Normalize area key and label for AI summaries
+            const areaKey = String(s.area_key || s.shot_id || '').toLowerCase();
+            const areaIssues = scanIssuesByArea[areaKey] || [];
+            const areaLabel = s.label || s.area_key || 'This area';
+            // Reference listing photos for this shot (optional)
+            const referencePaths = Array.isArray(s.reference_paths) ? s.reference_paths : [];
+
             return (
               <div
                 key={s.shot_id}
@@ -749,16 +861,117 @@ export default function Capture() {
                   background: ui.card.background
                 }}
               >
-                {/* Hidden input per shot */}
-                <input
-                  ref={el => { inputRefs.current[s.shot_id] = el; }}
-                  type="file"
-                  accept="image/*"
-                  capture="environment"
-                  multiple
-                  style={{ display:'none' }}
-                  onChange={(e)=>addFiles(s.shot_id, e.target.files)}
-                />
+                {/* Reference listing photo(s) for this area */}
+                {referencePaths.length > 0 && (
+                  <div
+                    style={{
+                      margin: '4px 0 10px',
+                      padding: '8px 10px',
+                      borderRadius: 8,
+                      border: '1px solid #334155',
+                      background: '#020617'
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontSize: 12,
+                        fontWeight: 700,
+                        color: '#e5e7eb',
+                        marginBottom: 6
+                      }}
+                    >
+                      Reference photo{referencePaths.length > 1 ? 's' : ''} – how this
+                      area should look
+                    </div>
+
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      {referencePaths.map((path) => {
+                        if (!thumbByPath[path]) ensureThumb(path);
+                        const refThumb = thumbByPath[path] || null;
+
+                        return (
+                          <button
+                            key={path}
+                            type="button"
+                            onClick={() => openSignedPath(path)}
+                            style={{
+                              padding: 0,
+                              border: 'none',
+                              background: 'transparent',
+                              cursor: 'pointer'
+                            }}
+                          >
+                            {refThumb ? (
+                              <img
+                                src={refThumb}
+                                alt="Reference"
+                                style={{
+                                  width: 80,
+                                  height: 80,
+                                  objectFit: 'cover',
+                                  borderRadius: 6,
+                                  border: '1px solid #334155'
+                                }}
+                              />
+                            ) : (
+                              <div
+                                style={{
+                                  width: 80,
+                                  height: 80,
+                                  borderRadius: 6,
+                                  border: '1px solid #334155',
+                                  background: '#0f172a'
+                                }}
+                              />
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* AI Scan message for this area (once per section) */}
+                {scanStatus === 'ready' && (
+                  <div
+                    style={{
+                      marginBottom: 10,
+                      padding: '8px 10px',
+                      borderRadius: 8,
+                      border: areaIssues.length
+                        ? '1px solid #d97706'
+                        : '1px solid #065f46',
+                      background: areaIssues.length
+                        ? '#3a2b10'
+                        : '#052e2b',
+                      color: areaIssues.length
+                        ? '#fde68a'
+                        : '#bbf7d0',
+                      fontSize: 12,
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontWeight: 700,
+                        marginBottom: areaIssues.length ? 4 : 0,
+                      }}
+                    >
+                      {areaIssues.length
+                        ? `AI Scan: potential issues in ${areaLabel}`
+                        : `AI Scan: ${areaLabel} photos look good ✅`}
+                    </div>
+
+                    {areaIssues.length > 0 && (
+                      <ul style={{ margin: 0, paddingLeft: 18 }}>
+                        {areaIssues.map((msg, idx) => (
+                          <li key={idx} style={{ marginBottom: 2 }}>
+                            {msg}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
 
                 <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:12 }}>
                   <div>
@@ -774,7 +987,11 @@ export default function Capture() {
                     </div>
                   </div>
 
-                  <ThemedButton kind="secondary" onClick={() => openPicker(s.shot_id)} ariaLabel={`Add photo for ${s.label}`}>
+                  <ThemedButton
+                    kind="secondary"
+                    onClick={() => openPicker(s.shot_id)}
+                    ariaLabel={`Add photo for ${s.label}`}
+                  >
                     ➕ Add photo
                   </ThemedButton>
                 </div>
@@ -839,16 +1056,36 @@ export default function Capture() {
                           )}
                         </div>
 
-                        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:6 }}>
-                          <div style={{ fontSize:13, maxWidth:'70%' }}>
+                        <div
+                          style={{
+                            display:'flex',
+                            justifyContent:'space-between',
+                            alignItems:'baseline',
+                            marginBottom:6
+                          }}
+                        >
+                          <div style={{ fontSize:13, maxWidth:'60%' }}>
                             <b title={f.name}>{f.name}</b>
                           </div>
-                          <ThemedButton kind="secondary" onClick={async () => {
-                            try { const url = await signPath(f.url); window.open(url, '_blank'); } catch {}
-                          }} ariaLabel={`View ${f.name}`}>
-                            👁️ View
-                          </ThemedButton>
+
+                          <div style={{ display:'flex', gap:8 }}>
+                            <ThemedButton
+                              kind="secondary"
+                              onClick={() => openSignedPath(f.url)}
+                              ariaLabel={`View ${f.name}`}
+                            >
+                              👁️ View
+                            </ThemedButton>
+                            <ThemedButton
+                              kind="secondary"
+                              onClick={() => removePhoto(s.shot_id, f)}
+                              ariaLabel={`Retake ${f.name}`}
+                            >
+                              🔁 Retake
+                            </ThemedButton>
+                          </div>
                         </div>
+
 
                         {/* Manager note (if flagged) visible to cleaner */}
                         {managerNote && (
@@ -922,6 +1159,35 @@ export default function Capture() {
                 >
                   🔍 Run AI Scan
                 </ThemedButton>
+
+                {/* AI Scan progress bar */}
+                {scanStatus === 'running' && (
+                  <div style={{ marginTop: 8 }}>
+                    <div style={{ fontSize: 11, color: '#e5e7eb', marginBottom: 4 }}>
+                      Analyzing photos… {Math.round(scanProgress)}%
+                    </div>
+                    <div
+                      style={{
+                        width: '100%',
+                        height: 6,
+                        borderRadius: 9999,
+                        background: '#020617',
+                        overflow: 'hidden',
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: `${scanProgress}%`,
+                          height: '100%',
+                          borderRadius: 9999,
+                          background: '#22c55e',
+                          transition: 'width 0.2s ease-out',
+                        }}
+                      />
+                    </div>
+                  </div>
+                )}
+
                 <ThemedButton
                   onClick={submitAll}
                   loading={submitting}
@@ -959,6 +1225,116 @@ export default function Capture() {
               Object.entries(uploadsByShot || {}).filter(([,list]) => (list||[]).length>0).length
             }</div>
           </div>
+        )}
+
+        {/* NEW: Global hidden file inputs for the bottom-sheet picker */}
+        <input
+          type="file"
+          ref={cameraInputRef}
+          accept="image/*"
+          capture="environment"
+          style={{ display: 'none' }}
+          onChange={handleGlobalFileChange}
+        />
+        <input
+          type="file"
+          ref={fileInputRef}
+          style={{ display: 'none' }}
+          onChange={handleGlobalFileChange}
+        />
+
+        {/* NEW: Bottom-sheet style picker overlay */}
+        {pickerVisible && pickerShot && (
+          <>
+            {/* dark backdrop */}
+            <div
+              onClick={closePicker}
+              style={{
+                position: 'fixed',
+                inset: 0,
+                background: 'rgba(15,23,42,0.65)',
+                zIndex: 9998,
+              }}
+            />
+            {/* sheet */}
+            <div
+              style={{
+                position: 'fixed',
+                left: 0,
+                right: 0,
+                bottom: 0,
+                zIndex: 9999,
+                background: '#020617',
+                borderTopLeftRadius: 16,
+                borderTopRightRadius: 16,
+                borderTop: '1px solid #1f2937',
+                boxShadow: '0 -8px 30px rgba(0,0,0,0.6)',
+                padding: '12px 16px 20px',
+              }}
+            >
+              <div
+                style={{
+                  width: 40,
+                  height: 4,
+                  borderRadius: 999,
+                  background: '#1f2937',
+                  margin: '0 auto 10px',
+                }}
+              />
+              <div style={{ fontSize: 14, fontWeight: 600, color: '#e5e7eb', textAlign: 'center', marginBottom: 10 }}>
+                Choose photo source
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const el = cameraInputRef.current;
+                    if (el) el.click();
+                  }}
+                  style={{
+                    ...ui.btnPrimary,
+                    width: '100%',
+                    justifyContent: 'flex-start',
+                    padding: '10px 12px',
+                    fontSize: 14,
+                  }}
+                >
+                  📷 Take Photo (Camera)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const el = fileInputRef.current;
+                    if (el) el.click();
+                  }}
+                  style={{
+                    ...ui.btnSecondary,
+                    width: '100%',
+                    justifyContent: 'flex-start',
+                    padding: '10px 12px',
+                    fontSize: 14,
+                  }}
+                >
+                  📁 Choose from device
+                </button>
+                <button
+                  type="button"
+                  onClick={closePicker}
+                  style={{
+                    ...ui.btnSecondary,
+                    width: '100%',
+                    justifyContent: 'center',
+                    padding: '8px 12px',
+                    fontSize: 13,
+                    marginTop: 4,
+                    opacity: 0.85,
+                  }}
+                >
+                  ✕ Cancel
+                </button>
+              </div>
+            </div>
+          </>
         )}
       </section>
     </ChromeDark>

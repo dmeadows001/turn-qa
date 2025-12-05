@@ -46,7 +46,7 @@ export default async function handler(req, res) {
     if (tpl) {
       const { data: rawShots, error: sErr } = await supabase
         .from('template_shots')
-        .select('id, label, required, min_count, area_key, notes, rules_text, created_at')
+        .select('id, label, required, min_count, area_key, notes, rules_text, reference_paths, created_at')
         .eq('template_id', tpl.id)
         .order('created_at', { ascending: true });
       if (sErr) throw sErr;
@@ -57,16 +57,20 @@ export default async function handler(req, res) {
         label: s.label || 'Photo',
         min_count: Number.isFinite(s.min_count) ? s.min_count : (s.required ? 1 : 1),
         notes: s.notes || '',
-        rules_text: s.rules_text || ''
+        rules_text: s.rules_text || '',
+        // new: reference listing photos for this shot
+        reference_paths: Array.isArray(s.reference_paths)
+          ? s.reference_paths
+          : (s.reference_paths || [])
       }));
     }
 
     // Fallback defaults
     if (shots.length === 0) {
       shots = [
-        { shot_id: 'default-entry',   area_key: 'entry',    label: 'Entry - Overall',     min_count: 1 },
-        { shot_id: 'default-kitchen', area_key: 'kitchen',  label: 'Kitchen - Overall',   min_count: 2 },
-        { shot_id: 'default-bath',    area_key: 'bathroom', label: 'Bathroom - Overall',  min_count: 2 }
+        { shot_id: 'default-entry',   area_key: 'entry',    label: 'Entry - Overall',     min_count: 1, reference_paths: [] },
+        { shot_id: 'default-kitchen', area_key: 'kitchen',  label: 'Kitchen - Overall',   min_count: 2, reference_paths: [] },
+        { shot_id: 'default-bath',    area_key: 'bathroom', label: 'Bathroom - Overall',  min_count: 2, reference_paths: [] }
       ];
     }
 

@@ -11,6 +11,7 @@ async function fetchTurn(turnId) {
   return j.turn;
 }
 
+
 async function fetchPhotos(turnId) {
   const r = await fetch(`/api/list-turn-photos?id=${turnId}`);
   if (!r.ok) throw new Error((await r.json()).error || 'list-turn-photos failed');
@@ -621,21 +622,35 @@ export default function Review() {
               </div>
 
               {/* Show most recent cleaner message to the manager */}
-              {lastCleanerNote && (
-                <div style={{
-                  marginTop:10,
-                  padding:12,
-                  border:'1px solid #334155',
-                  borderRadius:8,
-                  background:'#0b1220',
-                  color:'#cbd5e1'
-                }}>
-                  <div style={{ fontSize:12, fontWeight:700, color:'#9ca3af', marginBottom:6 }}>
-                    Cleaner note
-                  </div>
-                  <div style={{ whiteSpace:'pre-wrap' }}>{lastCleanerNote}</div>
-                </div>
-              )}
+{lastCleanerNote && (
+  <div style={{
+    marginTop: 10,
+    padding: 12,
+    borderRadius: 8,
+    // match FIX / cleaner-note green styling
+    border: '1px solid #065f46',
+    background: '#052e2b',
+    color: '#86efac',
+    boxShadow: '0 0 0 3px rgba(5,150,105,0.20) inset',
+  }}>
+    <div
+      style={{
+        fontSize: 12,
+        fontWeight: 700,
+        color: '#bbf7d0',
+        marginBottom: 6,
+        textTransform: 'uppercase',
+        letterSpacing: 0.03,
+      }}
+    >
+      Cleaner note
+    </div>
+    <div style={{ whiteSpace: 'pre-wrap' }}>
+      {lastCleanerNote}
+    </div>
+  </div>
+)}
+
 
               <div style={{ marginTop:10 }}>
                 <div style={{ fontSize:12, fontWeight:700, color:'#9ca3af', marginBottom:6 }}>

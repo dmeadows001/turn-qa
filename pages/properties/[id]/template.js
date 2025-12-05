@@ -1,12 +1,11 @@
 // pages/properties/[id]/template.js
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useRouter } from 'next/router';
 import { supabaseBrowser } from '@/lib/supabaseBrowser';
 import ChromeDark from '../../../components/ChromeDark';
 import { ui } from '../../../lib/theme';
 
 const supabase = supabaseBrowser();
-
 
 // Opinionated areas; tweak as needed
 const AREAS = [
@@ -32,6 +31,62 @@ export default function TemplateBuilder() {
   const [newLabel, setNewLabel] = useState('');
   const [newArea, setNewArea]   = useState('general');
   const [newRequired, setNewRequired] = useState(1);
+
+  // one hidden file input per shot for reference uploads
+  const refInputs = useRef({});
+
+  // drag state
+  const [draggingId, setDraggingId] = useState(null);
+
+  // thumbnail signing cache (for reference photos)
+  const [thumbByPath, setThumbByPath] = useState({});
+  const requestedThumbsRef = useRef(new Set());
+
+  async function signPath(path) {
+    const resp = await fetch('/api/sign-photo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path, expires: 600 }),
+    });
+    if (!resp.ok) throw new Error('sign failed');
+    const json = await resp.json();
+    return json.url;
+  }
+
+  // Open a signed URL in a way that works on mobile (Safari popup rules)
+  async function openSignedPath(path) {
+    try {
+      const win = window.open('', '_blank');
+      if (!win) {
+        const url = await signPath(path);
+        if (url) window.location.href = url;
+        return;
+      }
+      const url = await signPath(path);
+      if (!url) {
+        win.close();
+        return;
+      }
+      win.location = url;
+    } catch (e) {
+      console.error('openSignedPath error:', e);
+    }
+  }
+
+  function ensureThumb(path) {
+    if (!path || requestedThumbsRef.current.has(path) || thumbByPath[path]) return;
+    requestedThumbsRef.current.add(path);
+    signPath(path)
+      .then((url) => {
+        if (!url) return;
+        setThumbByPath((prev) =>
+          prev[path] ? prev : { ...prev, [path]: url }
+        );
+      })
+      .catch(() => {
+        requestedThumbsRef.current.delete(path);
+      });
+  }
 
   useEffect(() => {
     if (!propertyId) return;
@@ -72,19 +127,98 @@ export default function TemplateBuilder() {
         // 3) Load template shots
         const { data: s, error: sErr } = await supabase
           .from('template_shots')
-          .select('id, template_id, label, min_count, area_key, created_at')
+          .select(
+            'id, template_id, label, min_count, area_key, reference_paths, created_at, sort_index'
+          )
           .eq('template_id', tpl.id)
+          .order('sort_index', { ascending: true, nullsFirst: true })
           .order('created_at', { ascending: true });
         if (sErr) throw sErr;
-        setShots(s || []);
+
+        const ordered = (s || []).map((shot, idx) => ({
+          ...shot,
+          sort_index:
+            typeof shot.sort_index === 'number' ? shot.sort_index : idx,
+          reference_paths: Array.isArray(shot.reference_paths)
+            ? shot.reference_paths
+            : [],
+        }));
+
+        setShots(ordered);
         setMsg('');
       } catch (e) {
+        console.error(e);
         setMsg(e.message || 'Failed to load template');
       } finally {
         setLoading(false);
       }
     })();
   }, [propertyId]);
+
+  // persist order (UPDATE only → RLS-friendly)
+  async function persistSortOrder(nextShots) {
+    try {
+      for (const s of nextShots) {
+        const { error } = await supabase
+          .from('template_shots')
+          .update({ sort_index: s.sort_index })
+          .eq('id', s.id);
+        if (error) throw error;
+      }
+      setMsg('Order saved.');
+      setTimeout(() => setMsg(''), 1000);
+    } catch (e) {
+      console.error('Reorder failed:', e);
+      setMsg(e.message || 'Reorder failed.');
+    }
+  }
+
+  // drag handlers (desktop)
+  function handleDragStart(id) {
+    setDraggingId(id);
+  }
+
+  function handleDragEnd() {
+    setDraggingId(null);
+  }
+
+  function handleRowDrop(targetId) {
+    if (!draggingId || draggingId === targetId) return;
+
+    setShots((prev) => {
+      const list = [...prev];
+      const fromIndex = list.findIndex((s) => s.id === draggingId);
+      const toIndex = list.findIndex((s) => s.id === targetId);
+      if (fromIndex === -1 || toIndex === -1) return prev;
+
+      const [moved] = list.splice(fromIndex, 1);
+      list.splice(toIndex, 0, moved);
+
+      const withIndex = list.map((s, idx) => ({ ...s, sort_index: idx }));
+      persistSortOrder(withIndex);
+      return withIndex;
+    });
+
+    setDraggingId(null);
+  }
+
+  // tap-based move for mobile (Up / Down buttons)
+  function moveShot(id, delta) {
+    setShots((prev) => {
+      const list = [...prev];
+      const idx = list.findIndex((s) => s.id === id);
+      if (idx === -1) return prev;
+      const target = idx + delta;
+      if (target < 0 || target >= list.length) return prev;
+
+      const [item] = list.splice(idx, 1);
+      list.splice(target, 0, item);
+
+      const withIndex = list.map((s, i) => ({ ...s, sort_index: i }));
+      persistSortOrder(withIndex);
+      return withIndex;
+    });
+  }
 
   async function addShot(e) {
     e?.preventDefault?.();
@@ -95,45 +229,83 @@ export default function TemplateBuilder() {
       if (!template?.id) throw new Error('Template not ready.');
       if (!label) throw new Error('Enter a label for the checklist item.');
 
+      const currentMaxIndex = shots.length
+        ? Math.max(
+            ...shots.map((s) =>
+              typeof s.sort_index === 'number' ? s.sort_index : 0
+            )
+          )
+        : 0;
+      const nextIndex = currentMaxIndex + 1;
+
       const { data: created, error } = await supabase
         .from('template_shots')
         .insert({
           template_id: template.id,
           label,
           area_key: newArea,
-          min_count: required
+          min_count: required,
+          sort_index: nextIndex,
         })
-        .select('id, template_id, label, min_count, area_key, created_at')
+        .select(
+          'id, template_id, label, min_count, area_key, reference_paths, created_at, sort_index'
+        )
         .single();
       if (error) throw error;
 
-      setShots(prev => [...prev, created]);
+      const normalized = {
+        ...created,
+        sort_index:
+          typeof created.sort_index === 'number'
+            ? created.sort_index
+            : nextIndex,
+        reference_paths: Array.isArray(created.reference_paths)
+          ? created.reference_paths
+          : [],
+      };
+
+      setShots((prev) =>
+        [...prev, normalized].sort(
+          (a, b) => (a.sort_index ?? 0) - (b.sort_index ?? 0)
+        )
+      );
       setNewLabel('');
       setNewArea('general');
       setNewRequired(1);
       setMsg('Added.');
       setTimeout(() => setMsg(''), 1200);
     } catch (e) {
+      console.error(e);
       setMsg(e.message || 'Could not add item');
     }
   }
 
   async function updateLabel(id, label) {
     try {
-      setShots(prev => prev.map(s => s.id === id ? { ...s, label } : s));
-      const { error } = await supabase.from('template_shots').update({ label }).eq('id', id);
+      setShots((prev) => prev.map((s) => (s.id === id ? { ...s, label } : s)));
+      const { error } = await supabase
+        .from('template_shots')
+        .update({ label })
+        .eq('id', id);
       if (error) throw error;
     } catch (e) {
+      console.error(e);
       setMsg(e.message || 'Update failed');
     }
   }
 
   async function updateArea(id, area_key) {
     try {
-      setShots(prev => prev.map(s => s.id === id ? { ...s, area_key } : s));
-      const { error } = await supabase.from('template_shots').update({ area_key }).eq('id', id);
+      setShots((prev) =>
+        prev.map((s) => (s.id === id ? { ...s, area_key } : s))
+      );
+      const { error } = await supabase
+        .from('template_shots')
+        .update({ area_key })
+        .eq('id', id);
       if (error) throw error;
     } catch (e) {
+      console.error(e);
       setMsg(e.message || 'Update failed');
     }
   }
@@ -141,21 +313,112 @@ export default function TemplateBuilder() {
   async function updateRequired(id, val) {
     const required = Math.max(1, parseInt(val || 1, 10));
     try {
-      setShots(prev => prev.map(s => s.id === id ? { ...s, min_count: required } : s));
-      const { error } = await supabase.from('template_shots').update({ min_count: required }).eq('id', id);
+      setShots((prev) =>
+        prev.map((s) => (s.id === id ? { ...s, min_count: required } : s))
+      );
+      const { error } = await supabase
+        .from('template_shots')
+        .update({ min_count: required })
+        .eq('id', id);
       if (error) throw error;
     } catch (e) {
+      console.error(e);
       setMsg(e.message || 'Update failed');
     }
   }
 
   async function deleteShot(id) {
     try {
-      setShots(prev => prev.filter(s => s.id !== id));
-      const { error } = await supabase.from('template_shots').delete().eq('id', id);
+      setShots((prev) => prev.filter((s) => s.id !== id));
+      const { error } = await supabase
+        .from('template_shots')
+        .delete()
+        .eq('id', id);
       if (error) throw error;
     } catch (e) {
+      console.error(e);
       setMsg(e.message || 'Delete failed');
+    }
+  }
+
+  // reference photos: add
+  async function handleRefFileChange(shot, event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    try {
+      setMsg('');
+
+      const safeName = file.name.replace(/[^\w.\-]/g, '_');
+      const path = `refs/${shot.id}/${Date.now()}-${safeName}`;
+
+      const { error: uploadErr } = await supabase
+        .storage
+        .from('photos')
+        .upload(path, file, {
+          cacheControl: '3600',
+          upsert: false,
+        });
+      if (uploadErr) throw uploadErr;
+
+      const existing = Array.isArray(shot.reference_paths)
+        ? shot.reference_paths
+        : [];
+      const nextRefs = [...existing, path];
+
+      const { error: dbErr } = await supabase
+        .from('template_shots')
+        .update({ reference_paths: nextRefs })
+        .eq('id', shot.id);
+      if (dbErr) throw dbErr;
+
+      setShots((prev) =>
+        prev.map((s) => (s.id === shot.id ? { ...s, reference_paths: nextRefs } : s))
+      );
+
+      setMsg('Reference photo added.');
+      setTimeout(() => setMsg(''), 1200);
+    } catch (e) {
+      console.error(e);
+      setMsg(e.message || 'Failed to add reference photo');
+    } finally {
+      if (event?.target) {
+        event.target.value = '';
+      }
+    }
+  }
+
+  // reference photos: delete single
+  async function handleDeleteRefPhoto(shotId, pathToRemove) {
+    try {
+      const shot = shots.find((s) => s.id === shotId);
+      if (!shot) return;
+
+      const existing = Array.isArray(shot.reference_paths)
+        ? shot.reference_paths
+        : [];
+      const nextRefs = existing.filter((p) => p !== pathToRemove);
+
+      setShots((prev) =>
+        prev.map((s) =>
+          s.id === shotId ? { ...s, reference_paths: nextRefs } : s
+        )
+      );
+
+      const { error } = await supabase
+        .from('template_shots')
+        .update({ reference_paths: nextRefs })
+        .eq('id', shotId);
+      if (error) throw error;
+
+      try {
+        await supabase.storage.from('photos').remove([pathToRemove]);
+      } catch {
+        // ignore
+      }
+    } catch (e) {
+      console.error(e);
+      setMsg(e.message || 'Failed to delete reference photo');
     }
   }
 
@@ -190,7 +453,9 @@ export default function TemplateBuilder() {
           <h2 style={{ marginTop: 0, marginBottom: 8 }}>
             Checklist for <span style={{ color: '#cbd5e1' }}>{property.name}</span>
           </h2>
-          <div style={ui.subtle}>Define the photos your cleaner must capture per area.</div>
+          <div style={ui.subtle}>
+            Define the photos your cleaner must capture per area.
+          </div>
 
           {/* Add new item */}
           <form onSubmit={addShot} style={{ marginTop: 14 }}>
@@ -201,15 +466,23 @@ export default function TemplateBuilder() {
                 placeholder="e.g., Kitchen — Overall"
                 style={{ ...ui.input, flex: 2, minWidth: 240 }}
                 value={newLabel}
-                onChange={e => setNewLabel(e.target.value)}
+                onChange={(e) => setNewLabel(e.target.value)}
               />
               <select
-                style={{ ...ui.input, flex: 1, minWidth: 160, background: '#0b1220', cursor:'pointer' }}
+                style={{
+                  ...ui.input,
+                  flex: 1,
+                  minWidth: 160,
+                  background: '#0b1220',
+                  cursor: 'pointer',
+                }}
                 value={newArea}
-                onChange={e => setNewArea(e.target.value)}
+                onChange={(e) => setNewArea(e.target.value)}
               >
                 {AREAS.map(([v, label]) => (
-                  <option key={v} value={v}>{label}</option>
+                  <option key={v} value={v}>
+                    {label}
+                  </option>
                 ))}
               </select>
               <input
@@ -218,9 +491,11 @@ export default function TemplateBuilder() {
                 step={1}
                 style={{ ...ui.input, width: 120 }}
                 value={newRequired}
-                onChange={e => setNewRequired(e.target.value)}
+                onChange={(e) => setNewRequired(e.target.value)}
               />
-              <button type="submit" style={ui.btnPrimary}>Add</button>
+              <button type="submit" style={ui.btnPrimary}>
+                Add
+              </button>
             </div>
             <div style={{ ...ui.subtle, marginTop: 6 }}>
               “Required” = minimum number of photos for this item.
@@ -228,64 +503,349 @@ export default function TemplateBuilder() {
           </form>
 
           {msg && (
-            <div style={{ marginTop: 10, color: msg.match(/Added|Saved|Updated/i) ? '#22c55e' : '#fca5a5' }}>
+            <div
+              style={{
+                marginTop: 10,
+                color: msg.match(/Added|Saved|Updated|Order saved/i)
+                  ? '#22c55e'
+                  : '#fca5a5',
+              }}
+            >
               {msg}
             </div>
           )}
 
           {/* Existing items */}
-          <div style={{ marginTop: 18, overflowX:'auto' }}>
+          <div style={{ marginTop: 18, overflowX: 'auto' }}>
             {shots.length === 0 ? (
-              <div style={ui.muted}>No items yet — add your first checklist item above.</div>
+              <div style={ui.muted}>
+                No items yet — add your first checklist item above.
+              </div>
             ) : (
-              <table style={{ width:'100%', minWidth: 720, borderCollapse:'collapse' }}>
+              <table
+                style={{
+                  width: '100%',
+                  minWidth: 900,
+                  borderCollapse: 'collapse',
+                }}
+              >
                 <thead>
-                  <tr style={{ textAlign:'left', borderBottom:'1px solid #1f2937' }}>
-                    <th style={{ padding:'10px 8px' }}>Label</th>
-                    <th style={{ padding:'10px 8px' }}>Area</th>
-                    <th style={{ padding:'10px 8px', width:120 }}>Required</th>
-                    <th style={{ padding:'10px 8px', width:120 }}></th>
+                  <tr
+                    style={{
+                      textAlign: 'left',
+                      borderBottom: '1px solid #1f2937',
+                    }}
+                  >
+                    <th style={{ padding: '10px 8px', width: 60 }}></th>
+                    <th style={{ padding: '10px 8px' }}>Label</th>
+                    <th style={{ padding: '10px 8px' }}>Area</th>
+                    <th style={{ padding: '10px 8px', width: 120 }}>Required</th>
+                    <th style={{ padding: '10px 8px', width: 260 }}>
+                      Reference photos
+                    </th>
+                    <th style={{ padding: '10px 8px', width: 120 }}></th>
                   </tr>
                 </thead>
                 <tbody>
-                  {shots.map(s => (
-                    <tr key={s.id} style={{ borderBottom:'1px solid #111827' }}>
-                      <td style={{ padding:'10px 8px' }}>
-                        <input
-                          type="text"
-                          value={s.label || ''}
-                          onChange={e => updateLabel(s.id, e.target.value)}
-                          style={{ ...ui.input }}
-                        />
-                      </td>
-                      <td style={{ padding:'10px 8px' }}>
-                        <select
-                          value={s.area_key || 'general'}
-                          onChange={e => updateArea(s.id, e.target.value)}
-                          style={{ ...ui.input, background: '#0b1220', cursor:'pointer' }}
+                  {shots.map((s, idx) => {
+                    const refCount = Array.isArray(s.reference_paths)
+                      ? s.reference_paths.length
+                      : 0;
+                    const isDragging = draggingId === s.id;
+
+                    const rows = [];
+
+                    // Reference thumbnails row (above main row)
+                    if (refCount > 0) {
+                      rows.push(
+                        <tr key={`${s.id}-refs`}>
+                          <td colSpan={6} style={{ padding: '10px 8px 4px' }}>
+                            <div
+                              style={{
+                                borderRadius: 10,
+                                border: '1px solid #1f2937',
+                                background: '#020617',
+                                padding: '8px 10px',
+                              }}
+                            >
+                              <div
+                                style={{
+                                  fontSize: 12,
+                                  color: '#9ca3af',
+                                  marginBottom: 6,
+                                  fontWeight: 600,
+                                }}
+                              >
+                                Reference photo
+                                {refCount > 1 ? 's' : ''} for {s.label}
+                              </div>
+                              <div
+                                style={{
+                                  display: 'flex',
+                                  flexWrap: 'wrap',
+                                  gap: 8,
+                                }}
+                              >
+                                {s.reference_paths.map((path) => {
+                                  if (!thumbByPath[path]) ensureThumb(path);
+                                  const thumb = thumbByPath[path] || null;
+
+                                  return (
+                                    <div
+                                      key={path}
+                                      style={{
+                                        position: 'relative',
+                                        width: 72,
+                                        height: 72,
+                                        borderRadius: 8,
+                                        overflow: 'hidden',
+                                        border: '1px solid #374151',
+                                        background: '#020617',
+                                        cursor: 'pointer',
+                                      }}
+                                      onClick={(e) => {
+                                        // avoid triggering when tapping delete
+                                        if (e.target.dataset?.role === 'delete-ref') return;
+                                        openSignedPath(path);
+                                      }}
+                                    >
+                                      {thumb ? (
+                                        <img
+                                          src={thumb}
+                                          alt="Reference"
+                                          style={{
+                                            width: '100%',
+                                            height: '100%',
+                                            objectFit: 'cover',
+                                          }}
+                                        />
+                                      ) : (
+                                        <div
+                                          style={{
+                                            width: '100%',
+                                            height: '100%',
+                                            background: '#0f172a',
+                                          }}
+                                        />
+                                      )}
+                                      <button
+                                        type="button"
+                                        data-role="delete-ref"
+                                        onClick={() =>
+                                          handleDeleteRefPhoto(s.id, path)
+                                        }
+                                        style={{
+                                          position: 'absolute',
+                                          top: 2,
+                                          right: 2,
+                                          width: 18,
+                                          height: 18,
+                                          borderRadius: '999px',
+                                          border: 'none',
+                                          background: '#7f1d1d',
+                                          color: '#fee2e2',
+                                          fontSize: 11,
+                                          cursor: 'pointer',
+                                          display: 'flex',
+                                          alignItems: 'center',
+                                          justifyContent: 'center',
+                                        }}
+                                        title="Delete reference photo"
+                                      >
+                                        ✕
+                                      </button>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    }
+
+                    // Main row (draggable + up/down buttons)
+                    rows.push(
+                      <tr
+                        key={s.id}
+                        draggable
+                        onDragStart={() => handleDragStart(s.id)}
+                        onDragOver={(e) => e.preventDefault()}
+                        onDrop={() => handleRowDrop(s.id)}
+                        onDragEnd={handleDragEnd}
+                        style={{
+                          borderBottom: '1px solid #111827',
+                          background: isDragging ? '#020617' : 'transparent',
+                          opacity: isDragging ? 0.85 : 1,
+                        }}
+                      >
+                        {/* drag handle + up/down */}
+                        <td
+                          style={{
+                            padding: '10px 8px',
+                            verticalAlign: 'top',
+                          }}
                         >
-                          {AREAS.map(([v, label]) => (
-                            <option key={v} value={v}>{label}</option>
-                          ))}
-                        </select>
-                      </td>
-                      <td style={{ padding:'10px 8px' }}>
-                        <input
-                          type="number"
-                          min={1}
-                          step={1}
-                          value={s.min_count || 1}
-                          onChange={e => updateRequired(s.id, e.target.value)}
-                          style={{ ...ui.input }}
-                        />
-                      </td>
-                      <td style={{ padding:'10px 8px' }}>
-                        <button onClick={() => deleteShot(s.id)} style={ui.btnSecondary}>
-                          Delete
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                          <div
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 6,
+                            }}
+                          >
+                            <span
+                              style={{
+                                fontSize: 16,
+                                color: '#6b7280',
+                                cursor: 'grab',
+                              }}
+                            >
+                              ⋮⋮
+                            </span>
+                            <div
+                              style={{
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: 2,
+                              }}
+                            >
+                              <button
+                                type="button"
+                                onClick={() => moveShot(s.id, -1)}
+                                disabled={idx === 0}
+                                style={{
+                                  width: 20,
+                                  height: 18,
+                                  borderRadius: 4,
+                                  border: '1px solid #374151',
+                                  background: '#020617',
+                                  color: '#9ca3af',
+                                  fontSize: 10,
+                                  cursor: idx === 0 ? 'default' : 'pointer',
+                                }}
+                                title="Move up"
+                              >
+                                ▲
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => moveShot(s.id, +1)}
+                                disabled={idx === shots.length - 1}
+                                style={{
+                                  width: 20,
+                                  height: 18,
+                                  borderRadius: 4,
+                                  border: '1px solid #374151',
+                                  background: '#020617',
+                                  color: '#9ca3af',
+                                  fontSize: 10,
+                                  cursor:
+                                    idx === shots.length - 1
+                                      ? 'default'
+                                      : 'pointer',
+                                }}
+                                title="Move down"
+                              >
+                                ▼
+                              </button>
+                            </div>
+                          </div>
+                        </td>
+
+                        <td style={{ padding: '10px 8px', verticalAlign: 'top' }}>
+                          <input
+                            type="text"
+                            value={s.label || ''}
+                            onChange={(e) =>
+                              updateLabel(s.id, e.target.value)
+                            }
+                            style={{ ...ui.input }}
+                          />
+                        </td>
+
+                        <td style={{ padding: '10px 8px', verticalAlign: 'top' }}>
+                          <select
+                            value={s.area_key || 'general'}
+                            onChange={(e) =>
+                              updateArea(s.id, e.target.value)
+                            }
+                            style={{
+                              ...ui.input,
+                              background: '#0b1220',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            {AREAS.map(([v, label]) => (
+                              <option key={v} value={v}>
+                                {label}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+
+                        <td style={{ padding: '10px 8px', verticalAlign: 'top' }}>
+                          <input
+                            type="number"
+                            min={1}
+                            step={1}
+                            value={s.min_count || 1}
+                            onChange={(e) =>
+                              updateRequired(s.id, e.target.value)
+                            }
+                            style={{ ...ui.input }}
+                          />
+                        </td>
+
+                        {/* Reference photos column: count + Add button */}
+                        <td style={{ padding: '10px 8px', verticalAlign: 'top' }}>
+                          {/* hidden input for this shot */}
+                          <input
+                            type="file"
+                            accept="image/*"
+                            style={{ display: 'none' }}
+                            ref={(el) => {
+                              refInputs.current[s.id] = el;
+                            }}
+                            onChange={(e) => handleRefFileChange(s, e)}
+                          />
+                          <div
+                            style={{
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: 4,
+                            }}
+                          >
+                            <div style={{ fontSize: 12, color: '#9ca3af' }}>
+                              {refCount === 0 && 'No reference photos yet'}
+                              {refCount === 1 && '1 reference photo'}
+                              {refCount > 1 &&
+                                `${refCount} reference photos`}
+                            </div>
+                            <button
+                              type="button"
+                              style={ui.btnSecondary}
+                              onClick={() =>
+                                refInputs.current[s.id]?.click()
+                              }
+                            >
+                              + Add reference photo
+                            </button>
+                          </div>
+                        </td>
+
+                        <td style={{ padding: '10px 8px', verticalAlign: 'top' }}>
+                          <button
+                            onClick={() => deleteShot(s.id)}
+                            style={ui.btnSecondary}
+                          >
+                            Delete
+                          </button>
+                        </td>
+                      </tr>
+                    );
+
+                    return rows;
+                  })}
                 </tbody>
               </table>
             )}
@@ -316,7 +876,8 @@ export default function TemplateBuilder() {
             </button>
           </div>
           <div style={{ ...ui.subtle, marginTop: 10 }}>
-            When a cleaner submits a turn, you’ll review it under <b>Manager → Turns</b>.
+            When a cleaner submits a turn, you’ll review it under{' '}
+            <b>Manager → Turns</b>.
           </div>
         </div>
       </section>
