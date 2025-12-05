@@ -127,8 +127,7 @@ export default function Capture() {
   const [pickerShot, setPickerShot] = useState(null);      // which shot_id is currently picking
   const [pickerVisible, setPickerVisible] = useState(false);
   const cameraInputRef = useRef(null);
-  const libraryInputRef = useRef(null);
-  const fileInputRef = useRef(null);
+  const fileInputRef = useRef(null); // generic "choose from device"
 
   // ------- helpers -------
   const smallMeta = { fontSize: 12, color: '#94a3b8' };
@@ -1228,13 +1227,6 @@ async function runAiScan() {
         />
         <input
           type="file"
-          ref={libraryInputRef}
-          accept="image/*"
-          style={{ display: 'none' }}
-          onChange={handleGlobalFileChange}
-        />
-        <input
-          type="file"
           ref={fileInputRef}
           style={{ display: 'none' }}
           onChange={handleGlobalFileChange}
@@ -1296,23 +1288,7 @@ async function runAiScan() {
                     fontSize: 14,
                   }}
                 >
-                  📷 Take Photo
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const el = libraryInputRef.current;
-                    if (el) el.click();
-                  }}
-                  style={{
-                    ...ui.btnSecondary,
-                    width: '100%',
-                    justifyContent: 'flex-start',
-                    padding: '10px 12px',
-                    fontSize: 14,
-                  }}
-                >
-                  🖼️ Photo Library
+                  📷 Take Photo (Camera)
                 </button>
                 <button
                   type="button"
@@ -1328,7 +1304,7 @@ async function runAiScan() {
                     fontSize: 14,
                   }}
                 >
-                  📁 Browse Files
+                  📁 Choose from device
                 </button>
                 <button
                   type="button"
