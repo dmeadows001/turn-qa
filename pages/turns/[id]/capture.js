@@ -143,6 +143,30 @@ export default function Capture() {
     return json.url;
   }
 
+    // Open a signed URL in a way that works on mobile (Safari popup rules)
+  async function openSignedPath(path) {
+    try {
+      // Open a blank tab/window synchronously
+      const win = window.open('', '_blank');
+      if (!win) {
+        // Fallback: same tab if popup blocked
+        const url = await signPath(path);
+        if (url) window.location.href = url;
+        return;
+      }
+      // Now fetch signed URL asynchronously and point the tab at it
+      const url = await signPath(path);
+      if (!url) {
+        win.close();
+        return;
+      }
+      win.location = url;
+    } catch (e) {
+      console.error('openSignedPath error:', e);
+    }
+  }
+
+
   // --- Image dimension helper (safe if load fails) ---
   async function getDims(file) {
     return new Promise((resolve) => {
@@ -869,14 +893,7 @@ async function runAiScan() {
                           <button
                             key={path}
                             type="button"
-                            onClick={async () => {
-                              try {
-                                const full = await signPath(path);
-                                window.open(full, '_blank');
-                              } catch {
-                                // non-fatal
-                              }
-                            }}
+                            onClick={() => openSignedPath(path)}
                             style={{
                               padding: 0,
                               border: 'none',
@@ -1054,17 +1071,11 @@ async function runAiScan() {
                           <div style={{ display:'flex', gap:8 }}>
                             <ThemedButton
                               kind="secondary"
-                              onClick={async () => {
-                                try {
-                                  const url = await signPath(f.url);
-                                  window.open(url, '_blank');
-                                } catch {}
-                              }}
+                              onClick={() => openSignedPath(f.url)}
                               ariaLabel={`View ${f.name}`}
                             >
                               👁️ View
                             </ThemedButton>
-
                             <ThemedButton
                               kind="secondary"
                               onClick={() => removePhoto(s.shot_id, f)}
