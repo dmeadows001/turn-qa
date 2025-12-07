@@ -13,14 +13,14 @@ export default function Privacy() {
 
       <Header />
 
-      <main
-        className="auth-wrap"
-        style={{
-          minHeight: "calc(100vh - 56px)",
-          background:
-            "var(--bg), radial-gradient(1000px 600px at 80% -10%, rgba(124,92,255,.16), transparent 60%), radial-gradient(800px 500px at 0% 100%, rgba(0,229,255,.08), transparent 60%), linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0) 40%)",
-          padding: "32px 0",
-        }}
+<main
+  className="auth-wrap"
+  style={{
+    paddingTop: "80px",   // <-- this prevents header overlap
+    minHeight: "calc(100vh - 56px)",
+    background: "var(--bg), radial-gradient(1000px 600px at 80% -10%, rgba(124,92,255,.16), transparent 60%), radial-gradient(800px 500px at 0% 100%, rgba(0,229,255,.08), transparent 60%), linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0) 40%)",
+    paddingBottom: "32px",
+  }}
       >
         <Card className="auth-card" style={{ maxWidth: 900 }}>
           <h1 className="h1 accent">Privacy Policy</h1>
