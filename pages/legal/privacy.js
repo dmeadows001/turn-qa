@@ -23,6 +23,17 @@ export default function Privacy() {
   }}
       >
         <Card className="auth-card" style={{ maxWidth: 900 }}>
+          <Link href="/" style={{ 
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            color: "#60a5fa",
+            fontSize: 14,
+            textDecoration: "none",
+            marginBottom: 12
+          }}>
+            ← Back to Home
+        </Link>
           <h1 className="h1 accent">Privacy Policy</h1>
           <p className="muted">Effective date: {new Date().toISOString().slice(0, 10)}</p>
 
