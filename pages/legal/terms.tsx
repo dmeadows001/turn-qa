@@ -17,6 +17,18 @@ export default function Terms() {
   }}
 >
         <Card className="auth-card">
+          <Link href="/" style={{ 
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            color: "#60a5fa",
+            fontSize: 14,
+            textDecoration: "none",
+            marginBottom: 12
+          }}>
+            ← Back to Home
+        </Link>
+
           <h1 className="h1 accent" style={{ marginBottom: 12 }}>
             Terms of Service
           </h1>
