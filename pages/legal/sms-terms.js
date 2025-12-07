@@ -21,7 +21,10 @@ export default function SmsTerms() {
       <Head>
         <title>TurnQA SMS Terms &amp; Consent</title>
         <meta name="robots" content="noindex,nofollow" />
-        <meta name="description" content="TurnQA SMS terms, opt-in, opt-out, and consent details for transactional notifications." />
+        <meta
+          name="description"
+          content="TurnQA SMS terms, opt-in, opt-out, fees, and consent details for transactional notifications."
+        />
         <link rel="canonical" href="https://www.turnqa.com/legal/sms-terms" />
       </Head>
 
@@ -29,53 +32,81 @@ export default function SmsTerms() {
         <h1 style={h1}>TurnQA SMS Terms &amp; Consent</h1>
         <p style={small}>Effective date: {new Date().toISOString().slice(0, 10)}</p>
 
-        <div style={{...box, marginTop: 14}}>
-          <p><strong>Program Name:</strong> TurnQA Alerts</p>
-          <p><strong>Description:</strong> We send <em>transactional</em> SMS related to short-term rental (STR) cleaning operations. 
-            When a cleaner submits a completed “turn” in the TurnQA app, we notify the assigned property manager. 
-            When the manager approves the turn, we notify the cleaner. No marketing or promotional content.</p>
+        <div style={{ ...box, marginTop: 14 }}>
+          <p>
+            <strong>Program Name:</strong> TurnQA Alerts
+          </p>
+          <p>
+            <strong>Description:</strong> We send <em>transactional</em> SMS related to short-term
+            rental (STR) cleaning operations. For example, when a cleaner submits a completed “turn”
+            in the TurnQA app, we notify the assigned property manager. When the manager approves the
+            turn, we notify the cleaner. We do <strong>not</strong> send marketing or promotional
+            SMS messages through this program.
+          </p>
 
           <h2 style={h2}>Opt-In &amp; Consent</h2>
           <p>
-            Managers and cleaners are invited or added by an authorized host/manager inside the TurnQA app. During onboarding,
-            users consent to receive SMS alerts related to their jobs by agreeing to the checkbox shown, for example:
+            Managers and cleaners are invited or added by an authorized host/manager inside the
+            TurnQA app. During onboarding, users consent to receive SMS alerts related to their jobs
+            by agreeing to a checkbox such as:
           </p>
-          <p style={{marginLeft:16}}>
+          <p style={{ marginLeft: 16 }}>
             <span style={code}>
-              I agree to receive transactional SMS from TurnQA at the number provided. Message &amp; data rates may apply. 
-              Reply STOP to opt out, HELP for help. Consent is not a condition of purchase.
+              I agree to receive transactional SMS from TurnQA at the number provided. Message &amp;
+              data rates may apply. Reply STOP to opt out, HELP for help. Consent is not a condition
+              of purchase.
             </span>
           </p>
           <p>
-            By providing your mobile number and selecting the consent checkbox, you authorize TurnQA to send transactional SMS as described above.
+            By providing your mobile number and selecting the consent checkbox, you authorize TurnQA
+            to send transactional SMS as described above.
           </p>
 
           <h2 style={h2}>Opt-Out</h2>
-          <p>Reply <strong>STOP</strong> at any time to cancel SMS. You may also contact us at <a href="mailto:support@turnqa.com">support@turnqa.com</a> to be removed.</p>
+          <p>
+            You can opt out of SMS at any time by replying <strong>STOP</strong>. After you send
+            STOP, we may send one additional message to confirm that you have been unsubscribed.
+          </p>
+          <p>
+            You may also contact us at <a href="mailto:support@turnqa.com">support@turnqa.com</a> to
+            be removed.
+          </p>
 
           <h2 style={h2}>Help</h2>
-          <p>Reply <strong>HELP</strong> for assistance. You can also email <a href="mailto:support@turnqa.com">support@turnqa.com</a>.</p>
+          <p>
+            For help with the SMS program, reply <strong>HELP</strong> to any message or email{' '}
+            <a href="mailto:support@turnqa.com">support@turnqa.com</a>.
+          </p>
 
           <h2 style={h2}>Message Frequency</h2>
-          <p>Event-driven; typically 1–2 messages per job (submission and approval). Frequency varies with account activity.</p>
+          <p>
+            Messages are event-driven. Typical use is 1–2 messages per job (submission and approval),
+            but frequency will vary based on account activity.
+          </p>
 
           <h2 style={h2}>Fees</h2>
-          <p>Message and data rates may apply. Check your mobile plan for details.</p>
+          <p>Message and data rates may apply. Please check your mobile plan for details.</p>
 
           <h2 style={h2}>Eligibility</h2>
-          <p>U.S. recipients only for this SMS program. Delivery depends on carrier availability and device support.</p>
+          <p>
+            This SMS program is intended for U.S. recipients only. Delivery depends on your mobile
+            carrier and device capabilities.
+          </p>
 
           <h2 style={h2}>Carrier Disclosure</h2>
-          <p>Carriers are not liable for delayed or undelivered messages.</p>
+          <p>Mobile carriers are not liable for delayed or undelivered messages.</p>
 
           <h2 style={h2}>Privacy</h2>
           <p>
-            We respect your privacy. See our <a href="/legal/privacy">Privacy Policy</a> to learn how we handle information.
+            We respect your privacy. See our{' '}
+            <a href="/legal/privacy">Privacy Policy</a> for information about how we collect and use
+            data.
           </p>
 
           <h2 style={h2}>Contact</h2>
           <p>
-            TurnQA, Inc. (or applicable business entity) — <a href="mailto:support@turnqa.com">support@turnqa.com</a>
+            TurnQA, Inc. (or applicable business entity) —{' '}
+            <a href="mailto:support@turnqa.com">support@turnqa.com</a>
           </p>
         </div>
       </main>
