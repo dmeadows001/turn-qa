@@ -36,6 +36,7 @@ export default function Capture() {
   // verify
   const [phone, setPhone] = useState('');
   const [code, setCode] = useState('');
+  const [consent, setConsent] = useState(false); // <-- SMS consent
 
   // start-turn
   const [properties, setProperties] = useState([]);
@@ -57,7 +58,7 @@ export default function Capture() {
 
   const [activeTab, setActiveTab] = useState(tabParam || 'fix'); // default to fix
 
-   // If a specific turn is provided (?turn=...), route directly to the correct capture view.
+  // If a specific turn is provided (?turn=...), route directly to the correct capture view.
   // - in_progress  -> /turns/:id/capture?from=capture      (initial capture)
   // - needs_fix    -> /turns/:id/capture?tab=needs-fix     (fix flow)
   useEffect(() => {
@@ -135,6 +136,13 @@ export default function Capture() {
   // ------------------------------------------------------------------
   async function sendCode() {
     setMsg(null);
+
+    // Require explicit consent
+    if (!consent) {
+      setMsg('Please agree to receive SMS alerts before requesting a code.');
+      return;
+    }
+
     setLoading(true);
     try {
       const r = await fetch('/api/otp/send', {
@@ -240,10 +248,12 @@ export default function Capture() {
           <VerifyForm
             phone={phone}
             code={code}
+            consent={consent}
             loading={loading}
             msg={msg}
             onChangePhone={setPhone}
             onChangeCode={setCode}
+            onToggleConsent={() => setConsent((v) => !v)}
             onSend={sendCode}
             onVerify={verifyCode}
           />
@@ -350,8 +360,7 @@ export default function Capture() {
               <a href="/cleaner/turns" style={ui.btnSecondary}>
                 View my turns
               </a>
-              </div>
-
+            </div>
 
             {msg && <div style={{ marginTop: 10, color: '#ef4444' }}>{msg}</div>}
           </Card>
@@ -362,20 +371,36 @@ export default function Capture() {
 }
 
 /* ---------- Stable Verify form (prevents remounts/blur on each keystroke) ---------- */
-function VerifyForm({ phone, code, loading, msg, onChangePhone, onChangeCode, onSend, onVerify }) {
+function VerifyForm({
+  phone,
+  code,
+  consent,
+  loading,
+  msg,
+  onChangePhone,
+  onChangeCode,
+  onToggleConsent,
+  onSend,
+  onVerify,
+}) {
   function noSubmit(e) {
     e.preventDefault(); // avoid implicit submit that can blur inputs
   }
 
+  const digits = phone.replace(/[^\d]/g, '');
+  const hasPhone = digits.length >= 7;
+
   // Keep the Resend button mounted; just toggle visibility/disabled
-  const showResend = !!phone && phone.replace(/[^\d]/g, '').length >= 7;
+  const showResend = !!phone && hasPhone;
 
   return (
     <Card>
       <form onSubmit={noSubmit}>
         <h2 style={{ marginTop: 0 }}>Verify your phone</h2>
 
-        <label style={ui.label} htmlFor="phone">Phone</label>
+        <label style={ui.label} htmlFor="phone">
+          Phone
+        </label>
         <div style={{ display: 'flex', gap: 10 }}>
           <input
             id="phone"
@@ -396,7 +421,9 @@ function VerifyForm({ phone, code, loading, msg, onChangePhone, onChangeCode, on
 
         <div style={{ height: 10 }} />
 
-        <label style={ui.label} htmlFor="code">Enter 6-digit code</label>
+        <label style={ui.label} htmlFor="code">
+          Enter 6-digit code
+        </label>
         <input
           id="code"
           type="text"
@@ -405,11 +432,45 @@ function VerifyForm({ phone, code, loading, msg, onChangePhone, onChangeCode, on
           style={ui.input}
           placeholder="123456"
           value={code}
-          onChange={(e) => onChangeCode(e.target.value.replace(/[^\d]/g, '').slice(0, 6))}
+          onChange={(e) =>
+            onChangeCode(e.target.value.replace(/[^\d]/g, '').slice(0, 6))
+          }
         />
 
+        {/* SMS consent checkbox */}
+        <div
+          style={{
+            marginTop: 12,
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: 8,
+            fontSize: 13,
+            lineHeight: 1.5,
+            color: '#cbd5f5',
+          }}
+        >
+          <input
+            id="sms-consent-cleaner"
+            type="checkbox"
+            checked={consent}
+            onChange={onToggleConsent}
+            style={{ marginTop: 3 }}
+          />
+          <label htmlFor="sms-consent-cleaner">
+            I agree to receive transactional SMS from TurnQA at this number.
+            Message &amp; data rates may apply. Reply <strong>STOP</strong> to opt
+            out, <strong>HELP</strong> for help. Consent is not a condition of
+            purchase.
+          </label>
+        </div>
+
         <div style={{ display: 'flex', gap: 10, marginTop: 10 }}>
-          <button type="button" style={ui.btnPrimary} onClick={onSend} disabled={loading}>
+          <button
+            type="button"
+            style={ui.btnPrimary}
+            onClick={onSend}
+            disabled={loading || !hasPhone || !consent}
+          >
             {loading ? 'Sending…' : 'Text me a code'}
           </button>
           <button
