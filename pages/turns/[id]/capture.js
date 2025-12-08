@@ -105,6 +105,13 @@ export default function Capture() {
   const [thumbByPath, setThumbByPath] = useState({});
   const requestedThumbsRef = useRef(new Set());
 
+  // Lightbox state for reference photos
+  const [refLightbox, setRefLightbox] = useState({
+    open: false,
+    urls: [],
+    index: 0,
+  });
+
   // Needs-fix (manager) notes to show to cleaner, by storage path
   const [fixNotes, setFixNotes] = useState({ byPath: {}, overall: '', count: 0 });
   const [hideFixBanner, setHideFixBanner] = useState(false);
@@ -143,7 +150,7 @@ export default function Capture() {
     return json.url;
   }
 
-    // Open a signed URL in a way that works on mobile (Safari popup rules)
+  // Open a signed URL in a way that works on mobile (Safari popup rules)
   async function openSignedPath(path) {
     try {
       // Open a blank tab/window synchronously
@@ -166,6 +173,68 @@ export default function Capture() {
     }
   }
 
+  // Lightbox helpers for reference photos
+  async function openRefLightbox(paths, startIndex = 0) {
+    const list = Array.isArray(paths) ? paths.filter(Boolean) : [];
+    if (!list.length) return;
+    try {
+      const urls = [];
+      for (const p of list) {
+        try {
+          const u = await signPath(p);
+          if (u) urls.push(u);
+        } catch {
+          // ignore single failure
+        }
+      }
+      if (!urls.length) return;
+      setRefLightbox({
+        open: true,
+        urls,
+        index: Math.min(startIndex, urls.length - 1),
+      });
+    } catch (e) {
+      console.error('openRefLightbox error:', e);
+    }
+  }
+
+  function closeRefLightbox() {
+    setRefLightbox(prev => ({ ...prev, open: false }));
+  }
+
+  function nextRefLightbox(e) {
+    if (e) e.stopPropagation();
+    setRefLightbox(prev => {
+      if (!prev.urls.length) return prev;
+      const nextIndex = (prev.index + 1) % prev.urls.length;
+      return { ...prev, index: nextIndex };
+    });
+  }
+
+  function prevRefLightbox(e) {
+    if (e) e.stopPropagation();
+    setRefLightbox(prev => {
+      if (!prev.urls.length) return prev;
+      const nextIndex = (prev.index - 1 + prev.urls.length) % prev.urls.length;
+      return { ...prev, index: nextIndex };
+    });
+  }
+
+  // Keyboard support for the lightbox
+  useEffect(() => {
+    if (!refLightbox.open) return;
+    function onKey(e) {
+      if (e.key === 'Escape') {
+        closeRefLightbox();
+      } else if (e.key === 'ArrowRight') {
+        nextRefLightbox();
+      } else if (e.key === 'ArrowLeft') {
+        prevRefLightbox();
+      }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [refLightbox.open]);
 
   // --- Image dimension helper (safe if load fails) ---
   async function getDims(file) {
@@ -888,12 +957,13 @@ async function runAiScan() {
                       {referencePaths.map((path) => {
                         if (!thumbByPath[path]) ensureThumb(path);
                         const refThumb = thumbByPath[path] || null;
+                        const startIndex = referencePaths.indexOf(path);
 
                         return (
                           <button
                             key={path}
                             type="button"
-                            onClick={() => openSignedPath(path)}
+                            onClick={() => openRefLightbox(referencePaths, startIndex)}
                             style={{
                               padding: 0,
                               border: 'none',
@@ -1211,6 +1281,108 @@ async function runAiScan() {
             )}
           </div>
         </div>
+
+        {/* Reference-photo lightbox overlay */}
+        {refLightbox.open && refLightbox.urls.length > 0 && (
+          <div
+            onClick={closeRefLightbox}
+            style={{
+              position: 'fixed',
+              inset: 0,
+              zIndex: 10020,
+              background: 'rgba(0,0,0,0.88)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 16,
+            }}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                position: 'relative',
+                maxWidth: '100%',
+                maxHeight: '100%',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: 12,
+              }}
+            >
+              <button
+                type="button"
+                onClick={closeRefLightbox}
+                style={{
+                  position: 'absolute',
+                  top: 8,
+                  right: 8,
+                  borderRadius: 999,
+                  border: 'none',
+                  padding: '6px 10px',
+                  fontSize: 12,
+                  cursor: 'pointer',
+                }}
+              >
+                ✕
+              </button>
+
+              <img
+                src={refLightbox.urls[refLightbox.index]}
+                alt="Reference"
+                style={{
+                  maxWidth: '100%',
+                  maxHeight: '70vh',
+                  borderRadius: 12,
+                  boxShadow: '0 10px 40px rgba(0,0,0,0.6)',
+                  objectFit: 'contain',
+                }}
+              />
+
+              {refLightbox.urls.length > 1 && (
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 12,
+                    marginTop: 4,
+                    color: '#e5e7eb',
+                    fontSize: 13,
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={prevRefLightbox}
+                    style={{
+                      borderRadius: 999,
+                      border: '1px solid rgba(148,163,184,0.6)',
+                      padding: '6px 10px',
+                      background: 'rgba(15,23,42,0.9)',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    ‹ Prev
+                  </button>
+                  <span>
+                    {refLightbox.index + 1} / {refLightbox.urls.length}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={nextRefLightbox}
+                    style={{
+                      borderRadius: 999,
+                      border: '1px solid rgba(148,163,184,0.6)',
+                      padding: '6px 10px',
+                      background: 'rgba(15,23,42,0.9)',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Next ›
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Debug widget (only if ?debug=1) */}
         {debugOn && (
