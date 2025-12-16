@@ -94,36 +94,67 @@ export default function Home() {
             <li>Manager reviews, requests fixes if needed, and approves the turn.</li>
           </ol>
         </div>
+
+        {/* NEW: SMS job alerts (optional) card for Twilio compliance */}
+        <div style={ui.card}>
+          <h2 style={{ marginTop: 0, marginBottom: 6 }}>SMS job alerts (optional)</h2>
+          <p style={{ ...ui.muted, marginTop: 4 }}>
+            TurnQA uses text messages <strong>only</strong> to support cleaning jobs — never for
+            marketing or promotions.
+          </p>
+          <p style={{ ...ui.muted, marginTop: 8 }}>
+            Cleaners may receive SMS messages with verification codes, links to checklists, and
+            notifications about fix requests or approvals. Managers may receive alerts when cleaners
+            submit turns or when fixes are requested or completed.
+          </p>
+          <p style={{ ...ui.muted, marginTop: 8 }}>
+            By checking the SMS consent box inside the TurnQA app, you agree to receive these
+            job-related text messages at your mobile number. <strong>Message &amp; data rates may apply.</strong>{' '}
+            Reply <strong>STOP</strong> to opt out, <strong>HELP</strong> for help. Consent is not a
+            condition of purchase.
+          </p>
+          <p style={{ ...ui.muted, marginTop: 8 }}>
+            See our{' '}
+            <Link href="/legal/sms-terms" style={{ textDecoration: 'underline' }}>
+              SMS Terms
+            </Link>{' '}
+            and{' '}
+            <Link href="/legal/privacy" style={{ textDecoration: 'underline' }}>
+              Privacy Policy
+            </Link>
+            .
+          </p>
+        </div>
       </section>
 
       {/* Simple footer with legal links */}
-<footer
-  style={{
-    marginTop: 32,
-    paddingTop: 16,
-    borderTop: '1px solid #1f2937',
-    fontSize: 12,
-    color: '#64748b',
-    display: 'flex',
-    flexWrap: 'wrap',
-    gap: 12,
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  }}
->
-  <span>© {year} TurnQA. All rights reserved.</span>
-  <span style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-    <Link href="/legal/terms" style={{ textDecoration: 'underline' }}>
-      Terms of Service
-    </Link>
-    <Link href="/legal/privacy" style={{ textDecoration: 'underline' }}>
-      Privacy Policy
-    </Link>
-    <Link href="/legal/sms-terms" style={{ textDecoration: 'underline' }}>
-      SMS Terms
-    </Link>
-  </span>
-</footer>
+      <footer
+        style={{
+          marginTop: 32,
+          paddingTop: 16,
+          borderTop: '1px solid #1f2937',
+          fontSize: 12,
+          color: '#64748b',
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 12,
+          justifyContent: 'space-between',
+          alignItems: 'center',
+        }}
+      >
+        <span>© {year} TurnQA. All rights reserved.</span>
+        <span style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          <Link href="/legal/terms" style={{ textDecoration: 'underline' }}>
+            Terms of Service
+          </Link>
+          <Link href="/legal/privacy" style={{ textDecoration: 'underline' }}>
+            Privacy Policy
+          </Link>
+          <Link href="/legal/sms-terms" style={{ textDecoration: 'underline' }}>
+            SMS Terms
+          </Link>
+        </span>
+      </footer>
     </ChromeDark>
   );
 }
