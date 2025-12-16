@@ -108,10 +108,9 @@ export default function Home() {
             submit turns or when fixes are requested or completed.
           </p>
           <p style={{ ...ui.muted, marginTop: 8 }}>
-            By checking the SMS consent box inside the TurnQA app, you agree to receive these
-            job-related text messages at your mobile number. <strong>Message &amp; data rates may apply.</strong>{' '}
-            Reply <strong>STOP</strong> to opt out, <strong>HELP</strong> for help. Consent is not a
-            condition of purchase.
+            By providing your phone number, you agree to receive transactional SMS messages from 
+            TurnQA related to cleaning jobs, verification codes, and turn status updates. Message 
+            frequency varies. Message & data rates may apply. Reply STOP to opt out, HELP for help.
           </p>
           <p style={{ ...ui.muted, marginTop: 8 }}>
             See our{' '}
