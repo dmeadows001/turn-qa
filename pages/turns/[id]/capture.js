@@ -1313,14 +1313,16 @@ async function runAiScan() {
                 type="button"
                 onClick={closeRefLightbox}
                 style={{
-                  position: 'absolute',
-                  top: 8,
-                  right: 8,
-                  borderRadius: 999,
-                  border: 'none',
-                  padding: '6px 10px',
-                  fontSize: 12,
-                  cursor: 'pointer',
+                position: 'absolute',
+                top: 8,
+                right: 8,
+                borderRadius: 999,
+                border: '1px solid rgba(148,163,184,0.7)',
+                padding: '6px 10px',
+                fontSize: 12,
+                cursor: 'pointer',
+                background: 'rgba(15,23,42,0.95)',
+                color: '#e5e7eb',
                 }}
               >
                 ✕
@@ -1353,11 +1355,13 @@ async function runAiScan() {
                     type="button"
                     onClick={prevRefLightbox}
                     style={{
-                      borderRadius: 999,
-                      border: '1px solid rgba(148,163,184,0.6)',
-                      padding: '6px 10px',
-                      background: 'rgba(15,23,42,0.9)',
-                      cursor: 'pointer',
+                    borderRadius: 999,
+                    border: '1px solid rgba(148,163,184,0.6)',
+                    padding: '6px 10px',
+                    background: 'rgba(15,23,42,0.9)',
+                    cursor: 'pointer',
+                    color: '#e5e7eb',
+                    fontSize: 13,
                     }}
                   >
                     ‹ Prev
@@ -1369,11 +1373,13 @@ async function runAiScan() {
                     type="button"
                     onClick={nextRefLightbox}
                     style={{
-                      borderRadius: 999,
-                      border: '1px solid rgba(148,163,184,0.6)',
-                      padding: '6px 10px',
-                      background: 'rgba(15,23,42,0.9)',
-                      cursor: 'pointer',
+                    borderRadius: 999,
+                    border: '1px solid rgba(148,163,184,0.6)',
+                    padding: '6px 10px',
+                    background: 'rgba(15,23,42,0.9)',
+                    cursor: 'pointer',
+                    color: '#e5e7eb',
+                    fontSize: 13,
                     }}
                   >
                     Next ›
