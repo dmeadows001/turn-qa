@@ -245,6 +245,17 @@ export default function Capture() {
     return (
       <ChromeDark title="Capture">
         <section style={{ ...ui.sectionGrid, ...shell }}>
+
+     {/* === SMS Opt-In Branding (Twilio Compliance) === */}
+        <div style={{ marginBottom: 14, textAlign: 'center' }}>
+          <h1 style={{ margin: 0, fontSize: 22 }}>TurnQA SMS Job Alerts</h1>
+          <p style={{ marginTop: 6, fontSize: 14, color: '#94a3b8' }}>
+            TurnQA uses text messages to send verification codes and
+            job-related updates for cleaning turns.  
+            Messages are transactional only (no marketing).
+          </p>
+        </div>
+    
           <VerifyForm
             phone={phone}
             code={code}
