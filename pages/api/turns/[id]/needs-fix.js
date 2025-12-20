@@ -38,6 +38,104 @@ const mkId = () =>
     ? globalThis.crypto.randomUUID()
     : `id_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
 
+function filenameOf(p) {
+  const s = String(p || '');
+  const parts = s.split('/');
+  return parts[parts.length - 1] || s;
+}
+
+// Normalize note payload:
+// - old: note is string
+// - new (future): note can be object { original, translated, sent, original_lang, translated_lang, sent_lang }
+function normalizeNotePayload(note) {
+  const raw = note;
+
+  if (raw && typeof raw === 'object') {
+    const original = String(raw.original ?? '').trim();
+    const translated = String(raw.translated ?? '').trim();
+    const sent = String(raw.sent ?? (translated || original || '')).trim();
+
+    const original_lang = String(raw.original_lang ?? raw.originalLang ?? '').trim() || null;
+    const translated_lang = String(raw.translated_lang ?? raw.translatedLang ?? '').trim() || null;
+    const sent_lang = String(raw.sent_lang ?? raw.sentLang ?? '').trim() || null;
+
+    const legacy = sent || original || translated || '';
+
+    return {
+      legacy_note: legacy,
+      manager_note_original: original || null,
+      manager_note_original_lang: original_lang,
+      manager_note_translated: translated || null,
+      manager_note_translated_lang: translated_lang,
+      manager_note_sent: sent || null,
+      manager_note_sent_lang: sent_lang,
+
+      // for qa_findings naming
+      note_original: original || null,
+      note_original_lang: original_lang,
+      note_translated: translated || null,
+      note_translated_lang: translated_lang,
+      note_sent: sent || null,
+      note_sent_lang: sent_lang,
+    };
+  }
+
+  const s = String(raw ?? '').trim();
+  return {
+    legacy_note: s,
+    manager_note_original: s || null,
+    manager_note_original_lang: null,
+    manager_note_translated: null,
+    manager_note_translated_lang: null,
+    manager_note_sent: s || null,
+    manager_note_sent_lang: null,
+
+    note_original: s || null,
+    note_original_lang: null,
+    note_translated: null,
+    note_translated_lang: null,
+    note_sent: s || null,
+    note_sent_lang: null,
+  };
+}
+
+function buildTurnPhotoUpdatePayload(ts, norm) {
+  const payload = { needs_fix: true, needs_fix_at: ts };
+
+  // legacy
+  if (norm?.legacy_note && String(norm.legacy_note).trim()) {
+    payload.manager_notes = String(norm.legacy_note).trim();
+  }
+
+  // new bilingual columns (safe even if DB doesn’t have them; we’ll swallow column-missing errors)
+  payload.manager_note_original = norm?.manager_note_original ?? null;
+  payload.manager_note_original_lang = norm?.manager_note_original_lang ?? null;
+  payload.manager_note_translated = norm?.manager_note_translated ?? null;
+  payload.manager_note_translated_lang = norm?.manager_note_translated_lang ?? null;
+  payload.manager_note_sent = norm?.manager_note_sent ?? null;
+  payload.manager_note_sent_lang = norm?.manager_note_sent_lang ?? null;
+
+  return payload;
+}
+
+function buildLegacyPhotoUpdatePayload(ts, norm) {
+  const payload = { needs_fix: true, needs_fix_at: ts };
+  if (norm?.legacy_note && String(norm.legacy_note).trim()) {
+    payload.manager_notes = String(norm.legacy_note).trim();
+  }
+  return payload;
+}
+
+async function updateById(table, id, payload) {
+  const { error, count } = await supa.from(table).update(payload, { count: 'exact' }).eq('id', id);
+  return !error && (count ?? 0) > 0;
+}
+
+async function updateByExactMatch(table, matchObj, payload) {
+  const { error, count } = await supa.from(table).update(payload, { count: 'exact' }).match(matchObj);
+  return !error && (count ?? 0) > 0;
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', ['POST']);
@@ -49,118 +147,194 @@ export default async function handler(req, res) {
     if (!turnId) return res.status(400).json({ error: 'missing id' });
 
     // Support BOTH payload shapes the UI may send:
-    //  - { notes: [{ path, note }], summary?, send_sms? }
+    //  - { notes: [{ path, note, photo_id? }], summary?, send_sms? }
     //  - { photos: [{ id?, path?, note? }], overall_note?, notify? }
     const b = req.body || {};
-    const summary = (b.summary ?? b.overall_note ?? '').trim();
+    const summary = String(b.summary ?? b.overall_note ?? '').trim();
     const notify = Boolean(b.send_sms ?? b.notify ?? true);
 
     const normalizedNotes = Array.isArray(b.notes)
-      ? b.notes.map(n => ({ path: String(n?.path || ''), note: String(n?.note || '') }))
+      ? b.notes.map(n => ({
+          photo_id: n?.photo_id ?? n?.photoId ?? null,
+          path: String(n?.path || ''),
+          norm: normalizeNotePayload(n?.note),
+        }))
       : Array.isArray(b.photos)
-        ? b.photos.map(p => ({ id: p?.id, path: String(p?.path || ''), note: String(p?.note || '') }))
+        ? b.photos.map(p => ({
+            photo_id: p?.id ?? null,
+            path: String(p?.path || ''),
+            norm: normalizeNotePayload(p?.note),
+          }))
         : [];
 
     const ts = nowIso();
 
-    // --- 1) Update turn status ---
+    // --- 1) Update turn status (dual-write: legacy + new) ---
     {
-      const { error } = await supa
-        .from('turns')
-        .update({
-          status: 'needs_fix',
-          needs_fix_at: ts,
-          manager_note: summary || null,
-        })
-        .eq('id', turnId);
-      if (error && !/column .* does not exist/i.test(error.message)) throw error;
+      const payload = {
+        status: 'needs_fix',
+        needs_fix_at: ts,
+        manager_note: summary || null,          // legacy
+        manager_note_original: summary || null, // new
+        manager_note_sent: summary || null,     // new
+      };
+
+      const { error } = await supa.from('turns').update(payload).eq('id', turnId);
+
+      // If your DB is missing new columns, don’t fail the whole request.
+      if (error) {
+        if (/column .* does not exist/i.test(error.message || '')) {
+          const { error: e2 } = await supa
+            .from('turns')
+            .update({
+              status: 'needs_fix',
+              needs_fix_at: ts,
+              manager_note: summary || null,
+            })
+            .eq('id', turnId);
+          if (e2) throw e2;
+        } else {
+          throw error;
+        }
+      }
     }
 
     // --- 2) Best-effort flagging on turn_photos/photos (non-blocking) ---
     let flagged = 0;
-    const attempted = [];
-    const columns = ['id', 'path', 'storage_path', 'photo_path', 'url', 'file'];
-
-    function filenameOf(p) {
-      const s = String(p || '');
-      const parts = s.split('/');
-      return parts[parts.length - 1] || s;
-    }
-
-    async function updateById(table, id, note) {
-      const payload = { needs_fix: true, needs_fix_at: ts };
-      if (note && String(note).trim()) payload.manager_notes = String(note).trim();
-      const { error, count } = await supa.from(table).update(payload, { count: 'exact' }).eq('id', id);
-      return !error && (count ?? 0) > 0;
-    }
-
-    async function updateByExactPath(table, turnIdParam, col, path, note) {
-      const payload = { needs_fix: true, needs_fix_at: ts };
-      if (note && String(note).trim()) payload.manager_notes = String(note).trim();
-      const { error, count } = await supa
-        .from(table)
-        .update(payload, { count: 'exact' })
-        .match({ turn_id: turnIdParam, [col]: path });
-      return !error && (count ?? 0) > 0;
-    }
-
-    async function updateByFilename(table, turnIdParam, col, pathOrName, note) {
-      const name = filenameOf(pathOrName);
-      const { data, error } = await supa
-        .from(table)
-        .select(`id, ${col}, turn_id`)
-        .eq('turn_id', turnIdParam);
-
-      if (error || !Array.isArray(data)) return false;
-      const matches = data.filter(r => String(r[col] || '').endsWith('/' + name));
-      if (matches.length === 0) return false;
-
-      let ok = false;
-      for (const m of matches) {
-        ok = (await updateById(table, m.id, note)) || ok;
-      }
-      return ok;
-    }
+    const columns = ['path', 'storage_path', 'photo_path', 'url', 'file'];
 
     async function tryFlag(one) {
-      if (one.id) {
-        const ok = (await updateById('turn_photos', one.id, one.note))
-          || (await updateById('photos', one.id, one.note));
-        attempted.push({ via: 'id', id: one.id, ok });
-        return ok;
-      }
-      if (one.path) {
-        for (const table of ['turn_photos', 'photos']) {
-          for (const col of columns.slice(1)) {
-            const ok = await updateByExactPath(table, turnId, col, one.path, one.note);
-            attempted.push({ via: `exact:${table}.${col}`, path: one.path, ok });
+      const path = String(one.path || '').trim();
+      const photoId = one.photo_id || null;
+      const norm = one.norm || normalizeNotePayload('');
+
+      // Prefer: turn_photos by ID (fast path)
+      if (photoId) {
+        // turn_photos supports new bilingual fields
+        try {
+          const ok = await updateById('turn_photos', photoId, buildTurnPhotoUpdatePayload(ts, norm));
+          if (ok) return true;
+        } catch (e) {
+          // If new columns missing, retry legacy-only payload
+          if (/column .* does not exist/i.test(String(e?.message || e))) {
+            const ok = await updateById('turn_photos', photoId, buildLegacyPhotoUpdatePayload(ts, norm));
             if (ok) return true;
+          } else {
+            // continue to fallbacks
           }
         }
-        for (const table of ['turn_photos', 'photos']) {
-          for (const col of columns.slice(1)) {
-            const ok = await updateByFilename(table, turnId, col, one.path, one.note);
-            attempted.push({ via: `filename:${table}.${col}`, path: one.path, ok });
+
+        // legacy photos table (no bilingual columns assumed)
+        try {
+          const ok2 = await updateById('photos', photoId, buildLegacyPhotoUpdatePayload(ts, norm));
+          if (ok2) return true;
+        } catch {
+          // ignore and fall back
+        }
+      }
+
+      // Next: exact path match across common columns
+      if (path) {
+        for (const col of columns) {
+          // turn_photos exact match (supports bilingual columns)
+          try {
+            const ok = await updateByExactMatch(
+              'turn_photos',
+              { turn_id: turnId, [col]: path },
+              buildTurnPhotoUpdatePayload(ts, norm)
+            );
             if (ok) return true;
+          } catch (e) {
+            if (/column .* does not exist/i.test(String(e?.message || e))) {
+              const ok = await updateByExactMatch(
+                'turn_photos',
+                { turn_id: turnId, [col]: path },
+                buildLegacyPhotoUpdatePayload(ts, norm)
+              );
+              if (ok) return true;
+            }
+          }
+
+          // photos legacy exact match
+          try {
+            const ok2 = await updateByExactMatch(
+              'photos',
+              { turn_id: turnId, [col]: path },
+              buildLegacyPhotoUpdatePayload(ts, norm)
+            );
+            if (ok2) return true;
+          } catch {
+            // ignore
+          }
+        }
+
+        // Last resort: filename match (scan rows for this turn, then update by ID)
+        const fname = filenameOf(path);
+        for (const table of ['turn_photos', 'photos']) {
+          for (const col of columns) {
+            try {
+              const { data, error } = await supa
+                .from(table)
+                .select(`id, ${col}, turn_id`)
+                .eq('turn_id', turnId);
+
+              if (error || !Array.isArray(data)) continue;
+
+              const matches = data.filter(r => String(r[col] || '').endsWith('/' + fname));
+              if (!matches.length) continue;
+
+              let anyOk = false;
+              for (const m of matches) {
+                if (table === 'turn_photos') {
+                  try {
+                    const ok = await updateById('turn_photos', m.id, buildTurnPhotoUpdatePayload(ts, norm));
+                    anyOk = ok || anyOk;
+                  } catch (e) {
+                    if (/column .* does not exist/i.test(String(e?.message || e))) {
+                      const ok = await updateById('turn_photos', m.id, buildLegacyPhotoUpdatePayload(ts, norm));
+                      anyOk = ok || anyOk;
+                    }
+                  }
+                } else {
+                  const ok = await updateById('photos', m.id, buildLegacyPhotoUpdatePayload(ts, norm));
+                  anyOk = ok || anyOk;
+                }
+              }
+              if (anyOk) return true;
+            } catch {
+              // ignore and continue
+            }
           }
         }
       }
-      attempted.push({ via: 'none', path: one.path || null, ok: false });
+
       return false;
     }
 
     for (const n of normalizedNotes) {
-      if (await tryFlag(n)) flagged++;
+      try {
+        if (await tryFlag(n)) flagged++;
+      } catch {
+        // non-blocking by design
+      }
     }
 
     // --- 3) Persist findings rows so the cleaner page can highlight ---
+    // Keep evidence_url as the path (matches existing cleaner logic).
+    // Also write new bilingual columns when available.
     const findingRowsBase = normalizedNotes
       .filter(n => (n.path || '').trim().length > 0)
       .map(n => ({
         id: mkId(),
         turn_id: turnId,
-        evidence_url: n.path, // the cleaner UI compares against photo.path
-        note: (n.note || '').trim() || null,
+        evidence_url: String(n.path || '').trim(),
+        note: (n.norm?.legacy_note || '').trim() || null, // legacy
+        note_original: n.norm?.note_original ?? null,
+        note_original_lang: n.norm?.note_original_lang ?? null,
+        note_translated: n.norm?.note_translated ?? null,
+        note_translated_lang: n.norm?.note_translated_lang ?? null,
+        note_sent: n.norm?.note_sent ?? null,
+        note_sent_lang: n.norm?.note_sent_lang ?? null,
         created_at: ts,
       }));
 
@@ -176,21 +350,41 @@ export default async function handler(req, res) {
       await supa.from('qa_findings').delete().eq('turn_id', turnId);
 
       if (rowsWithSeverity.length) {
-        // Try with severity
         let { data: insData, error: insErr } = await supa
           .from('qa_findings')
           .insert(rowsWithSeverity)
           .select('id');
 
-        // If a CHECK constraint on severity fails, retry without the column
+        // If a CHECK constraint on severity fails, retry without severity
         if (insErr && /severity|check constraint|violates check constraint/i.test(insErr.message || '')) {
           const retry = await supa
             .from('qa_findings')
-            .insert(findingRowsBase) // no severity field
+            .insert(findingRowsBase) // no severity
             .select('id');
 
           insData = retry.data;
           insErr = retry.error;
+        }
+
+        // If new bilingual columns don't exist yet, retry with legacy-only fields
+        if (insErr && /column .* does not exist/i.test(insErr.message || '')) {
+          const legacyRows = findingRowsBase.map(r => ({
+            id: r.id,
+            turn_id: r.turn_id,
+            evidence_url: r.evidence_url,
+            note: r.note,
+            created_at: r.created_at,
+          }));
+
+          const legacyRowsWithSeverity = legacyRows.map(r => ({ ...r, severity: 'warn' }));
+          let retry2 = await supa.from('qa_findings').insert(legacyRowsWithSeverity).select('id');
+
+          if (retry2.error && /severity|check constraint|violates check constraint/i.test(retry2.error.message || '')) {
+            retry2 = await supa.from('qa_findings').insert(legacyRows).select('id');
+          }
+
+          insData = retry2.data;
+          insErr = retry2.error;
         }
 
         if (insErr) {
@@ -240,7 +434,7 @@ export default async function handler(req, res) {
           process.env.NEXT_PUBLIC_SITE_URL ||
           'https://www.turnqa.com';
 
-        // CHANGED: point the cleaner to Capture in needs-fix mode (not the review page)
+        // point the cleaner to Capture in needs-fix mode
         const link = `${base.replace(/\/+$/, '')}/turns/${encodeURIComponent(turnId)}/capture?tab=needs-fix`;
 
         const msg =
@@ -248,6 +442,7 @@ export default async function handler(req, res) {
           (summary ? `Note: ${summary}\n` : '') +
           (flagged > 0 ? `${flagged} item(s) marked.\n` : '') +
           `Resume here: ${link}`;
+
         await sendSmsMinimal(cleanerPhone, msg);
       }
     }
@@ -259,7 +454,7 @@ export default async function handler(req, res) {
       findings_inserted: findingsInserted,
       findings_insert_error: findingsInsertErr,
       summary_used: Boolean(summary),
-      // attempted, // uncomment to debug path-matching attempts
+      // attempted, // uncomment to debug matching attempts
     });
   } catch (e) {
     console.error('[api/turns/[id]/needs-fix] error', e);
