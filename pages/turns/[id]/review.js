@@ -514,7 +514,7 @@ export default function Review() {
         const selected = selectedKeys.has(k);
         const note = (notesByKey[k] || '').trim();
         if (selected || note.length > 0) {
-          payloadNotes.push({ path: p.path || '', note });
+          payloadNotes.push({ photo_id: p.id || null, path: p.path || '', note });
         }
       });
 
