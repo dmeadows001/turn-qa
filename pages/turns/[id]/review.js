@@ -11,7 +11,6 @@ async function fetchTurn(turnId) {
   return j.turn;
 }
 
-
 async function fetchPhotos(turnId) {
   const r = await fetch(`/api/list-turn-photos?id=${turnId}`);
   if (!r.ok) throw new Error((await r.json()).error || 'list-turn-photos failed');
@@ -172,13 +171,42 @@ function keyFor(p) {
   return `${p.area_key || 'area'}::${p.shot_id || 'shot'}`;
 }
 
+function normalizeNote(raw) {
+  const base = { original: '', translated: '', sourceLang: 'en', targetLang: 'es' };
+  if (!raw) return base;
+  if (typeof raw === 'string') return { ...base, original: raw };
+  return { ...base, ...raw };
+}
+
+async function translateViaApi(text, targetLang) {
+  const r = await fetch('/api/translate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, targetLang }),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || 'Translate failed');
+  return String(j.translatedText || '').trim();
+}
+
 // --- PhotoCard at module scope so it doesn't remount each render ---
 const PhotoCard = memo(function PhotoCard({
-  p, isManagerMode, selectedKeys, notesByKey, findingsByKey, setNoteFor, toggleKey
+  p,
+  isManagerMode,
+  selectedKeys,
+  notesByKey,
+  findingsByKey,
+  setNoteFor,
+  toggleKey,
+  onTranslate,
+  translateBusyByKey
 }) {
   const k = keyFor(p);
   const selected = selectedKeys.has(k);
-  const noteVal = notesByKey[k] || '';
+
+  const noteObj = normalizeNote(notesByKey[k]);
+  const originalVal = noteObj.original || '';
+  const translatedVal = noteObj.translated || '';
 
   const isFix = !!p.is_fix;
 
@@ -190,6 +218,8 @@ const PhotoCard = memo(function PhotoCard({
   const managerNote = p.manager_note || (findingsByKey[k]?.note || '');
 
   const styleCard = isFix ? fixCardStyle : (flagged ? flaggedCardStyle : null);
+
+  const busy = !!(translateBusyByKey && translateBusyByKey[k]);
 
   return (
     <div
@@ -259,15 +289,55 @@ const PhotoCard = memo(function PhotoCard({
         <div style={{ color: '#9ca3af' }}>{new Date(p.created_at).toLocaleString()}</div>
         <div style={{ color: '#64748b', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{p.path}</div>
 
-        {isManagerMode && (
-          <div style={{ marginTop:8 }}>
+        {/* OPTION A: Only show note + translation UI when checkbox is checked */}
+        {isManagerMode && selected && !isFix && (
+          <div style={{ marginTop: 10 }}>
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:10, marginBottom:6 }}>
+              <div style={{ fontSize: 11, color: '#94a3b8', fontWeight: 700 }}>
+                Original note (EN)
+              </div>
+
+              <button
+                type="button"
+                onClick={() => onTranslate(p)}
+                disabled={busy || !originalVal.trim()}
+                style={{
+                  ...ui.btnSecondary,
+                  padding: '6px 10px',
+                  border: '1px solid #334155',
+                  background: '#0f172a',
+                  color: '#cbd5e1',
+                  opacity: (busy || !originalVal.trim()) ? 0.6 : 1
+                }}
+                title="Translate English → Spanish"
+              >
+                {busy ? 'Translating…' : 'Translate → ES'}
+              </button>
+            </div>
+
             <textarea
-              value={noteVal}
-              onChange={e => setNoteFor(p, e.target.value)}
+              value={originalVal}
+              onChange={e => setNoteFor(p, { original: e.target.value, sourceLang: 'en' })}
               rows={2}
-              placeholder="Note for this photo (optional)…"
+              placeholder="Write your note in English…"
               style={{ ...ui.input, width:'100%', padding:'8px 10px', resize:'vertical', background:'#0b1220' }}
             />
+
+            <div style={{ fontSize: 11, color: '#94a3b8', fontWeight: 700, margin: '8px 0 6px' }}>
+              Translated note (ES) — sent to cleaner
+            </div>
+
+            <textarea
+              value={translatedVal}
+              onChange={e => setNoteFor(p, { translated: e.target.value, targetLang: 'es' })}
+              rows={2}
+              placeholder="Spanish will appear here… (editable)"
+              style={{ ...ui.input, width:'100%', padding:'8px 10px', resize:'vertical', background:'#0b1220' }}
+            />
+
+            <div style={{ marginTop: 6, fontSize: 11, color: '#64748b' }}>
+              Tip: If you change the English above, click Translate again to refresh the Spanish.
+            </div>
           </div>
         )}
 
@@ -325,10 +395,12 @@ const PhotoCard = memo(function PhotoCard({
   const nk = keyFor(next.p);
   if (pk !== nk) return false; // different photo instance
 
-  // note value for THIS photo
-  const prevNote = prev.notesByKey[pk] || '';
-  const nextNote = next.notesByKey[nk] || '';
-  if (prevNote !== nextNote) return false;
+  // note value for THIS photo (stringify for object support)
+  const prevNote = prev.notesByKey[pk];
+  const nextNote = next.notesByKey[nk];
+  const prevStr = typeof prevNote === 'string' ? prevNote : JSON.stringify(prevNote || {});
+  const nextStr = typeof nextNote === 'string' ? nextNote : JSON.stringify(nextNote || {});
+  if (prevStr !== nextStr) return false;
 
   // selection for THIS photo
   const prevSel = prev.selectedKeys.has(pk);
@@ -343,6 +415,11 @@ const PhotoCard = memo(function PhotoCard({
   const prevFix = !!prev.p.is_fix;
   const nextFix = !!next.p.is_fix;
   if (prevFix !== nextFix) return false;
+
+  // translate busy state for THIS photo (optional prop)
+  const prevBusy = !!(prev.translateBusyByKey && prev.translateBusyByKey[pk]);
+  const nextBusy = !!(next.translateBusyByKey && next.translateBusyByKey[nk]);
+  if (prevBusy !== nextBusy) return false;
 
   return true; // unchanged → skip render
 });
@@ -373,6 +450,9 @@ export default function Review() {
 
   // Findings for highlight + prefill (keyed by photoKey)
   const [findingsByKey, setFindingsByKey] = useState({});
+
+  // Translate busy per-photo
+  const [translateBusyByKey, setTranslateBusyByKey] = useState({});
 
   // Cleaner “fix & resubmit” (only used on cleaner view, kept for parity)
   const [cleanerReply, setCleanerReply] = useState('');
@@ -430,7 +510,9 @@ export default function Review() {
             for (const k of keys) {
               map[k] = { note: (it && it.note) || '', severity: (it && it.severity) || 'warn' };
               if (isManagerMode) sel.add(k);
-              notes[k] = (it && it.note) || '';
+
+              // Prefill note object (original only) for editing
+              notes[k] = { original: (it && it.note) || '', translated: '', sourceLang: 'en', targetLang: 'es' };
             }
           });
 
@@ -471,10 +553,41 @@ export default function Review() {
     });
   }, []);
 
-  const setNoteFor = useCallback((p, text) => {
+  const setNoteFor = useCallback((p, patch) => {
     const k = keyFor(p);
-    setNotesByKey(prev => ({ ...prev, [k]: text }));
+    setNotesByKey(prev => {
+      const cur = normalizeNote(prev[k]);
+      return { ...prev, [k]: { ...cur, ...patch } };
+    });
   }, []);
+
+  const onTranslate = useCallback(async (p) => {
+    const k = keyFor(p);
+    const cur = normalizeNote(notesByKey[k]);
+    const text = (cur.original || '').trim();
+    if (!text) return;
+
+    setTranslateBusyByKey(prev => ({ ...prev, [k]: true }));
+    try {
+      const es = await translateViaApi(text, 'es');
+      setNotesByKey(prev => {
+        const cur2 = normalizeNote(prev[k]);
+        return {
+          ...prev,
+          [k]: {
+            ...cur2,
+            sourceLang: 'en',
+            targetLang: 'es',
+            translated: es
+          }
+        };
+      });
+    } catch (e) {
+      alert(e.message || 'Translate failed');
+    } finally {
+      setTranslateBusyByKey(prev => ({ ...prev, [k]: false }));
+    }
+  }, [notesByKey]);
 
   // --- Approve ---
   async function markApproved() {
@@ -512,9 +625,27 @@ export default function Review() {
       photos.forEach(p => {
         const k = keyFor(p);
         const selected = selectedKeys.has(k);
-        const note = (notesByKey[k] || '').trim();
-        if (selected || note.length > 0) {
-          payloadNotes.push({ photo_id: p.id || null, path: p.path || '', note });
+        const obj = normalizeNote(notesByKey[k]);
+
+        const original = (obj.original || '').trim();
+        const translated = (obj.translated || '').trim();
+
+        // Cleaner should receive Spanish when available; fallback to original
+        const note_to_cleaner = (translated || original || '').trim();
+
+        if (selected || original.length > 0 || translated.length > 0) {
+          payloadNotes.push({
+            photo_id: p.id || null,
+            path: p.path || '',
+            // Legacy field: what the cleaner sees
+            note: note_to_cleaner,
+
+            // Robust fields (backend can store if supported)
+            note_original: original || null,
+            note_translated: translated || null,
+            note_original_lang: original ? (obj.sourceLang || 'en') : null,
+            note_translated_lang: translated ? (obj.targetLang || 'es') : null,
+          });
         }
       });
 
@@ -528,7 +659,7 @@ export default function Review() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          notes: payloadNotes,                 // [{ path, note }]
+          notes: payloadNotes,                 // [{ path, note, note_original, note_translated, ... }]
           summary: (managerNote || '').trim() || null,
           send_sms: true
         })
@@ -542,14 +673,23 @@ export default function Review() {
       const newMap = {};
       const sel = new Set();
       const newNotes = {};
+
       payloadNotes.forEach(it => {
         photos.filter(p => (p.path || '') === it.path).forEach(p => {
           const k = keyFor(p);
           newMap[k] = { note: it.note || '', severity: 'warn' };
           sel.add(k);
-          newNotes[k] = it.note || '';
+
+          // Keep note object for history in UI
+          newNotes[k] = {
+            original: it.note_original || '',
+            translated: it.note_translated || '',
+            sourceLang: it.note_original_lang || 'en',
+            targetLang: it.note_translated_lang || 'es',
+          };
         });
       });
+
       setFindingsByKey(newMap);
       setSelectedKeys(sel);
       setNotesByKey(prev => ({ ...prev, ...newNotes }));
@@ -622,35 +762,34 @@ export default function Review() {
               </div>
 
               {/* Show most recent cleaner message to the manager */}
-{lastCleanerNote && (
-  <div style={{
-    marginTop: 10,
-    padding: 12,
-    borderRadius: 8,
-    // match FIX / cleaner-note green styling
-    border: '1px solid #065f46',
-    background: '#052e2b',
-    color: '#86efac',
-    boxShadow: '0 0 0 3px rgba(5,150,105,0.20) inset',
-  }}>
-    <div
-      style={{
-        fontSize: 12,
-        fontWeight: 700,
-        color: '#bbf7d0',
-        marginBottom: 6,
-        textTransform: 'uppercase',
-        letterSpacing: 0.03,
-      }}
-    >
-      Cleaner note
-    </div>
-    <div style={{ whiteSpace: 'pre-wrap' }}>
-      {lastCleanerNote}
-    </div>
-  </div>
-)}
-
+              {lastCleanerNote && (
+                <div style={{
+                  marginTop: 10,
+                  padding: 12,
+                  borderRadius: 8,
+                  // match FIX / cleaner-note green styling
+                  border: '1px solid #065f46',
+                  background: '#052e2b',
+                  color: '#86efac',
+                  boxShadow: '0 0 0 3px rgba(5,150,105,0.20) inset',
+                }}>
+                  <div
+                    style={{
+                      fontSize: 12,
+                      fontWeight: 700,
+                      color: '#bbf7d0',
+                      marginBottom: 6,
+                      textTransform: 'uppercase',
+                      letterSpacing: 0.03,
+                    }}
+                  >
+                    Cleaner note
+                  </div>
+                  <div style={{ whiteSpace: 'pre-wrap' }}>
+                    {lastCleanerNote}
+                  </div>
+                </div>
+              )}
 
               <div style={{ marginTop:10 }}>
                 <div style={{ fontSize:12, fontWeight:700, color:'#9ca3af', marginBottom:6 }}>
@@ -726,6 +865,8 @@ export default function Review() {
                       findingsByKey={findingsByKey}
                       setNoteFor={setNoteFor}
                       toggleKey={toggleKey}
+                      onTranslate={onTranslate}
+                      translateBusyByKey={translateBusyByKey}
                     />
                   ))}
                 </div>
@@ -769,6 +910,8 @@ export default function Review() {
                         findingsByKey={findingsByKey}
                         setNoteFor={setNoteFor}
                         toggleKey={toggleKey}
+                        onTranslate={onTranslate}
+                        translateBusyByKey={translateBusyByKey}
                       />
                     ))}
                   </div>
