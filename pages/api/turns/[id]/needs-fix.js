@@ -99,6 +99,51 @@ function normalizeNotePayload(note) {
   };
 }
 
+function buildNormFromRow(row) {
+  // If note is already an object, use existing behavior
+  if (row?.note && typeof row.note === 'object') {
+    return normalizeNotePayload(row.note);
+  }
+
+  // If bilingual fields are present at top-level, map them into the object shape
+  const hasBilingual =
+    row?.note_original != null ||
+    row?.note_translated != null ||
+    row?.note_original_lang != null ||
+    row?.note_translated_lang != null ||
+    row?.note_sent != null ||
+    row?.note_sent_lang != null;
+
+  if (hasBilingual) {
+    const original = String(row?.note_original ?? '').trim();
+    const translated = String(row?.note_translated ?? '').trim();
+
+    // What cleaner sees (preferred): note_sent, else note (legacy), else translated/original
+    const sent = String(
+      row?.note_sent ??
+      row?.note ??
+      (translated || original || '')
+    ).trim();
+
+    const original_lang = String(row?.note_original_lang ?? '').trim() || null;
+    const translated_lang = String(row?.note_translated_lang ?? '').trim() || null;
+    const sent_lang = String(row?.note_sent_lang ?? '').trim() || null;
+
+    return normalizeNotePayload({
+      original,
+      translated,
+      sent,
+      original_lang,
+      translated_lang,
+      sent_lang,
+    });
+  }
+
+  // Fallback: treat note as legacy string
+  return normalizeNotePayload(row?.note);
+}
+
+
 function buildTurnPhotoUpdatePayload(ts, norm) {
   const payload = { needs_fix: true, needs_fix_at: ts };
 
@@ -153,19 +198,19 @@ export default async function handler(req, res) {
     const summary = String(b.summary ?? b.overall_note ?? '').trim();
     const notify = Boolean(b.send_sms ?? b.notify ?? true);
 
-    const normalizedNotes = Array.isArray(b.notes)
-      ? b.notes.map(n => ({
-          photo_id: n?.photo_id ?? n?.photoId ?? null,
-          path: String(n?.path || ''),
-          norm: normalizeNotePayload(n?.note),
-        }))
-      : Array.isArray(b.photos)
-        ? b.photos.map(p => ({
-            photo_id: p?.id ?? null,
-            path: String(p?.path || ''),
-            norm: normalizeNotePayload(p?.note),
-          }))
-        : [];
+const normalizedNotes = Array.isArray(b.notes)
+  ? b.notes.map(n => ({
+      photo_id: n?.photo_id ?? n?.photoId ?? null,
+      path: String(n?.path || ''),
+      norm: buildNormFromRow(n),
+    }))
+  : Array.isArray(b.photos)
+    ? b.photos.map(p => ({
+        photo_id: p?.id ?? null,
+        path: String(p?.path || ''),
+        norm: buildNormFromRow(p),
+      }))
+    : [];
 
     const ts = nowIso();
 
