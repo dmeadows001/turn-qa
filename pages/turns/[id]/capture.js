@@ -809,50 +809,65 @@ async function runAiScan() {
     }
   }
 
-  // -------- Submit ONLY fixes (new photos + per-photo notes) --------
-  async function submitFixes() {
-    if (submitting) return;
+// -------- Submit ONLY fixes (new photos + per-photo notes) --------
+async function submitFixes() {
+  if (submitting) return;
 
-    // new photos are those with preview present
-    const newPhotos = Object.values(uploadsByShot)
-      .flat()
-      .filter(f => !!f.preview)
-      .map(f => ({
-        url: f.url,
-        shotId: f.shotId,
-        // send per-photo cleaner note
-        note: (cleanerNoteByNewPath[f.url] || '').trim() || null,
-      }));
+  // new photos are those with preview present
+  const newPhotos = Object.values(uploadsByShot)
+    .flat()
+    .filter(f => !!f.preview)
+    .map(f => ({
+      url: f.url,
+      shotId: f.shotId,
+      // send per-photo cleaner note (still legacy string for now)
+      note: (cleanerNoteByNewPath[f.url] || '').trim() || null,
+    }));
 
-    if (newPhotos.length === 0 && !reply.trim()) {
-      alert('Add at least one new photo or a note before submitting.');
+  const ro = (replyOriginal || '').trim();      // Spanish original
+  const rt = (replyTranslated || '').trim();    // English translated (editable)
+
+  // What gets sent/displayed to the manager
+  const replySent = (rt || ro || '').trim();
+
+  if (newPhotos.length === 0 && !replySent) {
+    alert('Add at least one new photo or a note before submitting.');
+    return;
+  }
+
+  setSubmitting(true);
+  try {
+    const resp = await fetch('/api/turns/submit-fix', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        turn_id: turnId,
+
+        // Legacy (manager-facing): prefer English if present
+        reply: replySent,
+
+        // New bilingual fields for history
+        reply_original: ro || null,
+        reply_translated: rt || null,
+        reply_original_lang: ro ? 'es' : null,
+        reply_translated_lang: rt ? 'en' : null,
+
+        photos: newPhotos, // API will store is_fix + cleaner_note now
+      })
+    });
+
+    const json = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      alert('Submit fixes failed: ' + (json.error || resp.statusText));
       return;
     }
 
-    setSubmitting(true);
-    try {
-      const resp = await fetch('/api/turns/submit-fix', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          turn_id: turnId,
-          reply: reply || '',
-          photos: newPhotos,   // API will store is_fix + cleaner_note now
-        })
-      });
-      const json = await resp.json().catch(() => ({}));
-      if (!resp.ok) {
-        alert('Submit fixes failed: ' + (json.error || resp.statusText));
-        return;
-      }
-
-      alert('Fixes submitted for review ✅');
-      // After submitting fixes, send cleaner back to the capture dashboard
-      window.location.href = '/capture';
-    } finally {
-      setTimeout(() => setSubmitting(false), 200);
-    }
+    alert('Fixes submitted for review ✅');
+    window.location.href = '/capture';
+  } finally {
+    setTimeout(() => setSubmitting(false), 200);
   }
+}
 
   // -------- Render --------
   const debugOn = (() => {
