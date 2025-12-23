@@ -115,10 +115,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     const body = parseBody(req.body);
+
     const turnId = String(body.turnId || body.turn_id || '').trim();
     const photos = Array.isArray(body.photos) ? body.photos : [];
-    // overall cleaner message from the bottom text area
-    const reply: string = String(body.reply || body.cleaner_reply || '').trim();
+
+    // Legacy reply (what manager receives). We will prefer translated reply if provided.
+    const legacyReply: string = String(body.reply || body.cleaner_reply || '').trim();
+
+    // Bilingual reply fields (new)
+    const replyOriginal: string = String(body.reply_original || '').trim();
+    const replyTranslated: string = String(body.reply_translated || '').trim();
+    const replyOriginalLang: string = String(body.reply_original_lang || '').trim();
+    const replyTranslatedLang: string = String(body.reply_translated_lang || '').trim();
+
+    // What we store in cleaner_reply/cleaner_note (manager-facing) — prefer English translated when present
+    const replySent = replyTranslated || legacyReply || replyOriginal;
 
     if (!turnId) return res.status(400).json({ error: 'turnId is required' });
 
@@ -137,19 +148,48 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    // 2) Update the turn with cleaner reply + status
+    // 2) Update the turn with cleaner reply + status + bilingual fields
     try {
-      const updates: any = { status: 'submitted' };
-      if (reply) {
-        // write to BOTH columns for compatibility
-        updates.cleaner_reply = reply;
-        updates.cleaner_note = reply;
+      const updates: any = {
+        status: 'submitted',
+        submitted_at: nowIso(),
+      };
+
+      // Legacy fields for compatibility (what manager sees)
+      if (replySent) {
+        updates.cleaner_reply = replySent;
+        updates.cleaner_note = replySent;
       }
 
-      const { error: updErr } = await supa
-        .from('turns')
-        .update(updates)
-        .eq('id', turnId);
+      // Bilingual fields (only if present; columns exist in your DB per your screenshot)
+      const ro = replyOriginal || replySent; // original (Spanish) - fallback if UI only sent reply
+      const rt = replyTranslated || null;     // translated (English)
+
+      if (ro) updates.cleaner_reply_original = ro;
+      updates.cleaner_reply_translated = rt;
+
+      // Lang defaults: if translated exists, we can confidently set es/en
+      const rol = replyOriginalLang || (ro ? 'es' : null);
+      const rtl = replyTranslatedLang || (rt ? 'en' : null);
+
+      updates.cleaner_reply_original_lang = rol;
+      updates.cleaner_reply_translated_lang = rtl;
+
+      let { error: updErr } = await supa.from('turns').update(updates).eq('id', turnId);
+
+      // Extra safety: if any environment lacks bilingual columns, retry without them (do not break flow)
+      if (updErr && /column .* does not exist/i.test(updErr.message || '')) {
+        const fallback: any = {
+          status: updates.status,
+          submitted_at: updates.submitted_at,
+        };
+        if (replySent) {
+          fallback.cleaner_reply = replySent;
+          fallback.cleaner_note = replySent;
+        }
+        const retry = await supa.from('turns').update(fallback).eq('id', turnId);
+        updErr = retry.error || null;
+      }
 
       if (updErr) {
         console.warn('[submit-fix] could not update turns row:', updErr.message || updErr);
@@ -170,7 +210,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       ok: true,
       notify,
       newStatus: 'submitted',
-      replySaved: !!reply,
+      replySaved: !!replySent,
+      bilingualSaved: !!(replyOriginal || replyTranslated),
+      replySentPreview: replySent ? replySent.slice(0, 80) : '',
       testMode: process.env.DISABLE_SMS === '1',
     });
   } catch (e: any) {
