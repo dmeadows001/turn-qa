@@ -38,7 +38,7 @@ async function fetchPhotos(turnId) {
     }));
 }
 
-// Load existing findings for this turn: { findings: [{ path, note, severity? }] }
+// Load existing findings for this turn: { findings: [{ path, note, ...bilingual fields... }] }
 async function fetchFindings(turnId) {
   try {
     const r = await fetch(`/api/turns/${turnId}/findings`);
@@ -189,6 +189,43 @@ async function translateViaApi(text, targetLang) {
   return String(j.translatedText || '').trim();
 }
 
+function lc(s) { return String(s || '').toLowerCase(); }
+
+// For manager review:
+// - Needs-fix (manager→cleaner): show manager ORIGINAL EN for manager reference.
+// - Fix (cleaner→manager): show EN (usually translated).
+function pickEnglishForManager(finding) {
+  if (!finding) return '';
+
+  const o = String(finding.note_original || '').trim();
+  const t = String(finding.note_translated || '').trim();
+  const sent = String(finding.note_sent || '').trim();
+  const legacy = String(finding.note || '').trim();
+
+  const oLang = lc(finding.note_original_lang);
+  const tLang = lc(finding.note_translated_lang);
+  const sentLang = lc(finding.note_sent_lang);
+
+  if (oLang === 'en' && o) return o;
+  if (tLang === 'en' && t) return t;
+  if (sentLang === 'en' && sent) return sent;
+
+  // reasonable fallbacks
+  if (o) return o;
+  if (t) return t;
+  if (sent) return sent;
+  return legacy;
+}
+
+// What was actually sent to cleaner (normally ES), useful for cleaner view (or optional manager reference)
+function pickNoteSentToCleaner(finding) {
+  if (!finding) return '';
+  const sent = String(finding.note_sent || '').trim();
+  if (sent) return sent;
+  const legacy = String(finding.note || '').trim();
+  return legacy;
+}
+
 // --- PhotoCard at module scope so it doesn't remount each render ---
 const PhotoCard = memo(function PhotoCard({
   p,
@@ -210,16 +247,27 @@ const PhotoCard = memo(function PhotoCard({
 
   const isFix = !!p.is_fix;
 
-  const flaggedFromFindings = !!findingsByKey[k];
+  const finding = findingsByKey[k] || null;
+
+  const flaggedFromFindings = !!finding;
   const flaggedFromRow = !!p.needs_fix;
   // Only ORIGINAL photos can be “needs fix”
   const flagged = !isFix && (flaggedFromFindings || flaggedFromRow);
 
-  const managerNote = p.manager_note || (findingsByKey[k]?.note || '');
-
   const styleCard = isFix ? fixCardStyle : (flagged ? flaggedCardStyle : null);
 
   const busy = !!(translateBusyByKey && translateBusyByKey[k]);
+
+  // Manager-facing note logic:
+  // - Needs-fix (amber): manager should see their ORIGINAL EN reference
+  // - Fix (green): manager sees EN only (cleaner’s translated)
+  const managerNoteEnglish =
+    (isManagerMode && flagged)
+      ? (pickEnglishForManager(finding) || String(p.manager_note || '').trim())
+      : '';
+
+  // What cleaner sees (ES) — keep for non-manager view
+  const noteToCleaner = pickNoteSentToCleaner(finding) || String(p.manager_note || '').trim();
 
   return (
     <div
@@ -341,7 +389,8 @@ const PhotoCard = memo(function PhotoCard({
           </div>
         )}
 
-        {isManagerMode && flagged && managerNote && (
+        {/* Manager view: show ORIGINAL EN for needs-fix cards (manager memory) */}
+        {isManagerMode && flagged && !!managerNoteEnglish && (
           <div
             style={{
               marginTop: 8,
@@ -353,12 +402,13 @@ const PhotoCard = memo(function PhotoCard({
             }}
           >
             <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 4, fontWeight: 700 }}>
-              Manager note (sent to cleaner)
+              Manager note (original EN)
             </div>
-            <div style={{ whiteSpace: 'pre-wrap' }}>{managerNote}</div>
+            <div style={{ whiteSpace: 'pre-wrap' }}>{managerNoteEnglish}</div>
           </div>
         )}
 
+        {/* Fix photo: show cleaner note (assumed already EN for manager) */}
         {isFix && !!p.cleaner_note && (
           <div style={{
             marginTop:8,
@@ -373,7 +423,8 @@ const PhotoCard = memo(function PhotoCard({
           </div>
         )}
 
-        {!isManagerMode && flagged && managerNote && (
+        {/* Cleaner / non-manager view: show the note that was SENT to cleaner (normally ES) */}
+        {!isManagerMode && flagged && !!noteToCleaner && (
           <div style={{
             marginTop:8,
             padding:'8px 10px',
@@ -383,7 +434,7 @@ const PhotoCard = memo(function PhotoCard({
             color:'#cbd5e1'
           }}>
             <div style={{ fontSize:11, color:'#94a3b8', marginBottom:4, fontWeight:700 }}>Manager note</div>
-            <div style={{ whiteSpace:'pre-wrap' }}>{managerNote}</div>
+            <div style={{ whiteSpace:'pre-wrap' }}>{noteToCleaner}</div>
           </div>
         )}
       </div>
@@ -407,7 +458,7 @@ const PhotoCard = memo(function PhotoCard({
   const nextSel = next.selectedKeys.has(nk);
   if (prevSel !== nextSel) return false;
 
-  // flagged / FIX state for THIS photo
+  // flagged state for THIS photo (presence of finding)
   const prevFlag = !!prev.findingsByKey[pk];
   const nextFlag = !!next.findingsByKey[nk];
   if (prevFlag !== nextFlag) return false;
@@ -508,11 +559,33 @@ export default function Review() {
             const path = (it && it.path) || '';
             const keys = pathToKeys[path] || [];
             for (const k of keys) {
-              map[k] = { note: (it && it.note) || '', severity: (it && it.severity) || 'warn' };
+              // IMPORTANT: keep full finding object so manager can access bilingual fields later
+              map[k] = it;
+
               if (isManagerMode) sel.add(k);
 
-              // Prefill note object (original only) for editing
-              notes[k] = { original: (it && it.note) || '', translated: '', sourceLang: 'en', targetLang: 'es' };
+              // Prefill editable note object:
+              // - original: prefer EN original if present, else legacy note
+              // - translated: prefer ES translated if present
+              const o = String(it.note_original || '').trim();
+              const t2 = String(it.note_translated || '').trim();
+              const oLang = lc(it.note_original_lang);
+              const tLang = lc(it.note_translated_lang);
+
+              const originalPref =
+                (oLang === 'en' && o) ? o :
+                (o ? o : String(it.note || ''));
+
+              const translatedPref =
+                (tLang === 'es' && t2) ? t2 :
+                (t2 ? t2 : '');
+
+              notes[k] = {
+                original: originalPref || '',
+                translated: translatedPref || '',
+                sourceLang: oLang || 'en',
+                targetLang: tLang || 'es',
+              };
             }
           });
 
@@ -677,7 +750,18 @@ export default function Review() {
       payloadNotes.forEach(it => {
         photos.filter(p => (p.path || '') === it.path).forEach(p => {
           const k = keyFor(p);
-          newMap[k] = { note: it.note || '', severity: 'warn' };
+
+          // IMPORTANT: keep a finding-like object so PhotoCard can pick EN/ES correctly
+          newMap[k] = {
+            path: it.path || '',
+            note: it.note || '',
+            note_original: it.note_original || '',
+            note_translated: it.note_translated || '',
+            note_original_lang: it.note_original_lang || 'en',
+            note_translated_lang: it.note_translated_lang || 'es',
+            severity: 'warn'
+          };
+
           sel.add(k);
 
           // Keep note object for history in UI
