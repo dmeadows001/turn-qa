@@ -77,6 +77,7 @@ export default function Capture() {
         const j = await r.json().catch(() => ({}));
         const t = j && (j.turn || null);
         if (t && t.status === 'in_progress') {
+          //igger created
           // If launcher initiated this visit, do NOT bounce (prevents loop).
           try {
             const sp = new URLSearchParams(window.location.search);
@@ -116,8 +117,11 @@ export default function Capture() {
   const [fixNotes, setFixNotes] = useState({ byPath: {}, overall: '', count: 0 });
   const [hideFixBanner, setHideFixBanner] = useState(false);
 
-  // Cleaner overall reply (optional)
-  const [reply, setReply] = useState('');
+  // Cleaner overall reply (optional) — bilingual (ES original + EN translated)
+  const [replyOriginal, setReplyOriginal] = useState('');
+  const [replyTranslated, setReplyTranslated] = useState('');
+  const [isTranslatingReply, setIsTranslatingReply] = useState(false);
+  const [translateReplyError, setTranslateReplyError] = useState('');
 
   // Per-new-photo cleaner notes (keyed by storage path)
   const [cleanerNoteByNewPath, setCleanerNoteByNewPath] = useState({});
@@ -288,6 +292,30 @@ export default function Capture() {
   function closePicker() {
     setPickerVisible(false);
     setPickerShot(null);
+  }
+
+  // --- Translate helper for cleaner reply (Spanish -> English) ---
+  async function translateReplyToEnglish() {
+    setTranslateReplyError('');
+    const text = String(replyOriginal || '').trim();
+    if (!text) return;
+
+    setIsTranslatingReply(true);
+    try {
+      const r = await fetch('/api/translate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, targetLang: 'en' }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j?.error || 'Translate failed');
+
+      setReplyTranslated(String(j?.translatedText || '').trim());
+    } catch (e) {
+      setTranslateReplyError(e?.message || 'Translate failed');
+    } finally {
+      setIsTranslatingReply(false);
+    }
   }
 
   // --- Load existing photos for this turn (ensures we only bucket into *visible* shots) ---
@@ -809,65 +837,65 @@ async function runAiScan() {
     }
   }
 
-// -------- Submit ONLY fixes (new photos + per-photo notes) --------
-async function submitFixes() {
-  if (submitting) return;
+  // -------- Submit ONLY fixes (new photos + per-photo notes) --------
+  async function submitFixes() {
+    if (submitting) return;
 
-  // new photos are those with preview present
-  const newPhotos = Object.values(uploadsByShot)
-    .flat()
-    .filter(f => !!f.preview)
-    .map(f => ({
-      url: f.url,
-      shotId: f.shotId,
-      // send per-photo cleaner note (still legacy string for now)
-      note: (cleanerNoteByNewPath[f.url] || '').trim() || null,
-    }));
+    // new photos are those with preview present
+    const newPhotos = Object.values(uploadsByShot)
+      .flat()
+      .filter(f => !!f.preview)
+      .map(f => ({
+        url: f.url,
+        shotId: f.shotId,
+        // send per-photo cleaner note (still legacy string for now)
+        note: (cleanerNoteByNewPath[f.url] || '').trim() || null,
+      }));
 
-  const ro = (replyOriginal || '').trim();      // Spanish original
-  const rt = (replyTranslated || '').trim();    // English translated (editable)
+    const ro = (replyOriginal || '').trim();      // Spanish original
+    const rt = (replyTranslated || '').trim();    // English translated (editable)
 
-  // What gets sent/displayed to the manager
-  const replySent = (rt || ro || '').trim();
+    // What gets sent/displayed to the manager
+    const replySent = (rt || ro || '').trim();
 
-  if (newPhotos.length === 0 && !replySent) {
-    alert('Add at least one new photo or a note before submitting.');
-    return;
-  }
-
-  setSubmitting(true);
-  try {
-    const resp = await fetch('/api/turns/submit-fix', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        turn_id: turnId,
-
-        // Legacy (manager-facing): prefer English if present
-        reply: replySent,
-
-        // New bilingual fields for history
-        reply_original: ro || null,
-        reply_translated: rt || null,
-        reply_original_lang: ro ? 'es' : null,
-        reply_translated_lang: rt ? 'en' : null,
-
-        photos: newPhotos, // API will store is_fix + cleaner_note now
-      })
-    });
-
-    const json = await resp.json().catch(() => ({}));
-    if (!resp.ok) {
-      alert('Submit fixes failed: ' + (json.error || resp.statusText));
+    if (newPhotos.length === 0 && !replySent) {
+      alert('Add at least one new photo or a note before submitting.');
       return;
     }
 
-    alert('Fixes submitted for review ✅');
-    window.location.href = '/capture';
-  } finally {
-    setTimeout(() => setSubmitting(false), 200);
+    setSubmitting(true);
+    try {
+      const resp = await fetch('/api/turns/submit-fix', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          turn_id: turnId,
+
+          // Legacy (manager-facing): prefer English if present
+          reply: replySent,
+
+          // New bilingual fields for history
+          reply_original: ro || null,
+          reply_translated: rt || null,
+          reply_original_lang: ro ? 'es' : null,
+          reply_translated_lang: rt ? 'en' : null,
+
+          photos: newPhotos, // API will store is_fix + cleaner_note now
+        })
+      });
+
+      const json = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        alert('Submit fixes failed: ' + (json.error || resp.statusText));
+        return;
+      }
+
+      alert('Fixes submitted for review ✅');
+      window.location.href = '/capture';
+    } finally {
+      setTimeout(() => setSubmitting(false), 200);
+    }
   }
-}
 
   // -------- Render --------
   const debugOn = (() => {
@@ -1171,7 +1199,6 @@ async function submitFixes() {
                           </div>
                         </div>
 
-
                         {/* Manager note (if flagged) visible to cleaner */}
                         {managerNote && (
                           <div style={{
@@ -1186,7 +1213,9 @@ async function submitFixes() {
                         {/* Cleaner per-photo note editor ONLY for newly added fixes (with preview) */}
                         {f.preview && f.isFix && (
                           <div style={{ marginTop:8 }}>
-                            <div style={{ fontSize:12, color:'#9ca3af', marginBottom:4, fontWeight:700 }}>Note to manager (for this fix)</div>
+                            <div style={{ fontSize:12, color:'#9ca3af', marginBottom:4, fontWeight:700 }}>
+                              Note to manager (for this fix)
+                            </div>
                             <textarea
                               rows={2}
                               value={cleanerNoteByNewPath[f.url] || ''}
@@ -1219,16 +1248,54 @@ async function submitFixes() {
           <div style={{ display:'flex', flexDirection:'column', gap:12, marginTop:16, maxWidth:520 }}>
             {tab === 'needs-fix' ? (
               <>
+                <div style={{ fontSize: 12, color: '#9ca3af', marginBottom: 6, fontWeight: 700 }}>
+                  Message to manager (Spanish → translate to English)
+                </div>
+
                 <textarea
-                  value={reply}
-                  onChange={e => setReply(e.target.value)}
-                  placeholder="Message to manager (optional)"
+                  value={replyOriginal}
+                  onChange={e => setReplyOriginal(e.target.value)}
+                  placeholder="Escribe tu mensaje en Español…"
                   style={{
                     width:'100%', minHeight:80, padding:10,
                     borderRadius:8, border:'1px solid #334155',
-                    color:'#e5e7eb', background:'#0b1220'
+                    color:'#e5e7eb', background:'#0b1220',
+                    resize:'vertical'
                   }}
                 />
+
+                <div style={{ display:'flex', gap:10, alignItems:'center', marginTop:8 }}>
+                  <ThemedButton
+                    kind="secondary"
+                    onClick={translateReplyToEnglish}
+                    loading={isTranslatingReply}
+                    disabled={isTranslatingReply || !String(replyOriginal || '').trim()}
+                    ariaLabel="Translate to English"
+                  >
+                    🌐 Translate to English
+                  </ThemedButton>
+
+                  {translateReplyError ? (
+                    <div style={{ fontSize: 12, color: '#fca5a5' }}>{translateReplyError}</div>
+                  ) : null}
+                </div>
+
+                <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 10, marginBottom: 6, fontWeight: 700 }}>
+                  Translated (English — manager receives this)
+                </div>
+
+                <textarea
+                  value={replyTranslated}
+                  onChange={e => setReplyTranslated(e.target.value)}
+                  placeholder="English version will appear here… (editable)"
+                  style={{
+                    width:'100%', minHeight:80, padding:10,
+                    borderRadius:8, border:'1px solid #334155',
+                    color:'#e5e7eb', background:'#0b1220',
+                    resize:'vertical'
+                  }}
+                />
+
                 <ThemedButton onClick={submitFixes} loading={submitting} kind="secondary" ariaLabel="Submit Fixes" full>
                   🔧 Submit Fixes
                 </ThemedButton>
