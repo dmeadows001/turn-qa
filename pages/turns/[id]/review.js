@@ -491,8 +491,10 @@ export default function Review() {
   const [loading, setLoading] = useState(true);
   const [loadErr, setLoadErr] = useState('');
 
-  // Manager notes (top-level summary) + per-photo selections/notes
-  const [managerNote, setManagerNote] = useState('');
+  // Top-level summary note (Option B)
+  const [summaryNote, setSummaryNote] = useState({ original: '', translated: '', sourceLang: 'en', targetLang: 'es' });
+  const [summaryBusy, setSummaryBusy] = useState(false);
+
   const [acting, setActing] = useState(false);
 
   // Per-photo state (keyed by stable key)
@@ -535,7 +537,9 @@ export default function Review() {
         setLastCleanerNote(cleanerNote);
         setCleanerReply('');
 
-        setManagerNote((t && t.manager_note) || '');
+        // Backward compat: if we only have legacy turn.manager_note, treat it as EN original.
+        const legacySummary = String((t && t.manager_note) || '').trim();
+        setSummaryNote({ original: legacySummary, translated: '', sourceLang: 'en', targetLang: 'es' });
 
         setPhotos(ph);
 
@@ -662,6 +666,25 @@ export default function Review() {
     }
   }, [notesByKey]);
 
+  async function translateSummaryToEs() {
+    const text = String(summaryNote.original || '').trim();
+    if (!text) return;
+    setSummaryBusy(true);
+    try {
+      const es = await translateViaApi(text, 'es');
+      setSummaryNote(prev => ({
+        ...prev,
+        sourceLang: 'en',
+        targetLang: 'es',
+        translated: es
+      }));
+    } catch (e) {
+      alert(e.message || 'Translate failed');
+    } finally {
+      setSummaryBusy(false);
+    }
+  }
+
   // --- Approve ---
   async function markApproved() {
     if (!turnId) return;
@@ -669,10 +692,15 @@ export default function Review() {
     try {
       const ok = window.confirm('Approve this turn?');
       if (!ok) return;
+
+      // Keep existing API contract: send a single string.
+      // Manager is English-speaking, so store the EN original here.
+      const manager_note = String(summaryNote.original || '').trim();
+
       const r = await fetch('/api/update-turn-status', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ turn_id: turnId, new_status: 'approved', manager_note: managerNote || '' })
+        body: JSON.stringify({ turn_id: turnId, new_status: 'approved', manager_note })
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error || 'update failed');
@@ -713,27 +741,45 @@ export default function Review() {
             // Legacy field: what the cleaner sees
             note: note_to_cleaner,
 
-            // Robust fields (backend can store if supported)
+            // Robust fields
             note_original: original || null,
             note_translated: translated || null,
             note_original_lang: original ? (obj.sourceLang || 'en') : null,
             note_translated_lang: translated ? (obj.targetLang || 'es') : null,
+
+            // Also include "sent" explicitly for robustness
+            note_sent: note_to_cleaner || null,
+            note_sent_lang: translated ? (obj.targetLang || 'es') : (original ? (obj.sourceLang || 'en') : null),
           });
         }
       });
 
-      if (payloadNotes.length === 0 && !(managerNote || '').trim()) {
+      const summaryOriginal = String(summaryNote.original || '').trim();
+      const summaryTranslated = String(summaryNote.translated || '').trim();
+      const summarySent = (summaryTranslated || summaryOriginal || '').trim();
+
+      if (payloadNotes.length === 0 && !summarySent) {
         alert('Select at least one photo or add a summary note before sending “Needs fix”.');
         setActing(false);
         return;
       }
+
+      // Send bilingual summary object (backend supports this now)
+      const summaryPayload = summarySent ? {
+        original: summaryOriginal || '',
+        translated: summaryTranslated || '',
+        sent: summarySent || '',
+        original_lang: summaryOriginal ? (summaryNote.sourceLang || 'en') : null,
+        translated_lang: summaryTranslated ? (summaryNote.targetLang || 'es') : null,
+        sent_lang: summaryTranslated ? (summaryNote.targetLang || 'es') : (summaryOriginal ? (summaryNote.sourceLang || 'en') : null),
+      } : null;
 
       const r = await fetch(`/api/turns/${turnId}/needs-fix`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           notes: payloadNotes,                 // [{ path, note, note_original, note_translated, ... }]
-          summary: (managerNote || '').trim() || null,
+          summary: summaryPayload,
           send_sms: true
         })
       });
@@ -759,6 +805,8 @@ export default function Review() {
             note_translated: it.note_translated || '',
             note_original_lang: it.note_original_lang || 'en',
             note_translated_lang: it.note_translated_lang || 'es',
+            note_sent: it.note_sent || it.note || '',
+            note_sent_lang: it.note_sent_lang || (it.note_translated ? 'es' : 'en'),
             severity: 'warn'
           };
 
@@ -875,15 +923,36 @@ export default function Review() {
                 </div>
               )}
 
+              {/* SUMMARY (Option B translator) */}
               <div style={{ marginTop:10 }}>
-                <div style={{ fontSize:12, fontWeight:700, color:'#9ca3af', marginBottom:6 }}>
-                  Optional overall note to cleaner (summary)
+                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:10, marginBottom:6 }}>
+                  <div style={{ fontSize:12, fontWeight:700, color:'#9ca3af' }}>
+                    Optional overall note to cleaner (summary) — Original (EN)
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={translateSummaryToEs}
+                    disabled={summaryBusy || !String(summaryNote.original || '').trim()}
+                    style={{
+                      ...ui.btnSecondary,
+                      padding: '6px 10px',
+                      border: '1px solid #334155',
+                      background: '#0b1220',
+                      color: '#cbd5e1',
+                      opacity: (summaryBusy || !String(summaryNote.original || '').trim()) ? 0.6 : 1
+                    }}
+                    title="Translate English → Spanish"
+                  >
+                    {summaryBusy ? 'Translating…' : 'Translate → ES'}
+                  </button>
                 </div>
+
                 <textarea
-                  value={managerNote}
-                  onChange={e=>setManagerNote(e.target.value)}
+                  value={summaryNote.original}
+                  onChange={e => setSummaryNote(prev => ({ ...prev, original: e.target.value, sourceLang: 'en' }))}
                   rows={3}
-                  placeholder="Short summary the cleaner can see…"
+                  placeholder="Write your summary in English…"
                   style={{
                     ...ui.input,
                     width:'100%',
@@ -892,6 +961,28 @@ export default function Review() {
                     background:'#0b1220'
                   }}
                 />
+
+                <div style={{ fontSize:12, fontWeight:700, color:'#9ca3af', margin:'10px 0 6px' }}>
+                  Translated (ES) — sent to cleaner
+                </div>
+
+                <textarea
+                  value={summaryNote.translated}
+                  onChange={e => setSummaryNote(prev => ({ ...prev, translated: e.target.value, targetLang: 'es' }))}
+                  rows={3}
+                  placeholder="Spanish will appear here… (editable)"
+                  style={{
+                    ...ui.input,
+                    width:'100%',
+                    padding:'10px 12px',
+                    resize:'vertical',
+                    background:'#0b1220'
+                  }}
+                />
+
+                <div style={{ marginTop: 6, fontSize: 11, color: '#64748b' }}>
+                  Tip: If you change the English above, click Translate again to refresh the Spanish.
+                </div>
               </div>
 
               <div style={{ display:'flex', gap:10, marginTop:12, flexWrap:'wrap' }}>
