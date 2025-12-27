@@ -46,7 +46,7 @@ function filenameOf(p) {
 
 // Normalize note payload:
 // - old: note is string
-// - new (future): note can be object { original, translated, sent, original_lang, translated_lang, sent_lang }
+// - new: note can be object { original, translated, sent, original_lang, translated_lang, sent_lang }
 function normalizeNotePayload(note) {
   const raw = note;
 
@@ -143,7 +143,6 @@ function buildNormFromRow(row) {
   return normalizeNotePayload(row?.note);
 }
 
-
 function buildTurnPhotoUpdatePayload(ts, norm) {
   const payload = { needs_fix: true, needs_fix_at: ts };
 
@@ -152,7 +151,7 @@ function buildTurnPhotoUpdatePayload(ts, norm) {
     payload.manager_notes = String(norm.legacy_note).trim();
   }
 
-  // new bilingual columns (safe even if DB doesn’t have them; we’ll swallow column-missing errors)
+  // new bilingual columns
   payload.manager_note_original = norm?.manager_note_original ?? null;
   payload.manager_note_original_lang = norm?.manager_note_original_lang ?? null;
   payload.manager_note_translated = norm?.manager_note_translated ?? null;
@@ -195,22 +194,26 @@ export default async function handler(req, res) {
     //  - { notes: [{ path, note, photo_id? }], summary?, send_sms? }
     //  - { photos: [{ id?, path?, note? }], overall_note?, notify? }
     const b = req.body || {};
-    const summary = String(b.summary ?? b.overall_note ?? '').trim();
+
+    // --- SUMMARY: can be string OR bilingual object ---
+    const summaryRaw = b.summary ?? b.overall_note ?? '';
+    const summaryNorm = normalizeNotePayload(summaryRaw);
+    const summaryLegacy = String(summaryNorm.legacy_note || '').trim();
     const notify = Boolean(b.send_sms ?? b.notify ?? true);
 
-const normalizedNotes = Array.isArray(b.notes)
-  ? b.notes.map(n => ({
-      photo_id: n?.photo_id ?? n?.photoId ?? null,
-      path: String(n?.path || ''),
-      norm: buildNormFromRow(n),
-    }))
-  : Array.isArray(b.photos)
-    ? b.photos.map(p => ({
-        photo_id: p?.id ?? null,
-        path: String(p?.path || ''),
-        norm: buildNormFromRow(p),
-      }))
-    : [];
+    const normalizedNotes = Array.isArray(b.notes)
+      ? b.notes.map(n => ({
+          photo_id: n?.photo_id ?? n?.photoId ?? null,
+          path: String(n?.path || ''),
+          norm: buildNormFromRow(n),
+        }))
+      : Array.isArray(b.photos)
+        ? b.photos.map(p => ({
+            photo_id: p?.id ?? null,
+            path: String(p?.path || ''),
+            norm: buildNormFromRow(p),
+          }))
+        : [];
 
     const ts = nowIso();
 
@@ -219,9 +222,17 @@ const normalizedNotes = Array.isArray(b.notes)
       const payload = {
         status: 'needs_fix',
         needs_fix_at: ts,
-        manager_note: summary || null,          // legacy
-        manager_note_original: summary || null, // new
-        manager_note_sent: summary || null,     // new
+
+        // legacy: always store what the cleaner should see (sent)
+        manager_note: summaryLegacy || null,
+
+        // new bilingual summary fields
+        manager_note_original: summaryNorm.manager_note_original ?? null,
+        manager_note_original_lang: summaryNorm.manager_note_original_lang ?? null,
+        manager_note_translated: summaryNorm.manager_note_translated ?? null,
+        manager_note_translated_lang: summaryNorm.manager_note_translated_lang ?? null,
+        manager_note_sent: summaryNorm.manager_note_sent ?? (summaryLegacy || null),
+        manager_note_sent_lang: summaryNorm.manager_note_sent_lang ?? null,
       };
 
       const { error } = await supa.from('turns').update(payload).eq('id', turnId);
@@ -234,7 +245,7 @@ const normalizedNotes = Array.isArray(b.notes)
             .update({
               status: 'needs_fix',
               needs_fix_at: ts,
-              manager_note: summary || null,
+              manager_note: summaryLegacy || null,
             })
             .eq('id', turnId);
           if (e2) throw e2;
@@ -253,35 +264,28 @@ const normalizedNotes = Array.isArray(b.notes)
       const photoId = one.photo_id || null;
       const norm = one.norm || normalizeNotePayload('');
 
-      // Prefer: turn_photos by ID (fast path)
+      // Prefer: turn_photos by ID
       if (photoId) {
-        // turn_photos supports new bilingual fields
         try {
           const ok = await updateById('turn_photos', photoId, buildTurnPhotoUpdatePayload(ts, norm));
           if (ok) return true;
         } catch (e) {
-          // If new columns missing, retry legacy-only payload
           if (/column .* does not exist/i.test(String(e?.message || e))) {
             const ok = await updateById('turn_photos', photoId, buildLegacyPhotoUpdatePayload(ts, norm));
             if (ok) return true;
-          } else {
-            // continue to fallbacks
           }
         }
 
-        // legacy photos table (no bilingual columns assumed)
+        // legacy photos table
         try {
           const ok2 = await updateById('photos', photoId, buildLegacyPhotoUpdatePayload(ts, norm));
           if (ok2) return true;
-        } catch {
-          // ignore and fall back
-        }
+        } catch {}
       }
 
-      // Next: exact path match across common columns
+      // Next: exact path match
       if (path) {
         for (const col of columns) {
-          // turn_photos exact match (supports bilingual columns)
           try {
             const ok = await updateByExactMatch(
               'turn_photos',
@@ -300,7 +304,6 @@ const normalizedNotes = Array.isArray(b.notes)
             }
           }
 
-          // photos legacy exact match
           try {
             const ok2 = await updateByExactMatch(
               'photos',
@@ -308,12 +311,10 @@ const normalizedNotes = Array.isArray(b.notes)
               buildLegacyPhotoUpdatePayload(ts, norm)
             );
             if (ok2) return true;
-          } catch {
-            // ignore
-          }
+          } catch {}
         }
 
-        // Last resort: filename match (scan rows for this turn, then update by ID)
+        // Last resort: filename match
         const fname = filenameOf(path);
         for (const table of ['turn_photos', 'photos']) {
           for (const col of columns) {
@@ -346,9 +347,7 @@ const normalizedNotes = Array.isArray(b.notes)
                 }
               }
               if (anyOk) return true;
-            } catch {
-              // ignore and continue
-            }
+            } catch {}
           }
         }
       }
@@ -359,14 +358,10 @@ const normalizedNotes = Array.isArray(b.notes)
     for (const n of normalizedNotes) {
       try {
         if (await tryFlag(n)) flagged++;
-      } catch {
-        // non-blocking by design
-      }
+      } catch {}
     }
 
     // --- 3) Persist findings rows so the cleaner page can highlight ---
-    // Keep evidence_url as the path (matches existing cleaner logic).
-    // Also write new bilingual columns when available.
     const findingRowsBase = normalizedNotes
       .filter(n => (n.path || '').trim().length > 0)
       .map(n => ({
@@ -383,7 +378,6 @@ const normalizedNotes = Array.isArray(b.notes)
         created_at: ts,
       }));
 
-    // First attempt: include severity = 'warn'
     const rowsWithSeverity = findingRowsBase.map(r => ({ ...r, severity: 'warn' }));
 
     let findingsInserted = 0;
@@ -391,7 +385,6 @@ const normalizedNotes = Array.isArray(b.notes)
     const findingsTriedToInsert = findingRowsBase.length;
 
     try {
-      // Clear previous findings for this turn
       await supa.from('qa_findings').delete().eq('turn_id', turnId);
 
       if (rowsWithSeverity.length) {
@@ -400,18 +393,15 @@ const normalizedNotes = Array.isArray(b.notes)
           .insert(rowsWithSeverity)
           .select('id');
 
-        // If a CHECK constraint on severity fails, retry without severity
         if (insErr && /severity|check constraint|violates check constraint/i.test(insErr.message || '')) {
           const retry = await supa
             .from('qa_findings')
-            .insert(findingRowsBase) // no severity
+            .insert(findingRowsBase)
             .select('id');
-
           insData = retry.data;
           insErr = retry.error;
         }
 
-        // If new bilingual columns don't exist yet, retry with legacy-only fields
         if (insErr && /column .* does not exist/i.test(insErr.message || '')) {
           const legacyRows = findingRowsBase.map(r => ({
             id: r.id,
@@ -479,12 +469,11 @@ const normalizedNotes = Array.isArray(b.notes)
           process.env.NEXT_PUBLIC_SITE_URL ||
           'https://www.turnqa.com';
 
-        // point the cleaner to Capture in needs-fix mode
         const link = `${base.replace(/\/+$/, '')}/turns/${encodeURIComponent(turnId)}/capture?tab=needs-fix`;
 
         const msg =
           `TurnQA: Updates needed${propertyName ? ` at ${propertyName}` : ''}.\n` +
-          (summary ? `Note: ${summary}\n` : '') +
+          (summaryLegacy ? `Note: ${summaryLegacy}\n` : '') +
           (flagged > 0 ? `${flagged} item(s) marked.\n` : '') +
           `Resume here: ${link}`;
 
@@ -498,8 +487,7 @@ const normalizedNotes = Array.isArray(b.notes)
       findings_tried_to_insert: findingsTriedToInsert,
       findings_inserted: findingsInserted,
       findings_insert_error: findingsInsertErr,
-      summary_used: Boolean(summary),
-      // attempted, // uncomment to debug matching attempts
+      summary_used: Boolean(summaryLegacy),
     });
   } catch (e) {
     console.error('[api/turns/[id]/needs-fix] error', e);
