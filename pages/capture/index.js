@@ -377,6 +377,28 @@ export default function Capture() {
           </Card>
         )}
       </section>
+          <footer
+  style={{
+    marginTop: 32,
+    paddingTop: 16,
+    borderTop: '1px solid #1f2937',
+    fontSize: 12,
+    color: '#64748b',
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: 12,
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  }}
+>
+  <span>© {new Date().getFullYear()} TurnQA. All rights reserved.</span>
+  <span style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+    <a href="/contact" style={{ textDecoration: 'underline' }}>Contact</a>
+    <a href="/legal/terms" style={{ textDecoration: 'underline' }}>Terms of Service</a>
+    <a href="/legal/privacy" style={{ textDecoration: 'underline' }}>Privacy Policy</a>
+    <a href="/legal/sms-terms" style={{ textDecoration: 'underline' }}>SMS Terms</a>
+  </span>
+</footer>
     </ChromeDark>
   );
 }
