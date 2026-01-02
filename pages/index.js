@@ -143,6 +143,9 @@ export default function Home() {
       >
         <span>© {year} TurnQA. All rights reserved.</span>
         <span style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+        <Link href="/contact" style={{ textDecoration: 'underline' }}>
+          Contact
+          </Link>
           <Link href="/legal/terms" style={{ textDecoration: 'underline' }}>
             Terms of Service
           </Link>
