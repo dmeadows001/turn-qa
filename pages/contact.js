@@ -25,6 +25,9 @@ export default function ContactPage() {
 
           <div style={{ marginTop: 14, lineHeight: 1.6, color: '#cbd5e1', fontSize: 14 }}>
             <div>
+              <strong style={{ color: '#e5e7eb' }}>Legal entity:</strong> Dmeadows Inc.
+            </div>
+            <div>
               <strong style={{ color: '#e5e7eb' }}>Business:</strong> TurnQA
             </div>
             <div style={{ marginTop: 6 }}>
