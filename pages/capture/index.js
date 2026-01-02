@@ -474,6 +474,26 @@ function VerifyForm({
             purchase.
           </label>
         </div>
+              {/* Compliance links + contact (visible, branded, legible) */}
+<div style={{ marginTop: 10, fontSize: 12, color: '#94a3b8', lineHeight: 1.5 }}>
+  Need help?{' '}
+  <a href="mailto:support@turnqa.com" style={{ color: '#cbd5e1', textDecoration: 'underline' }}>
+    support@turnqa.com
+  </a>
+  {' '} · {' '}
+  <a href="/contact" style={{ color: '#cbd5e1', textDecoration: 'underline' }}>
+    Contact
+  </a>
+  {' '} · {' '}
+  <a href="/legal/sms-terms" style={{ color: '#cbd5e1', textDecoration: 'underline' }}>
+    SMS Terms
+  </a>
+  {' '} · {' '}
+  <a href="/legal/privacy" style={{ color: '#cbd5e1', textDecoration: 'underline' }}>
+    Privacy Policy
+  </a>
+</div>
+
 
         <div style={{ display: 'flex', gap: 10, marginTop: 10 }}>
           <button

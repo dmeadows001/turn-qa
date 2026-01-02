@@ -11,7 +11,6 @@ async function fetchTurn(turnId) {
   return j.turn;
 }
 
-
 async function fetchPhotos(turnId) {
   const r = await fetch(`/api/list-turn-photos?id=${turnId}`);
   if (!r.ok) throw new Error((await r.json()).error || 'list-turn-photos failed');
@@ -39,7 +38,7 @@ async function fetchPhotos(turnId) {
     }));
 }
 
-// Load existing findings for this turn: { findings: [{ path, note, severity? }] }
+// Load existing findings for this turn: { findings: [{ path, note, ...bilingual fields... }] }
 async function fetchFindings(turnId) {
   try {
     const r = await fetch(`/api/turns/${turnId}/findings`);
@@ -172,24 +171,103 @@ function keyFor(p) {
   return `${p.area_key || 'area'}::${p.shot_id || 'shot'}`;
 }
 
+function normalizeNote(raw) {
+  const base = { original: '', translated: '', sourceLang: 'en', targetLang: 'es' };
+  if (!raw) return base;
+  if (typeof raw === 'string') return { ...base, original: raw };
+  return { ...base, ...raw };
+}
+
+async function translateViaApi(text, targetLang) {
+  const r = await fetch('/api/translate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, targetLang }),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || 'Translate failed');
+  return String(j.translatedText || '').trim();
+}
+
+function lc(s) { return String(s || '').toLowerCase(); }
+
+// For manager review:
+// - Needs-fix (manager→cleaner): show manager ORIGINAL EN for manager reference.
+// - Fix (cleaner→manager): show EN (usually translated).
+function pickEnglishForManager(finding) {
+  if (!finding) return '';
+
+  const o = String(finding.note_original || '').trim();
+  const t = String(finding.note_translated || '').trim();
+  const sent = String(finding.note_sent || '').trim();
+  const legacy = String(finding.note || '').trim();
+
+  const oLang = lc(finding.note_original_lang);
+  const tLang = lc(finding.note_translated_lang);
+  const sentLang = lc(finding.note_sent_lang);
+
+  if (oLang === 'en' && o) return o;
+  if (tLang === 'en' && t) return t;
+  if (sentLang === 'en' && sent) return sent;
+
+  // reasonable fallbacks
+  if (o) return o;
+  if (t) return t;
+  if (sent) return sent;
+  return legacy;
+}
+
+// What was actually sent to cleaner (normally ES), useful for cleaner view (or optional manager reference)
+function pickNoteSentToCleaner(finding) {
+  if (!finding) return '';
+  const sent = String(finding.note_sent || '').trim();
+  if (sent) return sent;
+  const legacy = String(finding.note || '').trim();
+  return legacy;
+}
+
 // --- PhotoCard at module scope so it doesn't remount each render ---
 const PhotoCard = memo(function PhotoCard({
-  p, isManagerMode, selectedKeys, notesByKey, findingsByKey, setNoteFor, toggleKey
+  p,
+  isManagerMode,
+  selectedKeys,
+  notesByKey,
+  findingsByKey,
+  setNoteFor,
+  toggleKey,
+  onTranslate,
+  translateBusyByKey
 }) {
   const k = keyFor(p);
   const selected = selectedKeys.has(k);
-  const noteVal = notesByKey[k] || '';
+
+  const noteObj = normalizeNote(notesByKey[k]);
+  const originalVal = noteObj.original || '';
+  const translatedVal = noteObj.translated || '';
 
   const isFix = !!p.is_fix;
 
-  const flaggedFromFindings = !!findingsByKey[k];
+  const finding = findingsByKey[k] || null;
+
+  const flaggedFromFindings = !!finding;
   const flaggedFromRow = !!p.needs_fix;
   // Only ORIGINAL photos can be “needs fix”
   const flagged = !isFix && (flaggedFromFindings || flaggedFromRow);
 
-  const managerNote = p.manager_note || (findingsByKey[k]?.note || '');
-
   const styleCard = isFix ? fixCardStyle : (flagged ? flaggedCardStyle : null);
+
+  const busy = !!(translateBusyByKey && translateBusyByKey[k]);
+
+  // Manager-facing note logic:
+  // - Needs-fix (amber): manager should see their ORIGINAL EN reference
+  // - Fix (green): manager sees EN only (cleaner’s translated)
+  const managerNoteEnglish =
+    (isManagerMode && flagged)
+      ? (pickEnglishForManager(finding) || String(p.manager_note || '').trim())
+      : '';
+
+  // What cleaner sees (ES) — keep for non-manager view
+  const noteToCleaner = pickNoteSentToCleaner(finding) || String(p.manager_note || '').trim();
 
   return (
     <div
@@ -259,19 +337,60 @@ const PhotoCard = memo(function PhotoCard({
         <div style={{ color: '#9ca3af' }}>{new Date(p.created_at).toLocaleString()}</div>
         <div style={{ color: '#64748b', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{p.path}</div>
 
-        {isManagerMode && (
-          <div style={{ marginTop:8 }}>
+        {/* OPTION A: Only show note + translation UI when checkbox is checked */}
+        {isManagerMode && selected && !isFix && (
+          <div style={{ marginTop: 10 }}>
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:10, marginBottom:6 }}>
+              <div style={{ fontSize: 11, color: '#94a3b8', fontWeight: 700 }}>
+                Original note (EN)
+              </div>
+
+              <button
+                type="button"
+                onClick={() => onTranslate(p)}
+                disabled={busy || !originalVal.trim()}
+                style={{
+                  ...ui.btnSecondary,
+                  padding: '6px 10px',
+                  border: '1px solid #334155',
+                  background: '#0f172a',
+                  color: '#cbd5e1',
+                  opacity: (busy || !originalVal.trim()) ? 0.6 : 1
+                }}
+                title="Translate English → Spanish"
+              >
+                {busy ? 'Translating…' : 'Translate → ES'}
+              </button>
+            </div>
+
             <textarea
-              value={noteVal}
-              onChange={e => setNoteFor(p, e.target.value)}
+              value={originalVal}
+              onChange={e => setNoteFor(p, { original: e.target.value, sourceLang: 'en' })}
               rows={2}
-              placeholder="Note for this photo (optional)…"
+              placeholder="Write your note in English…"
               style={{ ...ui.input, width:'100%', padding:'8px 10px', resize:'vertical', background:'#0b1220' }}
             />
+
+            <div style={{ fontSize: 11, color: '#94a3b8', fontWeight: 700, margin: '8px 0 6px' }}>
+              Translated note (ES) — sent to cleaner
+            </div>
+
+            <textarea
+              value={translatedVal}
+              onChange={e => setNoteFor(p, { translated: e.target.value, targetLang: 'es' })}
+              rows={2}
+              placeholder="Spanish will appear here… (editable)"
+              style={{ ...ui.input, width:'100%', padding:'8px 10px', resize:'vertical', background:'#0b1220' }}
+            />
+
+            <div style={{ marginTop: 6, fontSize: 11, color: '#64748b' }}>
+              Tip: If you change the English above, click Translate again to refresh the Spanish.
+            </div>
           </div>
         )}
 
-        {isManagerMode && flagged && managerNote && (
+        {/* Manager view: show ORIGINAL EN for needs-fix cards (manager memory) */}
+        {isManagerMode && flagged && !!managerNoteEnglish && (
           <div
             style={{
               marginTop: 8,
@@ -283,12 +402,13 @@ const PhotoCard = memo(function PhotoCard({
             }}
           >
             <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 4, fontWeight: 700 }}>
-              Manager note (sent to cleaner)
+              Manager note (original EN)
             </div>
-            <div style={{ whiteSpace: 'pre-wrap' }}>{managerNote}</div>
+            <div style={{ whiteSpace: 'pre-wrap' }}>{managerNoteEnglish}</div>
           </div>
         )}
 
+        {/* Fix photo: show cleaner note (assumed already EN for manager) */}
         {isFix && !!p.cleaner_note && (
           <div style={{
             marginTop:8,
@@ -303,7 +423,8 @@ const PhotoCard = memo(function PhotoCard({
           </div>
         )}
 
-        {!isManagerMode && flagged && managerNote && (
+        {/* Cleaner / non-manager view: show the note that was SENT to cleaner (normally ES) */}
+        {!isManagerMode && flagged && !!noteToCleaner && (
           <div style={{
             marginTop:8,
             padding:'8px 10px',
@@ -313,7 +434,7 @@ const PhotoCard = memo(function PhotoCard({
             color:'#cbd5e1'
           }}>
             <div style={{ fontSize:11, color:'#94a3b8', marginBottom:4, fontWeight:700 }}>Manager note</div>
-            <div style={{ whiteSpace:'pre-wrap' }}>{managerNote}</div>
+            <div style={{ whiteSpace:'pre-wrap' }}>{noteToCleaner}</div>
           </div>
         )}
       </div>
@@ -325,17 +446,19 @@ const PhotoCard = memo(function PhotoCard({
   const nk = keyFor(next.p);
   if (pk !== nk) return false; // different photo instance
 
-  // note value for THIS photo
-  const prevNote = prev.notesByKey[pk] || '';
-  const nextNote = next.notesByKey[nk] || '';
-  if (prevNote !== nextNote) return false;
+  // note value for THIS photo (stringify for object support)
+  const prevNote = prev.notesByKey[pk];
+  const nextNote = next.notesByKey[nk];
+  const prevStr = typeof prevNote === 'string' ? prevNote : JSON.stringify(prevNote || {});
+  const nextStr = typeof nextNote === 'string' ? nextNote : JSON.stringify(nextNote || {});
+  if (prevStr !== nextStr) return false;
 
   // selection for THIS photo
   const prevSel = prev.selectedKeys.has(pk);
   const nextSel = next.selectedKeys.has(nk);
   if (prevSel !== nextSel) return false;
 
-  // flagged / FIX state for THIS photo
+  // flagged state for THIS photo (presence of finding)
   const prevFlag = !!prev.findingsByKey[pk];
   const nextFlag = !!next.findingsByKey[nk];
   if (prevFlag !== nextFlag) return false;
@@ -343,6 +466,11 @@ const PhotoCard = memo(function PhotoCard({
   const prevFix = !!prev.p.is_fix;
   const nextFix = !!next.p.is_fix;
   if (prevFix !== nextFix) return false;
+
+  // translate busy state for THIS photo (optional prop)
+  const prevBusy = !!(prev.translateBusyByKey && prev.translateBusyByKey[pk]);
+  const nextBusy = !!(next.translateBusyByKey && next.translateBusyByKey[nk]);
+  if (prevBusy !== nextBusy) return false;
 
   return true; // unchanged → skip render
 });
@@ -363,8 +491,10 @@ export default function Review() {
   const [loading, setLoading] = useState(true);
   const [loadErr, setLoadErr] = useState('');
 
-  // Manager notes (top-level summary) + per-photo selections/notes
-  const [managerNote, setManagerNote] = useState('');
+  // Top-level summary note (Option B)
+  const [summaryNote, setSummaryNote] = useState({ original: '', translated: '', sourceLang: 'en', targetLang: 'es' });
+  const [summaryBusy, setSummaryBusy] = useState(false);
+
   const [acting, setActing] = useState(false);
 
   // Per-photo state (keyed by stable key)
@@ -373,6 +503,9 @@ export default function Review() {
 
   // Findings for highlight + prefill (keyed by photoKey)
   const [findingsByKey, setFindingsByKey] = useState({});
+
+  // Translate busy per-photo
+  const [translateBusyByKey, setTranslateBusyByKey] = useState({});
 
   // Cleaner “fix & resubmit” (only used on cleaner view, kept for parity)
   const [cleanerReply, setCleanerReply] = useState('');
@@ -404,7 +537,9 @@ export default function Review() {
         setLastCleanerNote(cleanerNote);
         setCleanerReply('');
 
-        setManagerNote((t && t.manager_note) || '');
+        // Backward compat: if we only have legacy turn.manager_note, treat it as EN original.
+        const legacySummary = String((t && t.manager_note) || '').trim();
+        setSummaryNote({ original: legacySummary, translated: '', sourceLang: 'en', targetLang: 'es' });
 
         setPhotos(ph);
 
@@ -428,9 +563,33 @@ export default function Review() {
             const path = (it && it.path) || '';
             const keys = pathToKeys[path] || [];
             for (const k of keys) {
-              map[k] = { note: (it && it.note) || '', severity: (it && it.severity) || 'warn' };
+              // IMPORTANT: keep full finding object so manager can access bilingual fields later
+              map[k] = it;
+
               if (isManagerMode) sel.add(k);
-              notes[k] = (it && it.note) || '';
+
+              // Prefill editable note object:
+              // - original: prefer EN original if present, else legacy note
+              // - translated: prefer ES translated if present
+              const o = String(it.note_original || '').trim();
+              const t2 = String(it.note_translated || '').trim();
+              const oLang = lc(it.note_original_lang);
+              const tLang = lc(it.note_translated_lang);
+
+              const originalPref =
+                (oLang === 'en' && o) ? o :
+                (o ? o : String(it.note || ''));
+
+              const translatedPref =
+                (tLang === 'es' && t2) ? t2 :
+                (t2 ? t2 : '');
+
+              notes[k] = {
+                original: originalPref || '',
+                translated: translatedPref || '',
+                sourceLang: oLang || 'en',
+                targetLang: tLang || 'es',
+              };
             }
           });
 
@@ -471,10 +630,60 @@ export default function Review() {
     });
   }, []);
 
-  const setNoteFor = useCallback((p, text) => {
+  const setNoteFor = useCallback((p, patch) => {
     const k = keyFor(p);
-    setNotesByKey(prev => ({ ...prev, [k]: text }));
+    setNotesByKey(prev => {
+      const cur = normalizeNote(prev[k]);
+      return { ...prev, [k]: { ...cur, ...patch } };
+    });
   }, []);
+
+  const onTranslate = useCallback(async (p) => {
+    const k = keyFor(p);
+    const cur = normalizeNote(notesByKey[k]);
+    const text = (cur.original || '').trim();
+    if (!text) return;
+
+    setTranslateBusyByKey(prev => ({ ...prev, [k]: true }));
+    try {
+      const es = await translateViaApi(text, 'es');
+      setNotesByKey(prev => {
+        const cur2 = normalizeNote(prev[k]);
+        return {
+          ...prev,
+          [k]: {
+            ...cur2,
+            sourceLang: 'en',
+            targetLang: 'es',
+            translated: es
+          }
+        };
+      });
+    } catch (e) {
+      alert(e.message || 'Translate failed');
+    } finally {
+      setTranslateBusyByKey(prev => ({ ...prev, [k]: false }));
+    }
+  }, [notesByKey]);
+
+  async function translateSummaryToEs() {
+    const text = String(summaryNote.original || '').trim();
+    if (!text) return;
+    setSummaryBusy(true);
+    try {
+      const es = await translateViaApi(text, 'es');
+      setSummaryNote(prev => ({
+        ...prev,
+        sourceLang: 'en',
+        targetLang: 'es',
+        translated: es
+      }));
+    } catch (e) {
+      alert(e.message || 'Translate failed');
+    } finally {
+      setSummaryBusy(false);
+    }
+  }
 
   // --- Approve ---
   async function markApproved() {
@@ -483,10 +692,15 @@ export default function Review() {
     try {
       const ok = window.confirm('Approve this turn?');
       if (!ok) return;
+
+      // Keep existing API contract: send a single string.
+      // Manager is English-speaking, so store the EN original here.
+      const manager_note = String(summaryNote.original || '').trim();
+
       const r = await fetch('/api/update-turn-status', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ turn_id: turnId, new_status: 'approved', manager_note: managerNote || '' })
+        body: JSON.stringify({ turn_id: turnId, new_status: 'approved', manager_note })
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error || 'update failed');
@@ -512,24 +726,60 @@ export default function Review() {
       photos.forEach(p => {
         const k = keyFor(p);
         const selected = selectedKeys.has(k);
-        const note = (notesByKey[k] || '').trim();
-        if (selected || note.length > 0) {
-          payloadNotes.push({ photo_id: p.id || null, path: p.path || '', note });
+        const obj = normalizeNote(notesByKey[k]);
+
+        const original = (obj.original || '').trim();
+        const translated = (obj.translated || '').trim();
+
+        // Cleaner should receive Spanish when available; fallback to original
+        const note_to_cleaner = (translated || original || '').trim();
+
+        if (selected || original.length > 0 || translated.length > 0) {
+          payloadNotes.push({
+            photo_id: p.id || null,
+            path: p.path || '',
+            // Legacy field: what the cleaner sees
+            note: note_to_cleaner,
+
+            // Robust fields
+            note_original: original || null,
+            note_translated: translated || null,
+            note_original_lang: original ? (obj.sourceLang || 'en') : null,
+            note_translated_lang: translated ? (obj.targetLang || 'es') : null,
+
+            // Also include "sent" explicitly for robustness
+            note_sent: note_to_cleaner || null,
+            note_sent_lang: translated ? (obj.targetLang || 'es') : (original ? (obj.sourceLang || 'en') : null),
+          });
         }
       });
 
-      if (payloadNotes.length === 0 && !(managerNote || '').trim()) {
+      const summaryOriginal = String(summaryNote.original || '').trim();
+      const summaryTranslated = String(summaryNote.translated || '').trim();
+      const summarySent = (summaryTranslated || summaryOriginal || '').trim();
+
+      if (payloadNotes.length === 0 && !summarySent) {
         alert('Select at least one photo or add a summary note before sending “Needs fix”.');
         setActing(false);
         return;
       }
 
+      // Send bilingual summary object (backend supports this now)
+      const summaryPayload = summarySent ? {
+        original: summaryOriginal || '',
+        translated: summaryTranslated || '',
+        sent: summarySent || '',
+        original_lang: summaryOriginal ? (summaryNote.sourceLang || 'en') : null,
+        translated_lang: summaryTranslated ? (summaryNote.targetLang || 'es') : null,
+        sent_lang: summaryTranslated ? (summaryNote.targetLang || 'es') : (summaryOriginal ? (summaryNote.sourceLang || 'en') : null),
+      } : null;
+
       const r = await fetch(`/api/turns/${turnId}/needs-fix`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          notes: payloadNotes,                 // [{ path, note }]
-          summary: (managerNote || '').trim() || null,
+          notes: payloadNotes,                 // [{ path, note, note_original, note_translated, ... }]
+          summary: summaryPayload,
           send_sms: true
         })
       });
@@ -542,14 +792,36 @@ export default function Review() {
       const newMap = {};
       const sel = new Set();
       const newNotes = {};
+
       payloadNotes.forEach(it => {
         photos.filter(p => (p.path || '') === it.path).forEach(p => {
           const k = keyFor(p);
-          newMap[k] = { note: it.note || '', severity: 'warn' };
+
+          // IMPORTANT: keep a finding-like object so PhotoCard can pick EN/ES correctly
+          newMap[k] = {
+            path: it.path || '',
+            note: it.note || '',
+            note_original: it.note_original || '',
+            note_translated: it.note_translated || '',
+            note_original_lang: it.note_original_lang || 'en',
+            note_translated_lang: it.note_translated_lang || 'es',
+            note_sent: it.note_sent || it.note || '',
+            note_sent_lang: it.note_sent_lang || (it.note_translated ? 'es' : 'en'),
+            severity: 'warn'
+          };
+
           sel.add(k);
-          newNotes[k] = it.note || '';
+
+          // Keep note object for history in UI
+          newNotes[k] = {
+            original: it.note_original || '',
+            translated: it.note_translated || '',
+            sourceLang: it.note_original_lang || 'en',
+            targetLang: it.note_translated_lang || 'es',
+          };
         });
       });
+
       setFindingsByKey(newMap);
       setSelectedKeys(sel);
       setNotesByKey(prev => ({ ...prev, ...newNotes }));
@@ -622,45 +894,65 @@ export default function Review() {
               </div>
 
               {/* Show most recent cleaner message to the manager */}
-{lastCleanerNote && (
-  <div style={{
-    marginTop: 10,
-    padding: 12,
-    borderRadius: 8,
-    // match FIX / cleaner-note green styling
-    border: '1px solid #065f46',
-    background: '#052e2b',
-    color: '#86efac',
-    boxShadow: '0 0 0 3px rgba(5,150,105,0.20) inset',
-  }}>
-    <div
-      style={{
-        fontSize: 12,
-        fontWeight: 700,
-        color: '#bbf7d0',
-        marginBottom: 6,
-        textTransform: 'uppercase',
-        letterSpacing: 0.03,
-      }}
-    >
-      Cleaner note
-    </div>
-    <div style={{ whiteSpace: 'pre-wrap' }}>
-      {lastCleanerNote}
-    </div>
-  </div>
-)}
-
-
-              <div style={{ marginTop:10 }}>
-                <div style={{ fontSize:12, fontWeight:700, color:'#9ca3af', marginBottom:6 }}>
-                  Optional overall note to cleaner (summary)
+              {lastCleanerNote && (
+                <div style={{
+                  marginTop: 10,
+                  padding: 12,
+                  borderRadius: 8,
+                  // match FIX / cleaner-note green styling
+                  border: '1px solid #065f46',
+                  background: '#052e2b',
+                  color: '#86efac',
+                  boxShadow: '0 0 0 3px rgba(5,150,105,0.20) inset',
+                }}>
+                  <div
+                    style={{
+                      fontSize: 12,
+                      fontWeight: 700,
+                      color: '#bbf7d0',
+                      marginBottom: 6,
+                      textTransform: 'uppercase',
+                      letterSpacing: 0.03,
+                    }}
+                  >
+                    Cleaner note
+                  </div>
+                  <div style={{ whiteSpace: 'pre-wrap' }}>
+                    {lastCleanerNote}
+                  </div>
                 </div>
+              )}
+
+              {/* SUMMARY (Option B translator) */}
+              <div style={{ marginTop:10 }}>
+                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:10, marginBottom:6 }}>
+                  <div style={{ fontSize:12, fontWeight:700, color:'#9ca3af' }}>
+                    Optional overall note to cleaner (summary) — Original (EN)
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={translateSummaryToEs}
+                    disabled={summaryBusy || !String(summaryNote.original || '').trim()}
+                    style={{
+                      ...ui.btnSecondary,
+                      padding: '6px 10px',
+                      border: '1px solid #334155',
+                      background: '#0b1220',
+                      color: '#cbd5e1',
+                      opacity: (summaryBusy || !String(summaryNote.original || '').trim()) ? 0.6 : 1
+                    }}
+                    title="Translate English → Spanish"
+                  >
+                    {summaryBusy ? 'Translating…' : 'Translate → ES'}
+                  </button>
+                </div>
+
                 <textarea
-                  value={managerNote}
-                  onChange={e=>setManagerNote(e.target.value)}
+                  value={summaryNote.original}
+                  onChange={e => setSummaryNote(prev => ({ ...prev, original: e.target.value, sourceLang: 'en' }))}
                   rows={3}
-                  placeholder="Short summary the cleaner can see…"
+                  placeholder="Write your summary in English…"
                   style={{
                     ...ui.input,
                     width:'100%',
@@ -669,6 +961,28 @@ export default function Review() {
                     background:'#0b1220'
                   }}
                 />
+
+                <div style={{ fontSize:12, fontWeight:700, color:'#9ca3af', margin:'10px 0 6px' }}>
+                  Translated (ES) — sent to cleaner
+                </div>
+
+                <textarea
+                  value={summaryNote.translated}
+                  onChange={e => setSummaryNote(prev => ({ ...prev, translated: e.target.value, targetLang: 'es' }))}
+                  rows={3}
+                  placeholder="Spanish will appear here… (editable)"
+                  style={{
+                    ...ui.input,
+                    width:'100%',
+                    padding:'10px 12px',
+                    resize:'vertical',
+                    background:'#0b1220'
+                  }}
+                />
+
+                <div style={{ marginTop: 6, fontSize: 11, color: '#64748b' }}>
+                  Tip: If you change the English above, click Translate again to refresh the Spanish.
+                </div>
               </div>
 
               <div style={{ display:'flex', gap:10, marginTop:12, flexWrap:'wrap' }}>
@@ -726,6 +1040,8 @@ export default function Review() {
                       findingsByKey={findingsByKey}
                       setNoteFor={setNoteFor}
                       toggleKey={toggleKey}
+                      onTranslate={onTranslate}
+                      translateBusyByKey={translateBusyByKey}
                     />
                   ))}
                 </div>
@@ -769,6 +1085,8 @@ export default function Review() {
                         findingsByKey={findingsByKey}
                         setNoteFor={setNoteFor}
                         toggleKey={toggleKey}
+                        onTranslate={onTranslate}
+                        translateBusyByKey={translateBusyByKey}
                       />
                     ))}
                   </div>

@@ -116,10 +116,14 @@ export default function Capture() {
   const [fixNotes, setFixNotes] = useState({ byPath: {}, overall: '', count: 0 });
   const [hideFixBanner, setHideFixBanner] = useState(false);
 
-  // Cleaner overall reply (optional)
-  const [reply, setReply] = useState('');
+  // Cleaner overall reply (optional) — bilingual (ES original + EN translated)
+  const [replyOriginal, setReplyOriginal] = useState('');
+  const [replyTranslated, setReplyTranslated] = useState('');
+  const [isTranslatingReply, setIsTranslatingReply] = useState(false);
+  const [translateReplyError, setTranslateReplyError] = useState('');
 
   // Per-new-photo cleaner notes (keyed by storage path)
+  // shape: { [path]: { original: string, translated: string, isTranslating?: boolean, error?: string } }
   const [cleanerNoteByNewPath, setCleanerNoteByNewPath] = useState({});
 
   // --- AI scan state ---
@@ -256,7 +260,7 @@ export default function Capture() {
       }
     });
   }
-  
+
   function ensureThumb(path) {
     if (!path || requestedThumbsRef.current.has(path) || thumbByPath[path]) return;
     requestedThumbsRef.current.add(path);
@@ -288,6 +292,72 @@ export default function Capture() {
   function closePicker() {
     setPickerVisible(false);
     setPickerShot(null);
+  }
+
+  // --- Translate helper for cleaner reply (Spanish -> English) ---
+  async function translateReplyToEnglish() {
+    setTranslateReplyError('');
+    const text = String(replyOriginal || '').trim();
+    if (!text) return;
+
+    setIsTranslatingReply(true);
+    try {
+      const r = await fetch('/api/translate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, targetLang: 'en' }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j?.error || 'Translate failed');
+
+      setReplyTranslated(String(j?.translatedText || '').trim());
+    } catch (e) {
+      setTranslateReplyError(e?.message || 'Translate failed');
+    } finally {
+      setIsTranslatingReply(false);
+    }
+  }
+
+  // --- Translate helper for per-photo note (Spanish -> English) ---
+  async function translatePhotoNoteToEnglish(path) {
+    if (!path) return;
+    const text = String(cleanerNoteByNewPath[path]?.original || '').trim();
+    if (!text) return;
+
+    // set loading + clear error
+    setCleanerNoteByNewPath(prev => ({
+      ...prev,
+      [path]: { ...(prev[path] || {}), isTranslating: true, error: '' }
+    }));
+
+    try {
+      const r = await fetch('/api/translate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, targetLang: 'en' }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j?.error || 'Translate failed');
+
+      setCleanerNoteByNewPath(prev => ({
+        ...prev,
+        [path]: {
+          ...(prev[path] || {}),
+          translated: String(j?.translatedText || '').trim(),
+          isTranslating: false,
+          error: '',
+        }
+      }));
+    } catch (e) {
+      setCleanerNoteByNewPath(prev => ({
+        ...prev,
+        [path]: {
+          ...(prev[path] || {}),
+          isTranslating: false,
+          error: e?.message || 'Translate failed',
+        }
+      }));
+    }
   }
 
   // --- Load existing photos for this turn (ensures we only bucket into *visible* shots) ---
@@ -604,159 +674,158 @@ export default function Capture() {
     });
   }
 
+  // -------- AI Scan: PRECHECK + VISION + mark scan-done --------
+  async function runAiScan() {
+    if (!turnId) return;
+    if (!Array.isArray(shots) || shots.length === 0) {
+      alert('No checklist sections are loaded yet. Please wait a moment and try again.');
+      return;
+    }
 
-// -------- AI Scan: PRECHECK + VISION + mark scan-done --------
-async function runAiScan() {
-  if (!turnId) return;
-  if (!Array.isArray(shots) || shots.length === 0) {
-    alert('No checklist sections are loaded yet. Please wait a moment and try again.');
-    return;
-  }
+    // Flatten all current photos from uploadsByShot
+    const allFiles = [];
+    const uploads = uploadsByShot || {};
+    const shotsArr = Array.isArray(shots) ? shots : [];
 
-  // Flatten all current photos from uploadsByShot
-  const allFiles = [];
-  const uploads = uploadsByShot || {};
-  const shotsArr = Array.isArray(shots) ? shots : [];
-
-  shotsArr.forEach(s => {
-    const files = uploads[s.shot_id] || [];
-    files.forEach(f => {
-      allFiles.push({ file: f, shot: s });
-    });
-  });
-
-  if (!allFiles.length) {
-    alert('No photos to scan yet. Please add at least one photo first.');
-    return;
-  }
-
-  setScanStatus('running');
-  setScanMessage('Running AI Scan…');
-  setScanIssues([]);
-  setScanIssuesByArea({});
-  setScanProgress(5);
-
-  let progress = 5;
-  const timer = setInterval(() => {
-    // creep toward 90% while we wait for the backend
-    progress = Math.min(progress + Math.random() * 12, 90);
-    setScanProgress(progress);
-  }, 400);
-
-  try {
-    // 1) Build payload for pre-check
-    const uploadsByArea = {};
-    const requiredList = shotsArr.map(s => ({
-      key: s.area_key || s.shot_id,
-      title: s.label,
-      minPhotos: s.min_count || 1,
-    }));
-
-    for (const { file, shot } of allFiles) {
-      const key = shot.area_key || shot.shot_id || 'unknown';
-      if (!uploadsByArea[key]) uploadsByArea[key] = [];
-      uploadsByArea[key].push({
-        name: file.name || (file.url ? file.url.split('/').pop() : 'photo'),
+    shotsArr.forEach(s => {
+      const files = uploads[s.shot_id] || [];
+      files.forEach(f => {
+        allFiles.push({ file: f, shot: s });
       });
+    });
+
+    if (!allFiles.length) {
+      alert('No photos to scan yet. Please add at least one photo first.');
+      return;
     }
 
-    const preResp = await fetch('/api/vision-precheck', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        uploadsByArea,
-        required: requiredList,
-      }),
-    });
-    const preJson = await preResp.json().catch(() => ({}));
-    const preFlags = Array.isArray(preJson.flags) ? preJson.flags : [];
+    setScanStatus('running');
+    setScanMessage('Running AI Scan…');
+    setScanIssues([]);
+    setScanIssuesByArea({});
+    setScanProgress(5);
 
-    // 2) Build payload for vision-scan
-    const scanItems = allFiles.map(({ file, shot }) => ({
-      url: file.url,
-      area_key: shot.area_key || shot.shot_id || 'unknown',
-      label: shot.label,
-      notes: shot.notes || '',
-    }));
+    let progress = 5;
+    const timer = setInterval(() => {
+      // creep toward 90% while we wait for the backend
+      progress = Math.min(progress + Math.random() * 12, 90);
+      setScanProgress(progress);
+    }, 400);
 
-    const scanResp = await fetch('/api/vision-scan', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items: scanItems }),
-    });
-    const scanJson = await scanResp.json().catch(() => ({}));
-    const results = Array.isArray(scanJson.results) ? scanJson.results : [];
-
-    // Build both the flat summary list and a per-area map
-    const visionIssues = [];
-    const issuesByArea = {};
-
-    for (const r of results) {
-      const rawArea = r.area_key || r.area || '';
-      const areaLabel = rawArea || 'Area';
-      const areaKey = (rawArea || '').toLowerCase() || 'unknown-area';
-
-      const issues = Array.isArray(r.issues) ? r.issues : [];
-      if (!issuesByArea[areaKey]) issuesByArea[areaKey] = [];
-
-      for (const issue of issues) {
-        if (!issue || !issue.label) continue;
-        const sev = issue.severity || 'info';
-
-        // Full message (for summary at bottom)
-        const summaryMsg = `${areaLabel}: ${issue.label} (${sev})`;
-        visionIssues.push(summaryMsg);
-
-        // Short message for per-area box
-        const shortMsg = `${issue.label} (${sev})`;
-        issuesByArea[areaKey].push(shortMsg);
-      }
-    }
-
-    setScanIssuesByArea(issuesByArea);
-
-    const allIssues = [...preFlags, ...visionIssues];
-
-    // 3) Mark scan-done in the DB
     try {
-      await fetch(`/api/turns/${encodeURIComponent(turnId)}/scan-done`, {
+      // 1) Build payload for pre-check
+      const uploadsByArea = {};
+      const requiredList = shotsArr.map(s => ({
+        key: s.area_key || s.shot_id,
+        title: s.label,
+        minPhotos: s.min_count || 1,
+      }));
+
+      for (const { file, shot } of allFiles) {
+        const key = shot.area_key || shot.shot_id || 'unknown';
+        if (!uploadsByArea[key]) uploadsByArea[key] = [];
+        uploadsByArea[key].push({
+          name: file.name || (file.url ? file.url.split('/').pop() : 'photo'),
+        });
+      }
+
+      const preResp = await fetch('/api/vision-precheck', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ passed: allIssues.length === 0 }),
+        body: JSON.stringify({
+          uploadsByArea,
+          required: requiredList,
+        }),
       });
+      const preJson = await preResp.json().catch(() => ({}));
+      const preFlags = Array.isArray(preJson.flags) ? preJson.flags : [];
+
+      // 2) Build payload for vision-scan
+      const scanItems = allFiles.map(({ file, shot }) => ({
+        url: file.url,
+        area_key: shot.area_key || shot.shot_id || 'unknown',
+        label: shot.label,
+        notes: shot.notes || '',
+      }));
+
+      const scanResp = await fetch('/api/vision-scan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: scanItems }),
+      });
+      const scanJson = await scanResp.json().catch(() => ({}));
+      const results = Array.isArray(scanJson.results) ? scanJson.results : [];
+
+      // Build both the flat summary list and a per-area map
+      const visionIssues = [];
+      const issuesByArea = {};
+
+      for (const r of results) {
+        const rawArea = r.area_key || r.area || '';
+        const areaLabel = rawArea || 'Area';
+        const areaKey = (rawArea || '').toLowerCase() || 'unknown-area';
+
+        const issues = Array.isArray(r.issues) ? r.issues : [];
+        if (!issuesByArea[areaKey]) issuesByArea[areaKey] = [];
+
+        for (const issue of issues) {
+          if (!issue || !issue.label) continue;
+          const sev = issue.severity || 'info';
+
+          // Full message (for summary at bottom)
+          const summaryMsg = `${areaLabel}: ${issue.label} (${sev})`;
+          visionIssues.push(summaryMsg);
+
+          // Short message for per-area box
+          const shortMsg = `${issue.label} (${sev})`;
+          issuesByArea[areaKey].push(shortMsg);
+        }
+      }
+
+      setScanIssuesByArea(issuesByArea);
+
+      const allIssues = [...preFlags, ...visionIssues];
+
+      // 3) Mark scan-done in the DB
+      try {
+        await fetch(`/api/turns/${encodeURIComponent(turnId)}/scan-done`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ passed: allIssues.length === 0 }),
+        });
+      } catch (e) {
+        console.warn('scan-done failed (non-fatal):', e?.message || e);
+      }
+
+      // Finish the progress bar smoothly
+      setScanProgress(100);
+
+      const hasVisionIssues = visionIssues.length > 0;
+
+      if (!hasVisionIssues) {
+        // No per-photo AI issues → show the happy message
+        setScanStatus('ready');
+        setScanIssues([]); // no warning bullets needed
+        setScanMessage('🎉 Congratulations: AI Scan found no issues.');
+      } else {
+        // At least one real AI photo issue → show warning + bullets (preFlags + visionIssues)
+        setScanStatus('ready');
+        setScanIssues(allIssues);
+        setScanMessage(
+          'WARNING: AI Scan found potential issues. Please see the AI notes above.\n\n' +
+          allIssues.map(x => `• ${x}`).join('\n')
+        );
+      }
     } catch (e) {
-      console.warn('scan-done failed (non-fatal):', e?.message || e);
+      console.error('runAiScan error:', e);
+      setScanStatus('idle');
+      setScanProgress(0);
+      setScanIssuesByArea({});
+      setScanMessage('AI Scan failed. You can still submit, but consider trying again if you need the extra check.');
+    } finally {
+      clearInterval(timer);
     }
-
-    // Finish the progress bar smoothly
-    setScanProgress(100);
-
-    const hasVisionIssues = visionIssues.length > 0;
-
-    if (!hasVisionIssues) {
-      // No per-photo AI issues → show the happy message
-      setScanStatus('ready');
-      setScanIssues([]); // no warning bullets needed
-      setScanMessage('🎉 Congratulations: AI Scan found no issues.');
-    } else {
-      // At least one real AI photo issue → show warning + bullets (preFlags + visionIssues)
-      setScanStatus('ready');
-      setScanIssues(allIssues);
-      setScanMessage(
-        'WARNING: AI Scan found potential issues. Please see the AI notes above.\n\n' +
-        allIssues.map(x => `• ${x}`).join('\n')
-      );
-    }
-  } catch (e) {
-    console.error('runAiScan error:', e);
-    setScanStatus('idle');
-    setScanProgress(0);
-    setScanIssuesByArea({});
-    setScanMessage('AI Scan failed. You can still submit, but consider trying again if you need the extra check.');
-  } finally {
-    clearInterval(timer);
   }
-}
 
   // -------- Submit initial turn --------
   async function submitAll() {
@@ -817,14 +886,33 @@ async function runAiScan() {
     const newPhotos = Object.values(uploadsByShot)
       .flat()
       .filter(f => !!f.preview)
-      .map(f => ({
-        url: f.url,
-        shotId: f.shotId,
-        // send per-photo cleaner note
-        note: (cleanerNoteByNewPath[f.url] || '').trim() || null,
-      }));
+      .map(f => {
+        const noteObj = cleanerNoteByNewPath[f.url] || {};
+        const no = String(noteObj.original || '').trim();     // Spanish
+        const nt = String(noteObj.translated || '').trim();   // English
 
-    if (newPhotos.length === 0 && !reply.trim()) {
+        return {
+          url: f.url,
+          shotId: f.shotId,
+
+          // manager-facing (English preferred)
+          note: (nt || no || '').trim() || null,
+
+          // bilingual fields for history (API stores into turn_photos new columns)
+          note_original: no || null,
+          note_translated: nt || null,
+          note_original_lang: no ? 'es' : null,
+          note_translated_lang: nt ? 'en' : null,
+        };
+      });
+
+    const ro = (replyOriginal || '').trim();      // Spanish original
+    const rt = (replyTranslated || '').trim();    // English translated (editable)
+
+    // What gets sent/displayed to the manager
+    const replySent = (rt || ro || '').trim();
+
+    if (newPhotos.length === 0 && !replySent) {
       alert('Add at least one new photo or a note before submitting.');
       return;
     }
@@ -836,10 +924,20 @@ async function runAiScan() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           turn_id: turnId,
-          reply: reply || '',
-          photos: newPhotos,   // API will store is_fix + cleaner_note now
+
+          // Legacy (manager-facing): prefer English if present
+          reply: replySent,
+
+          // New bilingual fields for history
+          reply_original: ro || null,
+          reply_translated: rt || null,
+          reply_original_lang: ro ? 'es' : null,
+          reply_translated_lang: rt ? 'en' : null,
+
+          photos: newPhotos,
         })
       });
+
       const json = await resp.json().catch(() => ({}));
       if (!resp.ok) {
         alert('Submit fixes failed: ' + (json.error || resp.statusText));
@@ -847,7 +945,6 @@ async function runAiScan() {
       }
 
       alert('Fixes submitted for review ✅');
-      // After submitting fixes, send cleaner back to the capture dashboard
       window.location.href = '/capture';
     } finally {
       setTimeout(() => setSubmitting(false), 200);
@@ -1078,6 +1175,12 @@ async function runAiScan() {
                       fixNotes?.byPath?.[f.url] ||
                       null;
 
+                    const perPhoto = cleanerNoteByNewPath[f.url] || {};
+                    const perPhotoOriginal = String(perPhoto.original || '');
+                    const perPhotoTranslated = String(perPhoto.translated || '');
+                    const perPhotoLoading = !!perPhoto.isTranslating;
+                    const perPhotoErr = String(perPhoto.error || '');
+
                     return (
                       <div
                         key={f.url}
@@ -1156,7 +1259,6 @@ async function runAiScan() {
                           </div>
                         </div>
 
-
                         {/* Manager note (if flagged) visible to cleaner */}
                         {managerNote && (
                           <div style={{
@@ -1168,15 +1270,60 @@ async function runAiScan() {
                           </div>
                         )}
 
-                        {/* Cleaner per-photo note editor ONLY for newly added fixes (with preview) */}
+                        {/* Cleaner per-photo bilingual note editor ONLY for newly added fixes (with preview) */}
                         {f.preview && f.isFix && (
                           <div style={{ marginTop:8 }}>
-                            <div style={{ fontSize:12, color:'#9ca3af', marginBottom:4, fontWeight:700 }}>Note to manager (for this fix)</div>
+                            <div style={{ fontSize:12, color:'#9ca3af', marginBottom:4, fontWeight:700 }}>
+                              Note to manager (Spanish → translate to English)
+                            </div>
+
+                            {/* Original (Spanish) */}
                             <textarea
                               rows={2}
-                              value={cleanerNoteByNewPath[f.url] || ''}
-                              onChange={e => setCleanerNoteByNewPath(prev => ({ ...prev, [f.url]: e.target.value }))}
-                              placeholder="Brief note about the fix…"
+                              value={perPhotoOriginal}
+                              onChange={e => {
+                                const v = e.target.value;
+                                setCleanerNoteByNewPath(prev => ({
+                                  ...prev,
+                                  [f.url]: { ...(prev[f.url] || {}), original: v }
+                                }));
+                              }}
+                              placeholder="Escribe tu nota en Español…"
+                              style={{ ...ui.input, width:'100%', padding:'8px 10px', background:'#0b1220', resize:'vertical' }}
+                            />
+
+                            <div style={{ display:'flex', gap:10, alignItems:'center', marginTop:8 }}>
+                              <ThemedButton
+                                kind="secondary"
+                                onClick={() => translatePhotoNoteToEnglish(f.url)}
+                                loading={perPhotoLoading}
+                                disabled={perPhotoLoading || !String(perPhotoOriginal || '').trim()}
+                                ariaLabel="Translate photo note to English"
+                              >
+                                🌐 Translate to English
+                              </ThemedButton>
+
+                              {perPhotoErr ? (
+                                <div style={{ fontSize: 12, color: '#fca5a5' }}>{perPhotoErr}</div>
+                              ) : null}
+                            </div>
+
+                            <div style={{ fontSize:12, color:'#9ca3af', marginTop:10, marginBottom:4, fontWeight:700 }}>
+                              Translated (English — manager receives this)
+                            </div>
+
+                            {/* Translated (English) */}
+                            <textarea
+                              rows={2}
+                              value={perPhotoTranslated}
+                              onChange={e => {
+                                const v = e.target.value;
+                                setCleanerNoteByNewPath(prev => ({
+                                  ...prev,
+                                  [f.url]: { ...(prev[f.url] || {}), translated: v }
+                                }));
+                              }}
+                              placeholder="English version will appear here… (editable)"
                               style={{ ...ui.input, width:'100%', padding:'8px 10px', background:'#0b1220', resize:'vertical' }}
                             />
                           </div>
@@ -1204,16 +1351,54 @@ async function runAiScan() {
           <div style={{ display:'flex', flexDirection:'column', gap:12, marginTop:16, maxWidth:520 }}>
             {tab === 'needs-fix' ? (
               <>
+                <div style={{ fontSize: 12, color: '#9ca3af', marginBottom: 6, fontWeight: 700 }}>
+                  Message to manager (Spanish → translate to English)
+                </div>
+
                 <textarea
-                  value={reply}
-                  onChange={e => setReply(e.target.value)}
-                  placeholder="Message to manager (optional)"
+                  value={replyOriginal}
+                  onChange={e => setReplyOriginal(e.target.value)}
+                  placeholder="Escribe tu mensaje en Español…"
                   style={{
                     width:'100%', minHeight:80, padding:10,
                     borderRadius:8, border:'1px solid #334155',
-                    color:'#e5e7eb', background:'#0b1220'
+                    color:'#e5e7eb', background:'#0b1220',
+                    resize:'vertical'
                   }}
                 />
+
+                <div style={{ display:'flex', gap:10, alignItems:'center', marginTop:8 }}>
+                  <ThemedButton
+                    kind="secondary"
+                    onClick={translateReplyToEnglish}
+                    loading={isTranslatingReply}
+                    disabled={isTranslatingReply || !String(replyOriginal || '').trim()}
+                    ariaLabel="Translate to English"
+                  >
+                    🌐 Translate to English
+                  </ThemedButton>
+
+                  {translateReplyError ? (
+                    <div style={{ fontSize: 12, color: '#fca5a5' }}>{translateReplyError}</div>
+                  ) : null}
+                </div>
+
+                <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 10, marginBottom: 6, fontWeight: 700 }}>
+                  Translated (English — manager receives this)
+                </div>
+
+                <textarea
+                  value={replyTranslated}
+                  onChange={e => setReplyTranslated(e.target.value)}
+                  placeholder="English version will appear here… (editable)"
+                  style={{
+                    width:'100%', minHeight:80, padding:10,
+                    borderRadius:8, border:'1px solid #334155',
+                    color:'#e5e7eb', background:'#0b1220',
+                    resize:'vertical'
+                  }}
+                />
+
                 <ThemedButton onClick={submitFixes} loading={submitting} kind="secondary" ariaLabel="Submit Fixes" full>
                   🔧 Submit Fixes
                 </ThemedButton>
