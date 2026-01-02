@@ -40,7 +40,12 @@ export default function ContactPage() {
               <strong style={{ color: '#e5e7eb' }}>Location:</strong> United States
             </div>
           </div>
-
+            <div style={{ marginTop: 6 }}>
+              <strong style={{ color: '#e5e7eb' }}>Mailing address:</strong> 1460 Rifle Range Road, El Cerrito, CA 94530
+            </div>
+            <div style={{ marginTop: 6 }}>
+              <strong style={{ color: '#e5e7eb' }}>Support hours:</strong> Mon–Fri, 9am–5pm PT
+            </div>
           <div style={{ marginTop: 14 }}>
             <p style={{ ...ui.muted, fontSize: 12, marginBottom: 0 }}>
               For SMS assistance, please include your account email and the phone number you used.
