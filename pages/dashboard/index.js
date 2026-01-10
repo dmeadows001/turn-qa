@@ -1,169 +1,233 @@
 // pages/dashboard/index.js
-import { useEffect, useState } from 'react';
-import Link from 'next/link';
+import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/router';
+import { supabaseBrowser } from '@/lib/supabaseBrowser';
 import ChromeDark from '../../components/ChromeDark';
 import { ui } from '../../lib/theme';
-import { supabaseBrowser } from '@/lib/supabaseBrowser';
+
+const supabase = supabaseBrowser();
+
+function GettingStartedModal({ storageKey, title, children }) {
+  const [open, setOpen] = useState(false);
+  const [dontShow, setDontShow] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const seen = window.localStorage.getItem(storageKey);
+      if (!seen) setOpen(true);
+    } catch {
+      // ignore
+      setOpen(true);
+    }
+  }, [storageKey]);
+
+  function dismiss() {
+    try {
+      if (dontShow && typeof window !== 'undefined') {
+        window.localStorage.setItem(storageKey, '1');
+      }
+    } catch {
+      // ignore
+    }
+    setOpen(false);
+  }
+
+  if (!open) return null;
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(2, 6, 23, 0.72)',
+        zIndex: 9999,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 16,
+      }}
+    >
+      <div style={{ ...ui.card, maxWidth: 720, width: '100%' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'start' }}>
+          <div>
+            <h2 style={{ margin: 0 }}>Getting Started</h2>
+            <div style={{ ...ui.subtle, marginTop: 6 }}>{title}</div>
+          </div>
+          <button type="button" onClick={dismiss} style={ui.btnSecondary} aria-label="Dismiss">
+            ✕
+          </button>
+        </div>
+
+        <div style={{ marginTop: 14, color: '#cbd5e1', lineHeight: 1.45 }}>
+          {children}
+        </div>
+
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', marginTop: 16, flexWrap: 'wrap' }}>
+          <label style={{ display: 'flex', gap: 8, alignItems: 'center', cursor: 'pointer', color: '#cbd5e1' }}>
+            <input
+              type="checkbox"
+              checked={dontShow}
+              onChange={(e) => setDontShow(e.target.checked)}
+              style={{ transform: 'scale(1.05)' }}
+            />
+            Don&apos;t show this again
+          </label>
+
+          <button type="button" onClick={dismiss} style={ui.btnPrimary}>
+            Got it
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export default function Dashboard() {
   const router = useRouter();
-  const supabase = supabaseBrowser();
 
-  const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [creating, setCreating] = useState(false);
-  const [propName, setPropName] = useState('');
-  const [propsList, setPropsList] = useState([]);
   const [msg, setMsg] = useState('');
-  const [managerId, setManagerId] = useState(null);
+  const [properties, setProperties] = useState([]);
+  const [newName, setNewName] = useState('');
 
-  // keep session in sync
+  async function loadProperties() {
+    setLoading(true);
+    setMsg('');
+    try {
+      const { data, error } = await supabase
+        .from('properties')
+        .select('id, name, created_at')
+        .order('created_at', { ascending: false });
+      if (error) throw error;
+      setProperties(data || []);
+    } catch (e) {
+      setMsg(e.message || 'Failed to load properties');
+    } finally {
+      setLoading(false);
+    }
+  }
+
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => setSession(data.session || null));
-    const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => setSession(s));
-    return () => sub.subscription.unsubscribe();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    loadProperties();
   }, []);
 
-  // bootstrap manager row + load properties
-  useEffect(() => {
-    if (!session) return;
-    (async () => {
-      try {
-        setLoading(true);
-        setMsg('');
+  const hasProperties = useMemo(() => (properties || []).length > 0, [properties]);
 
-        // 1) Ensure exactly one managers row for this user (idempotent)
-        const { data: existing, error: mErr } = await supabase
-          .from('managers')
-          .select('id')
-          .eq('user_id', session.user.id);
-
-        if (mErr) throw mErr;
-
-        if (!existing || existing.length === 0) {
-          const { error: insErr } = await supabase
-            .from('managers')
-            .upsert(
-              { user_id: session.user.id, name: session.user.email || 'Manager' },
-              { onConflict: 'user_id' }
-            );
-          if (insErr) throw insErr;
-        } else if (existing.length > 1) {
-          const keepId = existing[0].id;
-          const extras = existing.slice(1).map(r => r.id);
-          if (extras.length) {
-            const { error: delErr } = await supabase.from('managers').delete().in('id', extras);
-            if (delErr) throw delErr;
-          }
-          setManagerId(keepId);
-        }
-
-        // reselect the single id
-        const { data: one, error: oneErr } = await supabase
-          .from('managers')
-          .select('id')
-          .eq('user_id', session.user.id)
-          .single();
-        if (oneErr) throw oneErr;
-        setManagerId(one.id);
-
-        // 2) Load properties
-        const { data: props, error: pErr } = await supabase
-          .from('properties')
-          .select('id, name, created_at')
-          .order('created_at', { ascending: false });
-        if (pErr) throw pErr;
-
-        setPropsList(props || []);
-      } catch (e) {
-        console.error('[dashboard bootstrap]', e);
-        setMsg(e.message || 'Failed to initialize dashboard');
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, [session, supabase]);
-
-  // ✅ RESTORED: createProperty handler
   async function createProperty(e) {
     e?.preventDefault?.();
     try {
-      if (!propName.trim()) return setMsg('Enter a property name.');
-      if (!managerId) return setMsg('Your account is initializing. Try again in a moment.');
-      setCreating(true);
       setMsg('');
+      const name = newName.trim();
+      if (!name) {
+        setMsg('Please enter a property name.');
+        return;
+      }
 
       const { data, error } = await supabase
         .from('properties')
-        .insert({ name: propName.trim(), manager_id: managerId })
-        .select('id')
+        .insert({ name })
+        .select('id, name')
         .single();
+
       if (error) throw error;
 
-      setPropName('');
-      setPropsList(prev => [
-        { id: data.id, name: propName.trim(), created_at: new Date().toISOString() },
-        ...prev
-      ]);
+      setNewName('');
+      setMsg('Created ✅');
 
+      // Send manager to template builder
       router.push(`/properties/${data.id}/template`);
     } catch (e) {
-      setMsg(e.message || 'Could not create property');
-    } finally {
-      setCreating(false);
+      setMsg(e.message || 'Create property failed');
     }
   }
 
   return (
     <ChromeDark title="Dashboard">
+      <GettingStartedModal
+        storageKey="turnqa_gs_manager_dashboard_v1"
+        title="Create your first Property"
+      >
+        <div style={{ marginBottom: 10 }}>
+          Enter your <b>Property Name</b>, then click <b>Create</b> to start building your TurnQA checklist.
+        </div>
+        <div style={{ ...ui.subtle }}>
+          Example: “Scottsdale – 58th St” or “Glendale – Main House”
+        </div>
+      </GettingStartedModal>
+
       <section style={ui.sectionGrid}>
-        {/* Create Property */}
         <div style={ui.card}>
           <h2 style={{ marginTop: 0, marginBottom: 8 }}>Create a property</h2>
-          <form onSubmit={createProperty}>
-            <label htmlFor="propname" style={ui.label}>Property name</label>
-            <div style={{ ...ui.row }}>
+          <div style={ui.subtle}>Add your first property to start building a checklist.</div>
+
+          <form onSubmit={createProperty} style={{ marginTop: 14 }}>
+            <label style={ui.label}>Property name</label>
+            <div style={ui.row}>
               <input
-                id="propname"
                 type="text"
-                placeholder="e.g., Glendale — 2BR Condo"
-                style={{ ...ui.input, flex: 1, minWidth: 220 }}
-                value={propName}
-                onChange={e => setPropName(e.target.value)}
+                style={{ ...ui.input, flex: 2, minWidth: 220 }}
+                placeholder="e.g., Scottsdale – 58th St"
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
               />
-              <button type="submit" disabled={creating} style={ui.btnPrimary}>
-                {creating ? 'Creating…' : 'Create & build checklist'}
+              <button type="submit" style={ui.btnPrimary}>
+                Create &amp; build checklist
               </button>
             </div>
           </form>
-          {msg && <div style={{ marginTop: 10, color: '#fca5a5' }}>{msg}</div>}
+
+          {msg && (
+            <div style={{ marginTop: 10, color: msg.match(/✅|Created/i) ? '#22c55e' : '#fca5a5' }}>
+              {msg}
+            </div>
+          )}
         </div>
 
-        {/* Your Properties */}
         <div style={ui.card}>
           <h2 style={{ marginTop: 0, marginBottom: 8 }}>Your properties</h2>
           {loading ? (
             <div>Loading…</div>
-          ) : propsList.length === 0 ? (
-            <div style={ui.muted}>No properties yet. Create one above to get started.</div>
+          ) : !hasProperties ? (
+            <div style={ui.muted}>No properties yet. Create one above.</div>
           ) : (
-            <div style={{ display: 'grid', gap: 10, marginTop: 8 }}>
-              {propsList.map(p => (
+            <div style={{ display: 'grid', gap: 10 }}>
+              {(properties || []).map((p) => (
                 <div
                   key={p.id}
                   style={{
-                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                    gap: 8, border: '1px solid #1f2937', borderRadius: 12, padding: 12
+                    border: '1px solid #1f2937',
+                    borderRadius: 12,
+                    padding: 12,
+                    background: '#0b1220',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 12,
+                    flexWrap: 'wrap',
                   }}
                 >
-                  <div style={{ fontWeight: 600 }}>{p.name}</div>
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                    <Link href={`/properties/${p.id}/template`} style={ui.btnSecondary}>Checklist</Link>
-                    <Link href={`/properties/${p.id}/invite`} style={ui.btnSecondary}>Invite cleaner</Link>
-                    <Link href={`/properties/${p.id}/start-turn`} style={ui.btnSecondary}>Start turn</Link>
-                    <Link href={`/managers/turns`} style={ui.btnSecondary}>Review turns</Link>
+                  <div>
+                    <div style={{ fontWeight: 800, color: '#e5e7eb' }}>{p.name}</div>
+                    <div style={{ ...ui.subtle }}>
+                      Created: {p.created_at ? new Date(p.created_at).toLocaleString() : '—'}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      onClick={() => router.push(`/properties/${p.id}/template`)}
+                      style={ui.btnPrimary}
+                    >
+                      Build checklist
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => router.push(`/properties/${p.id}/start-turn`)}
+                      style={ui.btnSecondary}
+                    >
+                      Start a test turn
+                    </button>
                   </div>
                 </div>
               ))}
@@ -173,9 +237,4 @@ export default function Dashboard() {
       </section>
     </ChromeDark>
   );
-}
-
-// ⛔ Prevent static optimization (force SSR for this page)
-export async function getServerSideProps() {
-  return { props: {} };
 }
