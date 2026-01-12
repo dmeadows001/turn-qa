@@ -313,6 +313,12 @@ export default function Capture() {
     setPickerShot(null);
   }
 
+    function openGettingStarted() {
+    setDontShowAgain(false);      // default unchecked when opened manually
+    setShowGettingStarted(true);
+  }
+
+
   // --- Translate helper for cleaner reply (Spanish -> English) ---
   async function translateReplyToEnglish() {
     setTranslateReplyError('');
@@ -1020,7 +1026,6 @@ export default function Capture() {
               onClick={() => {
                 // click outside closes (same as dismiss, but doesn't persist unless checkbox checked)
                 setShowGettingStarted(false);
-                if (dontShowAgain) safeSetLS(gettingStartedKey, '1');
               }}
             >
               <div
@@ -1112,10 +1117,34 @@ export default function Capture() {
             </div>
           )}
 
-          {/* Property name */}
-          <h2 style={{ textAlign:'center', margin:'0 0 4px', color: ui.title?.color || '#fff', fontWeight:700 }}>
-            {templateRules?.property || ''}
-          </h2>
+          {/* Property name + Help */}
+          <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <h2 style={{ textAlign:'center', margin:'0 0 4px', color: ui.title?.color || '#fff', fontWeight:700 }}>
+              {templateRules?.property || ''}
+            </h2>
+
+            <button
+              type="button"
+              onClick={openGettingStarted}
+              style={{
+                position: 'absolute',
+                right: 0,
+                top: '50%',
+                transform: 'translateY(-50%)',
+                ...ui.btnSecondary,
+                padding: '6px 10px',
+                borderRadius: 999,
+                border: '1px solid #334155',
+                background: '#0f172a',
+                color: '#cbd5e1'
+              }}
+              title="Help / Getting Started"
+              aria-label="Help / Getting Started"
+            >
+              ❓ Help
+            </button>
+          </div>
+
 
           {/* Needs-fix banner (if any) */}
           {hasFixes && !hideFixBanner && (
