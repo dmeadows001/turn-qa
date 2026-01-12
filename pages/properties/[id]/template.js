@@ -19,6 +19,81 @@ const AREAS = [
   ['other', 'Other'],
 ];
 
+function GettingStartedModal({ storageKey, title, children }) {
+  const [open, setOpen] = useState(false);
+  const [dontShow, setDontShow] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const seen = window.localStorage.getItem(storageKey);
+      if (!seen) setOpen(true);
+    } catch {
+      setOpen(true);
+    }
+  }, [storageKey]);
+
+  function dismiss() {
+    try {
+      if (dontShow && typeof window !== 'undefined') {
+        window.localStorage.setItem(storageKey, '1');
+      }
+    } catch {
+      // ignore
+    }
+    setOpen(false);
+  }
+
+  if (!open) return null;
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(2, 6, 23, 0.72)',
+        zIndex: 9999,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 16,
+      }}
+    >
+      <div style={{ ...ui.card, maxWidth: 780, width: '100%' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'start' }}>
+          <div>
+            <h2 style={{ margin: 0 }}>Getting Started</h2>
+            <div style={{ ...ui.subtle, marginTop: 6 }}>{title}</div>
+          </div>
+          <button type="button" onClick={dismiss} style={ui.btnSecondary} aria-label="Dismiss">
+            ✕
+          </button>
+        </div>
+
+        <div style={{ marginTop: 14, color: '#cbd5e1', lineHeight: 1.45 }}>
+          {children}
+        </div>
+
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', marginTop: 16, flexWrap: 'wrap' }}>
+          <label style={{ display: 'flex', gap: 8, alignItems: 'center', cursor: 'pointer', color: '#cbd5e1' }}>
+            <input
+              type="checkbox"
+              checked={dontShow}
+              onChange={(e) => setDontShow(e.target.checked)}
+              style={{ transform: 'scale(1.05)' }}
+            />
+            Don&apos;t show this again
+          </label>
+
+          <button type="button" onClick={dismiss} style={ui.btnPrimary}>
+            Got it
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function TemplateBuilder() {
   const router = useRouter();
   const { id: propertyId } = router.query;
@@ -447,6 +522,22 @@ export default function TemplateBuilder() {
 
   return (
     <ChromeDark title={property.name}>
+      <GettingStartedModal
+        storageKey="turnqa_gs_manager_template_v1"
+        title="Build your TurnQA checklist (Sections + Photo Requests)"
+      >
+        <div style={{ marginBottom: 10 }}>
+          To get started, choose an area (like <b>Kitchen</b>) and enter what photo you want, like
+          “Overall kitchen shot” or “Photo of refrigerator”.
+        </div>
+        <div style={{ marginBottom: 10 }}>
+          Add as many shots as you need for that area, then move on to the next area (Master Bedroom, Bathroom, etc.).
+        </div>
+        <div style={ui.subtle}>
+          Tip: Use “Required” to enforce multiple angles (example: “Bathroom — Shower” required = 2).
+        </div>
+      </GettingStartedModal>
+
       <section style={ui.sectionGrid}>
         {/* Builder */}
         <div style={ui.card}>
@@ -604,7 +695,6 @@ export default function TemplateBuilder() {
                                         cursor: 'pointer',
                                       }}
                                       onClick={(e) => {
-                                        // avoid triggering when tapping delete
                                         if (e.target.dataset?.role === 'delete-ref') return;
                                         openSignedPath(path);
                                       }}
@@ -679,44 +769,16 @@ export default function TemplateBuilder() {
                           opacity: isDragging ? 0.85 : 1,
                         }}
                       >
-                        {/* drag handle + up/down */}
-                        <td
-                          style={{
-                            padding: '10px 8px',
-                            verticalAlign: 'top',
-                          }}
-                        >
-                          <div
-                            style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 6,
-                            }}
-                          >
-                            <span
-                              style={{
-                                fontSize: 16,
-                                color: '#6b7280',
-                                cursor: 'grab',
-                              }}
-                            >
-                              ⋮⋮
-                            </span>
-                            <div
-                              style={{
-                                display: 'flex',
-                                flexDirection: 'column',
-                                gap: 2,
-                              }}
-                            >
+                        <td style={{ padding: '10px 8px', verticalAlign: 'top' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span style={{ fontSize: 16, color: '#6b7280', cursor: 'grab' }}>⋮⋮</span>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                               <button
                                 type="button"
                                 onClick={() => moveShot(s.id, -1)}
                                 disabled={idx === 0}
                                 style={{
-                                  width: 20,
-                                  height: 18,
-                                  borderRadius: 4,
+                                  width: 20, height: 18, borderRadius: 4,
                                   border: '1px solid #374151',
                                   background: '#020617',
                                   color: '#9ca3af',
@@ -732,17 +794,12 @@ export default function TemplateBuilder() {
                                 onClick={() => moveShot(s.id, +1)}
                                 disabled={idx === shots.length - 1}
                                 style={{
-                                  width: 20,
-                                  height: 18,
-                                  borderRadius: 4,
+                                  width: 20, height: 18, borderRadius: 4,
                                   border: '1px solid #374151',
                                   background: '#020617',
                                   color: '#9ca3af',
                                   fontSize: 10,
-                                  cursor:
-                                    idx === shots.length - 1
-                                      ? 'default'
-                                      : 'pointer',
+                                  cursor: idx === shots.length - 1 ? 'default' : 'pointer',
                                 }}
                                 title="Move down"
                               >
@@ -756,9 +813,7 @@ export default function TemplateBuilder() {
                           <input
                             type="text"
                             value={s.label || ''}
-                            onChange={(e) =>
-                              updateLabel(s.id, e.target.value)
-                            }
+                            onChange={(e) => updateLabel(s.id, e.target.value)}
                             style={{ ...ui.input }}
                           />
                         </td>
@@ -766,19 +821,11 @@ export default function TemplateBuilder() {
                         <td style={{ padding: '10px 8px', verticalAlign: 'top' }}>
                           <select
                             value={s.area_key || 'general'}
-                            onChange={(e) =>
-                              updateArea(s.id, e.target.value)
-                            }
-                            style={{
-                              ...ui.input,
-                              background: '#0b1220',
-                              cursor: 'pointer',
-                            }}
+                            onChange={(e) => updateArea(s.id, e.target.value)}
+                            style={{ ...ui.input, background: '#0b1220', cursor: 'pointer' }}
                           >
                             {AREAS.map(([v, label]) => (
-                              <option key={v} value={v}>
-                                {label}
-                              </option>
+                              <option key={v} value={v}>{label}</option>
                             ))}
                           </select>
                         </td>
@@ -789,44 +836,29 @@ export default function TemplateBuilder() {
                             min={1}
                             step={1}
                             value={s.min_count || 1}
-                            onChange={(e) =>
-                              updateRequired(s.id, e.target.value)
-                            }
+                            onChange={(e) => updateRequired(s.id, e.target.value)}
                             style={{ ...ui.input }}
                           />
                         </td>
 
-                        {/* Reference photos column: count + Add button */}
                         <td style={{ padding: '10px 8px', verticalAlign: 'top' }}>
-                          {/* hidden input for this shot */}
                           <input
                             type="file"
                             accept="image/*"
                             style={{ display: 'none' }}
-                            ref={(el) => {
-                              refInputs.current[s.id] = el;
-                            }}
+                            ref={(el) => { refInputs.current[s.id] = el; }}
                             onChange={(e) => handleRefFileChange(s, e)}
                           />
-                          <div
-                            style={{
-                              display: 'flex',
-                              flexDirection: 'column',
-                              gap: 4,
-                            }}
-                          >
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                             <div style={{ fontSize: 12, color: '#9ca3af' }}>
                               {refCount === 0 && 'No reference photos yet'}
                               {refCount === 1 && '1 reference photo'}
-                              {refCount > 1 &&
-                                `${refCount} reference photos`}
+                              {refCount > 1 && `${refCount} reference photos`}
                             </div>
                             <button
                               type="button"
                               style={ui.btnSecondary}
-                              onClick={() =>
-                                refInputs.current[s.id]?.click()
-                              }
+                              onClick={() => refInputs.current[s.id]?.click()}
                             >
                               + Add reference photo
                             </button>
@@ -834,10 +866,7 @@ export default function TemplateBuilder() {
                         </td>
 
                         <td style={{ padding: '10px 8px', verticalAlign: 'top' }}>
-                          <button
-                            onClick={() => deleteShot(s.id)}
-                            style={ui.btnSecondary}
-                          >
+                          <button onClick={() => deleteShot(s.id)} style={ui.btnSecondary}>
                             Delete
                           </button>
                         </td>
@@ -876,8 +905,7 @@ export default function TemplateBuilder() {
             </button>
           </div>
           <div style={{ ...ui.subtle, marginTop: 10 }}>
-            When a cleaner submits a turn, you’ll review it under{' '}
-            <b>Manager → Turns</b>.
+            When a cleaner submits a turn, you’ll review it under <b>Manager → Turns</b>.
           </div>
         </div>
       </section>
