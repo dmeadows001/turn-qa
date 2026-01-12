@@ -101,6 +101,25 @@ export default function Capture() {
   const [submitting, setSubmitting] = useState(false);
   const [templateRules, setTemplateRules] = useState({ property: '', template: '' });
 
+    // -------- Getting Started modal (Cleaner) --------
+  const [showGettingStarted, setShowGettingStarted] = useState(false);
+  const [dontShowAgain, setDontShowAgain] = useState(false);
+
+  // Different keys for capture vs needs-fix so we can show different instructions
+  const gettingStartedKey = (() => {
+    const t = String(tab || '').toLowerCase();
+    if (t === 'needs-fix' || t === 'needs_fix' || t === 'fix') return 'turnqa_gs_cleaner_needsfix_v1';
+    return 'turnqa_gs_cleaner_capture_v1';
+  })();
+
+  function safeGetLS(key) {
+    try { return window.localStorage.getItem(key); } catch { return null; }
+  }
+  function safeSetLS(key, val) {
+    try { window.localStorage.setItem(key, val); } catch {}
+  }
+
+
   // Signed thumbnail cache for existing/new photos
   const [thumbByPath, setThumbByPath] = useState({});
   const requestedThumbsRef = useRef(new Set());
@@ -526,6 +545,17 @@ export default function Capture() {
       } catch {}
     })();
   }, [turnId]);
+
+    // Show Getting Started modal (only if user hasn't dismissed it before)
+  useEffect(() => {
+    if (!turnId) return;
+    if (typeof window === 'undefined') return;
+
+    const already = safeGetLS(gettingStartedKey) === '1';
+    if (!already) {
+      setShowGettingStarted(true);
+    }
+  }, [turnId, gettingStartedKey]);
 
   // -------- Add files (quality + upload to Storage) --------
   async function addFiles(shotId, fileList) {
@@ -974,6 +1004,114 @@ export default function Capture() {
     <ChromeDark title="Start Taking Photos">
       <section style={ui.sectionGrid}>
         <div style={ui.card}>
+          {/* Getting Started modal (Cleaner) */}
+          {showGettingStarted && (
+            <div
+              style={{
+                position: 'fixed',
+                inset: 0,
+                zIndex: 10050,
+                background: 'rgba(0,0,0,0.72)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: 16
+              }}
+              onClick={() => {
+                // click outside closes (same as dismiss, but doesn't persist unless checkbox checked)
+                setShowGettingStarted(false);
+                if (dontShowAgain) safeSetLS(gettingStartedKey, '1');
+              }}
+            >
+              <div
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                  width: 'min(720px, 100%)',
+                  borderRadius: 16,
+                  border: '1px solid #334155',
+                  background: '#0b1220',
+                  boxShadow: '0 20px 80px rgba(0,0,0,0.6)',
+                  padding: 16
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center' }}>
+                  <div style={{ fontSize: 18, fontWeight: 800, color: '#e5e7eb' }}>
+                    Getting Started
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowGettingStarted(false);
+                      if (dontShowAgain) safeSetLS(gettingStartedKey, '1');
+                    }}
+                    style={{
+                      ...ui.btnSecondary,
+                      padding: '6px 10px',
+                      borderRadius: 999,
+                      border: '1px solid #334155',
+                      background: '#0f172a',
+                      color: '#cbd5e1'
+                    }}
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                {String(tab || '').toLowerCase() === 'needs-fix' ? (
+                  <div style={{ marginTop: 12, color: '#cbd5e1', fontSize: 14, lineHeight: 1.5 }}>
+                    <div style={{ fontWeight: 800, marginBottom: 6 }}>You’re in “Needs Fix” mode</div>
+                    <ul style={{ margin: 0, paddingLeft: 18 }}>
+                      <li>Look for photos marked <b style={{ color: '#fcd34d' }}>Needs fix</b> (your manager left notes).</li>
+                      <li>Tap <b>Add photo</b> and upload a new “FIX” photo for the issue you corrected.</li>
+                      <li>Optional: add a note to the manager (Spanish → Translate to English).</li>
+                      <li>When you’re done, tap <b>Submit Fixes</b> to send the updates back for review.</li>
+                    </ul>
+                  </div>
+                ) : (
+                  <div style={{ marginTop: 12, color: '#cbd5e1', fontSize: 14, lineHeight: 1.5 }}>
+                    <div style={{ fontWeight: 800, marginBottom: 6 }}>Capture flow (new turn)</div>
+                    <ul style={{ margin: 0, paddingLeft: 18 }}>
+                      <li>For each section, tap <b>Add photo</b> and take clear, well-lit pictures.</li>
+                      <li>Try to match any <b>reference photos</b> shown (how the area should look).</li>
+                      <li>When finished, tap <b>Run AI Scan</b> to catch issues before submitting.</li>
+                      <li>Tap <b>Submit Turn</b> when all required photos are uploaded.</li>
+                    </ul>
+                  </div>
+                )}
+
+                <div style={{ marginTop: 14, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', userSelect: 'none' }}>
+                    <input
+                      type="checkbox"
+                      checked={dontShowAgain}
+                      onChange={(e) => setDontShowAgain(!!e.target.checked)}
+                      style={{ transform: 'scale(1.1)' }}
+                    />
+                    <span style={{ color: '#94a3b8', fontSize: 13 }}>Don’t show this again</span>
+                  </label>
+
+                  <div style={{ flex: 1 }} />
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowGettingStarted(false);
+                      if (dontShowAgain) safeSetLS(gettingStartedKey, '1');
+                    }}
+                    style={{
+                      ...ui.btnPrimary,
+                      padding: '10px 14px',
+                      borderRadius: 12
+                    }}
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Property name */}
           <h2 style={{ textAlign:'center', margin:'0 0 4px', color: ui.title?.color || '#fff', fontWeight:700 }}>
             {templateRules?.property || ''}
