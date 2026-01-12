@@ -918,29 +918,31 @@ export default function Capture() {
   async function submitFixes() {
     if (submitting) return;
 
-    // new photos are those with preview present
-    const newPhotos = Object.values(uploadsByShot)
+    // ✅ NEW RULE: must include at least one NEW FIX photo
+    // New photos are those with preview present, and FIX photos are those with isFix true
+    const newFixFiles = Object.values(uploadsByShot)
       .flat()
-      .filter(f => !!f.preview)
-      .map(f => {
-        const noteObj = cleanerNoteByNewPath[f.url] || {};
-        const no = String(noteObj.original || '').trim();     // Spanish
-        const nt = String(noteObj.translated || '').trim();   // English
+      .filter(f => !!f.preview && !!f.isFix);
 
-        return {
-          url: f.url,
-          shotId: f.shotId,
+    const newPhotos = newFixFiles.map(f => {
+      const noteObj = cleanerNoteByNewPath[f.url] || {};
+      const no = String(noteObj.original || '').trim();     // Spanish
+      const nt = String(noteObj.translated || '').trim();   // English
 
-          // manager-facing (English preferred)
-          note: (nt || no || '').trim() || null,
+      return {
+        url: f.url,
+        shotId: f.shotId,
 
-          // bilingual fields for history (API stores into turn_photos new columns)
-          note_original: no || null,
-          note_translated: nt || null,
-          note_original_lang: no ? 'es' : null,
-          note_translated_lang: nt ? 'en' : null,
-        };
-      });
+        // manager-facing (English preferred)
+        note: (nt || no || '').trim() || null,
+
+        // bilingual fields for history (API stores into turn_photos new columns)
+        note_original: no || null,
+        note_translated: nt || null,
+        note_original_lang: no ? 'es' : null,
+        note_translated_lang: nt ? 'en' : null,
+      };
+    });
 
     const ro = (replyOriginal || '').trim();      // Spanish original
     const rt = (replyTranslated || '').trim();    // English translated (editable)
@@ -948,8 +950,9 @@ export default function Capture() {
     // What gets sent/displayed to the manager
     const replySent = (rt || ro || '').trim();
 
-    if (newPhotos.length === 0 && !replySent) {
-      alert('Add at least one new photo or a note before submitting.');
+    // ✅ Hard stop: must have at least one NEW FIX photo
+    if (newPhotos.length === 0) {
+      alert('Please add at least one NEW FIX photo before submitting fixes.');
       return;
     }
 
@@ -1005,6 +1008,10 @@ export default function Capture() {
 
   const hasFixes = (fixNotes?.count || 0) > 0;
   const renderShots = Array.isArray(shots) ? shots : [];
+
+  const hasNewFixPhoto = Object.values(uploadsByShot || {})
+    .flat()
+    .some(f => !!f.preview && !!f.isFix);
 
   return (
     <ChromeDark title="Start Taking Photos">
@@ -1566,9 +1573,23 @@ export default function Capture() {
                   }}
                 />
 
-                <ThemedButton onClick={submitFixes} loading={submitting} kind="secondary" ariaLabel="Submit Fixes" full>
-                  🔧 Submit Fixes
-                </ThemedButton>
+              <ThemedButton
+                onClick={submitFixes}
+                loading={submitting}
+                kind="secondary"
+                ariaLabel="Submit Fixes"
+                full
+                disabled={!hasNewFixPhoto}
+              >
+              🔧 Submit Fixes
+            </ThemedButton>
+
+            {!hasNewFixPhoto && (
+              <div style={{ fontSize: 12, color: '#f59e0b', marginTop: 6 }}>
+                Add at least one NEW FIX photo to enable Submit Fixes.
+              </div>
+            )}
+
               </>
             ) : (
               <>
