@@ -226,6 +226,87 @@ function pickNoteSentToCleaner(finding) {
   return legacy;
 }
 
+/** Manager Review Getting Started modal (localStorage-backed) */
+function GettingStartedModal({ enabled, storageKey, children }) {
+  const [open, setOpen] = useState(false);
+  const [dontShow, setDontShow] = useState(false);
+
+  useEffect(() => {
+    if (!enabled) return;
+    if (typeof window === 'undefined') return;
+
+    try {
+      const seen = window.localStorage.getItem(storageKey);
+      if (!seen) setOpen(true);
+    } catch {
+      setOpen(true);
+    }
+  }, [enabled, storageKey]);
+
+  function dismiss() {
+    try {
+      if (dontShow && typeof window !== 'undefined') {
+        window.localStorage.setItem(storageKey, '1');
+      }
+    } catch {
+      // ignore
+    }
+    setOpen(false);
+  }
+
+  if (!enabled || !open) return null;
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(2, 6, 23, 0.72)',
+        zIndex: 9999,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 16,
+      }}
+    >
+      <div style={{ ...ui.card, maxWidth: 820, width: '100%' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'start' }}>
+          <div>
+            <h2 style={{ margin: 0 }}>Getting Started</h2>
+            <div style={{ ...ui.subtle, marginTop: 6 }}>
+              Manager review: mark issues, translate if needed, then send to cleaner
+            </div>
+          </div>
+
+          <button type="button" onClick={dismiss} style={ui.btnSecondary} aria-label="Dismiss">
+            ✕
+          </button>
+        </div>
+
+        <div style={{ marginTop: 14, color: '#cbd5e1', lineHeight: 1.5 }}>
+          {children}
+        </div>
+
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', marginTop: 16, flexWrap: 'wrap' }}>
+          <label style={{ display: 'flex', gap: 8, alignItems: 'center', cursor: 'pointer', color: '#cbd5e1' }}>
+            <input
+              type="checkbox"
+              checked={dontShow}
+              onChange={(e) => setDontShow(e.target.checked)}
+              style={{ transform: 'scale(1.05)' }}
+            />
+            Don&apos;t show this again
+          </label>
+
+          <button type="button" onClick={dismiss} style={ui.btnPrimary}>
+            Got it
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // --- PhotoCard at module scope so it doesn't remount each render ---
 const PhotoCard = memo(function PhotoCard({
   p,
@@ -851,6 +932,21 @@ export default function Review() {
 
   return (
     <ChromeDark title="Turn Review">
+      {/* ✅ Manager Getting Started popup */}
+      <GettingStartedModal enabled={isManagerMode} storageKey="turnqa_gs_manager_review_v1">
+        <div style={{ marginBottom: 10 }}>
+          For any photo that needs fixing, check <b>Needs fix</b>.
+          Then type your note in <b>English</b>.
+        </div>
+        <div style={{ marginBottom: 10 }}>
+          If your cleaner speaks Spanish, click <b>Translate → ES</b> so the cleaner receives Spanish.
+          If your cleaner speaks English, just leave it in English (no need to translate).
+        </div>
+        <div>
+          When you&apos;re done, click <b>🛠️ Send Needs Fix</b> to notify the cleaner.
+        </div>
+      </GettingStartedModal>
+
       <section style={ui.sectionGrid}>
         {/* Header / Meta */}
         <div style={ui.card}>
