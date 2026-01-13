@@ -43,6 +43,12 @@ export default function Dashboard() {
     setShowGettingStarted(false);
   }
 
+    function openGettingStarted() {
+    setDontShowAgain(false);      // default unchecked when opened manually
+    setShowGettingStarted(true);
+  }
+
+
   // keep session in sync
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session || null));
@@ -155,8 +161,13 @@ export default function Dashboard() {
             justifyContent: 'center',
             padding: 16,
           }}
+          onClick={() => {
+            // click outside closes (does NOT persist unless checkbox checked via Dismiss)
+            setShowGettingStarted(false);
+          }}
         >
           <div
+            onClick={(e) => e.stopPropagation()}
             style={{
               width: 'min(720px, 100%)',
               borderRadius: 16,
@@ -213,7 +224,26 @@ export default function Dashboard() {
       <section style={ui.sectionGrid}>
         {/* Create Property */}
         <div style={ui.card}>
-          <h2 style={{ marginTop: 0, marginBottom: 8 }}>Create a property</h2>
+          <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+            <h2 style={{ marginTop: 0, marginBottom: 8 }}>Create a property</h2>
+
+            <button
+              type="button"
+              onClick={openGettingStarted}
+              style={{
+                ...ui.btnSecondary,
+                padding: '6px 10px',
+                borderRadius: 999,
+                border: '1px solid #334155',
+                background: '#0f172a',
+                color: '#cbd5e1'
+              }}
+              title="Help / Getting Started"
+              aria-label="Help / Getting Started"
+            >
+              ❓ Help
+            </button>
+          </div>
           <form onSubmit={createProperty}>
             <label htmlFor="propname" style={ui.label}>
               Property name
