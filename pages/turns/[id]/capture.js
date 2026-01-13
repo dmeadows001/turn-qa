@@ -96,7 +96,7 @@ export default function Capture() {
 
   // -------- State --------
   const [shots, setShots] = useState(null);
-  // files we render per-shot; each file: {name, url (storage path), width, height, shotId, preview?, isFix?, cleanerNote?}
+  // files we render per-shot; each file: {name, url (storage path), width, height, shotId, preview?, isFix?, cleanerNote?, capturedAt?}
   const [uploadsByShot, setUploadsByShot] = useState({});
   const [submitting, setSubmitting] = useState(false);
   const [templateRules, setTemplateRules] = useState({ property: '', template: '' });
@@ -118,7 +118,6 @@ export default function Capture() {
   function safeSetLS(key, val) {
     try { window.localStorage.setItem(key, val); } catch {}
   }
-
 
   // Signed thumbnail cache for existing/new photos
   const [thumbByPath, setThumbByPath] = useState({});
@@ -153,14 +152,23 @@ export default function Capture() {
   const [scanProgress, setScanProgress] = useState(0); // 0–100 while scanning
   const [scanIssuesByArea, setScanIssuesByArea] = useState({}); // { areaKey: [msg, ...] }
 
-  // --- NEW: bottom-sheet picker state for cleaner photo uploads ---
-  const [pickerShot, setPickerShot] = useState(null);      // which shot_id is currently picking
-  const [pickerVisible, setPickerVisible] = useState(false);
+  // --- Camera-only picker state ---
+  const [pickerShot, setPickerShot] = useState(null); // which shot_id is currently picking (kept so addFiles knows where to put it)
   const cameraInputRef = useRef(null);
-  const fileInputRef = useRef(null); // generic "choose from device"
 
   // ------- helpers -------
   const smallMeta = { fontSize: 12, color: '#94a3b8' };
+
+  function formatCapturedAt(ts) {
+    if (!ts) return '';
+    try {
+      const d = new Date(ts);
+      if (Number.isNaN(d.getTime())) return '';
+      return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    } catch {
+      return '';
+    }
+  }
 
   async function signPath(path) {
     const resp = await fetch('/api/sign-photo', {
@@ -290,13 +298,14 @@ export default function Capture() {
     });
   }
 
-  // --- NEW: open custom bottom-sheet picker instead of direct file input ---
+  // ✅ Camera-only: open camera immediately (no bottom-sheet choice)
   function openPicker(shotId) {
     setPickerShot(shotId);
-    setPickerVisible(true);
+    const el = cameraInputRef.current;
+    if (el) el.click();
   }
 
-  // --- NEW: handle file selection from global hidden inputs ---
+  // handle file selection from camera input
   function handleGlobalFileChange(e) {
     const files = e.target.files;
     if (files && files.length && pickerShot) {
@@ -304,20 +313,13 @@ export default function Capture() {
     }
     // reset input so same file can be re-selected
     try { e.target.value = ''; } catch {}
-    setPickerVisible(false);
     setPickerShot(null);
   }
 
-  function closePicker() {
-    setPickerVisible(false);
-    setPickerShot(null);
-  }
-
-    function openGettingStarted() {
+  function openGettingStarted() {
     setDontShowAgain(false);      // default unchecked when opened manually
     setShowGettingStarted(true);
   }
-
 
   // --- Translate helper for cleaner reply (Spanish -> English) ---
   async function translateReplyToEnglish() {
@@ -433,6 +435,15 @@ export default function Capture() {
             !!(it.is_fix ?? it.isFix ?? it.fix) ||
             (!!it.cleaner_note && it.needs_fix === false);
 
+          // Best-effort captured timestamp from API fields (non-breaking)
+          const capturedAt =
+            it.captured_at ||
+            it.taken_at ||
+            it.created_at ||
+            it.inserted_at ||
+            it.updated_at ||
+            null;
+
           const file = {
             name: path.split('/').pop() || 'photo.jpg',
             url: path,
@@ -443,6 +454,7 @@ export default function Capture() {
             isFix: isFixRow,
             cleanerNote: it.cleaner_note ?? it.cleanerNote ?? null,
             managerNote: it.manager_note ?? it.manager_notes ?? it.note ?? null,
+            capturedAt: capturedAt,
           };
 
           (byShot[targetShot] ||= []).push(file);
@@ -552,7 +564,7 @@ export default function Capture() {
     })();
   }, [turnId]);
 
-    // Show Getting Started modal (only if user hasn't dismissed it before)
+  // Show Getting Started modal (only if user hasn't dismissed it before)
   useEffect(() => {
     if (!turnId) return;
     if (typeof window === 'undefined') return;
@@ -585,6 +597,9 @@ export default function Capture() {
       }
 
       const preview = URL.createObjectURL(f);
+
+      // ✅ capture timestamp (client time) for badge
+      const capturedAt = new Date().toISOString();
 
       // 2) Ask backend for upload target
       let meta = {};
@@ -673,7 +688,8 @@ export default function Capture() {
           width: dims.width,
           height: dims.height,
           preview,
-          isFix: isFixMode
+          isFix: isFixMode,
+          capturedAt,               // ✅ new badge field
         });
       } catch (e) {
         URL.revokeObjectURL(preview);
@@ -1152,7 +1168,6 @@ export default function Capture() {
             </button>
           </div>
 
-
           {/* Needs-fix banner (if any) */}
           {hasFixes && !hideFixBanner && (
             <div
@@ -1355,6 +1370,8 @@ export default function Capture() {
                     const perPhotoLoading = !!perPhoto.isTranslating;
                     const perPhotoErr = String(perPhoto.error || '');
 
+                    const capturedLabel = formatCapturedAt(f.capturedAt);
+
                     return (
                       <div
                         key={f.url}
@@ -1413,6 +1430,12 @@ export default function Capture() {
                         >
                           <div style={{ fontSize:13, maxWidth:'60%' }}>
                             <b title={f.name}>{f.name}</b>
+                            {/* ✅ Capture badge */}
+                            {capturedLabel ? (
+                              <div style={{ marginTop: 4, fontSize: 12, color: '#93c5fd' }}>
+                                Captured: {capturedLabel}
+                              </div>
+                            ) : null}
                           </div>
 
                           <div style={{ display:'flex', gap:8 }}>
@@ -1573,22 +1596,22 @@ export default function Capture() {
                   }}
                 />
 
-              <ThemedButton
-                onClick={submitFixes}
-                loading={submitting}
-                kind="secondary"
-                ariaLabel="Submit Fixes"
-                full
-                disabled={!hasNewFixPhoto}
-              >
-              🔧 Submit Fixes
-            </ThemedButton>
+                <ThemedButton
+                  onClick={submitFixes}
+                  loading={submitting}
+                  kind="secondary"
+                  ariaLabel="Submit Fixes"
+                  full
+                  disabled={!hasNewFixPhoto}
+                >
+                  🔧 Submit Fixes
+                </ThemedButton>
 
-            {!hasNewFixPhoto && (
-              <div style={{ fontSize: 12, color: '#f59e0b', marginTop: 6 }}>
-                Add at least one NEW FIX photo to enable Submit Fixes.
-              </div>
-            )}
+                {!hasNewFixPhoto && (
+                  <div style={{ fontSize: 12, color: '#f59e0b', marginTop: 6 }}>
+                    Add at least one NEW FIX photo to enable Submit Fixes.
+                  </div>
+                )}
 
               </>
             ) : (
@@ -1778,7 +1801,7 @@ export default function Capture() {
           </div>
         )}
 
-        {/* NEW: Global hidden file inputs for the bottom-sheet picker */}
+        {/* Global hidden camera input (camera-only) */}
         <input
           type="file"
           ref={cameraInputRef}
@@ -1787,106 +1810,6 @@ export default function Capture() {
           style={{ display: 'none' }}
           onChange={handleGlobalFileChange}
         />
-        <input
-          type="file"
-          ref={fileInputRef}
-          style={{ display: 'none' }}
-          onChange={handleGlobalFileChange}
-        />
-
-        {/* NEW: Bottom-sheet style picker overlay */}
-        {pickerVisible && pickerShot && (
-          <>
-            {/* dark backdrop */}
-            <div
-              onClick={closePicker}
-              style={{
-                position: 'fixed',
-                inset: 0,
-                background: 'rgba(15,23,42,0.65)',
-                zIndex: 9998,
-              }}
-            />
-            {/* sheet */}
-            <div
-              style={{
-                position: 'fixed',
-                left: 0,
-                right: 0,
-                bottom: 0,
-                zIndex: 9999,
-                background: '#020617',
-                borderTopLeftRadius: 16,
-                borderTopRightRadius: 16,
-                borderTop: '1px solid #1f2937',
-                boxShadow: '0 -8px 30px rgba(0,0,0,0.6)',
-                padding: '12px 16px 20px',
-              }}
-            >
-              <div
-                style={{
-                  width: 40,
-                  height: 4,
-                  borderRadius: 999,
-                  background: '#1f2937',
-                  margin: '0 auto 10px',
-                }}
-              />
-              <div style={{ fontSize: 14, fontWeight: 600, color: '#e5e7eb', textAlign: 'center', marginBottom: 10 }}>
-                Choose photo source
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const el = cameraInputRef.current;
-                    if (el) el.click();
-                  }}
-                  style={{
-                    ...ui.btnPrimary,
-                    width: '100%',
-                    justifyContent: 'flex-start',
-                    padding: '10px 12px',
-                    fontSize: 14,
-                  }}
-                >
-                  📷 Take Photo (Camera)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const el = fileInputRef.current;
-                    if (el) el.click();
-                  }}
-                  style={{
-                    ...ui.btnSecondary,
-                    width: '100%',
-                    justifyContent: 'flex-start',
-                    padding: '10px 12px',
-                    fontSize: 14,
-                  }}
-                >
-                  📁 Choose from device
-                </button>
-                <button
-                  type="button"
-                  onClick={closePicker}
-                  style={{
-                    ...ui.btnSecondary,
-                    width: '100%',
-                    justifyContent: 'center',
-                    padding: '8px 12px',
-                    fontSize: 13,
-                    marginTop: 4,
-                    opacity: 0.85,
-                  }}
-                >
-                  ✕ Cancel
-                </button>
-              </div>
-            </div>
-          </>
-        )}
       </section>
     </ChromeDark>
   );
