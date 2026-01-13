@@ -19,28 +19,30 @@ const AREAS = [
   ['other', 'Other'],
 ];
 
-function GettingStartedModal({ storageKey, title, children }) {
-  const [open, setOpen] = useState(false);
+function GettingStartedModal({ storageKey, title, children, open, setOpen }) {
   const [dontShow, setDontShow] = useState(false);
+
+  function safeGetLS(key) {
+    try { return window.localStorage.getItem(key); } catch { return null; }
+  }
+  function safeSetLS(key, val) {
+    try { window.localStorage.setItem(key, val); } catch {}
+  }
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
     try {
-      const seen = window.localStorage.getItem(storageKey);
+      const seen = safeGetLS(storageKey);
       if (!seen) setOpen(true);
     } catch {
       setOpen(true);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storageKey]);
 
-  function dismiss() {
-    try {
-      if (dontShow && typeof window !== 'undefined') {
-        window.localStorage.setItem(storageKey, '1');
-      }
-    } catch {
-      // ignore
-    }
+  function dismiss(persist = true) {
+    // persist only if caller wants to AND checkbox checked
+    if (persist && dontShow) safeSetLS(storageKey, '1');
     setOpen(false);
   }
 
@@ -58,14 +60,26 @@ function GettingStartedModal({ storageKey, title, children }) {
         justifyContent: 'center',
         padding: 16,
       }}
+      onClick={() => {
+        // click outside closes (same as dismiss, but doesn't persist unless checkbox checked)
+        dismiss(false);
+      }}
     >
-      <div style={{ ...ui.card, maxWidth: 780, width: '100%' }}>
+      <div
+        style={{ ...ui.card, maxWidth: 780, width: '100%' }}
+        onClick={(e) => e.stopPropagation()}
+      >
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'start' }}>
           <div>
             <h2 style={{ margin: 0 }}>Getting Started</h2>
             <div style={{ ...ui.subtle, marginTop: 6 }}>{title}</div>
           </div>
-          <button type="button" onClick={dismiss} style={ui.btnSecondary} aria-label="Dismiss">
+          <button
+            type="button"
+            onClick={() => dismiss(true)}
+            style={ui.btnSecondary}
+            aria-label="Dismiss"
+          >
             ✕
           </button>
         </div>
@@ -85,7 +99,11 @@ function GettingStartedModal({ storageKey, title, children }) {
             Don&apos;t show this again
           </label>
 
-          <button type="button" onClick={dismiss} style={ui.btnPrimary}>
+          <button
+            type="button"
+            onClick={() => dismiss(true)}
+            style={ui.btnPrimary}
+          >
             Got it
           </button>
         </div>
@@ -106,6 +124,13 @@ export default function TemplateBuilder() {
   const [newLabel, setNewLabel] = useState('');
   const [newArea, setNewArea]   = useState('general');
   const [newRequired, setNewRequired] = useState(1);
+
+  // ✅ Getting Started (Help) state
+  const [showGettingStarted, setShowGettingStarted] = useState(false);
+
+  function openGettingStarted() {
+    setShowGettingStarted(true);
+  }
 
   // one hidden file input per shot for reference uploads
   const refInputs = useRef({});
@@ -525,6 +550,8 @@ export default function TemplateBuilder() {
       <GettingStartedModal
         storageKey="turnqa_gs_manager_template_v1"
         title="Build your TurnQA checklist (Sections + Photo Requests)"
+        open={showGettingStarted}
+        setOpen={setShowGettingStarted}
       >
         <div style={{ marginBottom: 10 }}>
           To get started, choose an area (like <b>Kitchen</b>) and enter what photo you want, like
@@ -541,9 +568,33 @@ export default function TemplateBuilder() {
       <section style={ui.sectionGrid}>
         {/* Builder */}
         <div style={ui.card}>
-          <h2 style={{ marginTop: 0, marginBottom: 8 }}>
-            Checklist for <span style={{ color: '#cbd5e1' }}>{property.name}</span>
-          </h2>
+          <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <h2 style={{ marginTop: 0, marginBottom: 8 }}>
+              Checklist for <span style={{ color: '#cbd5e1' }}>{property.name}</span>
+            </h2>
+
+            <button
+              type="button"
+              onClick={openGettingStarted}
+              style={{
+                position: 'absolute',
+                right: 0,
+                top: '50%',
+                transform: 'translateY(-50%)',
+                ...ui.btnSecondary,
+                padding: '6px 10px',
+                borderRadius: 999,
+                border: '1px solid #334155',
+                background: '#0f172a',
+                color: '#cbd5e1',
+              }}
+              title="Help / Getting Started"
+              aria-label="Help / Getting Started"
+            >
+              ❓ Help
+            </button>
+          </div>
+
           <div style={ui.subtle}>
             Define the photos your cleaner must capture per area.
           </div>
