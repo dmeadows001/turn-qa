@@ -1420,41 +1420,61 @@ export default function Capture() {
                           )}
                         </div>
 
-                        <div
-                          style={{
-                            display:'flex',
-                            justifyContent:'space-between',
-                            alignItems:'baseline',
-                            marginBottom:6
-                          }}
-                        >
-                          <div style={{ fontSize:13, maxWidth:'60%' }}>
-                            <b title={f.name}>{f.name}</b>
-                            {/* ✅ Capture badge */}
-                            {capturedLabel ? (
-                              <div style={{ marginTop: 4, fontSize: 12, color: '#93c5fd' }}>
-                                Captured: {capturedLabel}
-                              </div>
-                            ) : null}
-                          </div>
+<div
+  style={{
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 6,
+    flexWrap: 'wrap',          // ✅ allows buttons to drop below on small screens
+  }}
+>
+  <div
+    style={{
+      fontSize: 13,
+      flex: '1 1 180px',        // ✅ lets name take space but not force overflow
+      minWidth: 0,              // ✅ required for ellipsis to work in flex
+    }}
+  >
+    <b
+      title={f.name}
+      style={{
+        display: 'block',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap',   // ✅ keep it on one line with …
+      }}
+    >
+      {f.name}
+    </b>
+  </div>
 
-                          <div style={{ display:'flex', gap:8 }}>
-                            <ThemedButton
-                              kind="secondary"
-                              onClick={() => openSignedPath(f.url)}
-                              ariaLabel={`View ${f.name}`}
-                            >
-                              👁️ View
-                            </ThemedButton>
-                            <ThemedButton
-                              kind="secondary"
-                              onClick={() => removePhoto(s.shot_id, f)}
-                              ariaLabel={`Retake ${f.name}`}
-                            >
-                              🔁 Retake
-                            </ThemedButton>
-                          </div>
-                        </div>
+  <div
+    style={{
+      display: 'flex',
+      gap: 8,
+      flex: '0 0 auto',
+      marginLeft: 'auto',
+    }}
+  >
+    <ThemedButton
+      kind="secondary"
+      onClick={() => openSignedPath(f.url)}
+      ariaLabel={`View ${f.name}`}
+    >
+      👁️ View
+    </ThemedButton>
+    <ThemedButton
+      kind="secondary"
+      onClick={() => removePhoto(s.shot_id, f)}
+      ariaLabel={`Retake ${f.name}`}
+    >
+      🔁 Retake
+    </ThemedButton>
+  </div>
+</div>
+
 
                         {/* Manager note (if flagged) visible to cleaner */}
                         {managerNote && (
