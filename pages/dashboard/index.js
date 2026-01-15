@@ -103,7 +103,8 @@ export default function Dashboard() {
         // 2) Load properties
         const { data: props, error: pErr } = await supabase
           .from('properties')
-          .select('id, name, created_at')
+          .select('id, name, created_at, is_archived, archived_at')
+          .eq('is_archived', false)
           .order('created_at', { ascending: false });
         if (pErr) throw pErr;
 
@@ -117,6 +118,8 @@ export default function Dashboard() {
     })();
   }, [session, supabase]);
 
+
+  
   // ✅ createProperty handler
   async function createProperty(e) {
     e?.preventDefault?.();
@@ -145,6 +148,30 @@ export default function Dashboard() {
       setCreating(false);
     }
   }
+
+  async function archiveProperty(propertyId, propertyName) {
+  try {
+    const ok = window.confirm(
+      `Archive "${propertyName}"?\n\nThis will remove it from your dashboard, but keep history in the database.`
+    );
+    if (!ok) return;
+
+    setMsg('');
+
+    const { error } = await supabase
+      .from('properties')
+      .update({ is_archived: true, archived_at: new Date().toISOString() })
+      .eq('id', propertyId);
+
+    if (error) throw error;
+
+    // Remove from UI instantly
+    setPropsList(prev => prev.filter(p => p.id !== propertyId));
+  } catch (e) {
+    console.error('[archiveProperty]', e);
+    setMsg(e.message || 'Could not archive property');
+  }
+}
 
   return (
     <ChromeDark title="Dashboard">
@@ -295,6 +322,20 @@ export default function Dashboard() {
                     <Link href={`/properties/${p.id}/invite`} style={ui.btnSecondary}>
                       Invite cleaner
                     </Link>
+
+                    <button
+                      type="button"
+                      onClick={() => archiveProperty(p.id, p.name)}
+                      style={{
+                        ...ui.btnSecondary,
+                        border: '1px solid #7f1d1d',
+                        color: '#fecaca',
+                        background: 'rgba(127, 29, 29, 0.15)',
+                      }}
+                    >
+                      Archive
+                    </button>
+
 
                     {/* ✅ Removed Start turn (manager should not start turns) */}
 
