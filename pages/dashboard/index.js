@@ -1,4 +1,3 @@
-```js
 // pages/dashboard/index.js
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
