@@ -410,6 +410,9 @@ export default function Dashboard() {
                         <Link href={`/properties/${p.id}/invite`} style={ui.btnSecondary}>
                           Invite cleaner
                         </Link>
+                       <Link href={`/managers/turns`} style={ui.btnSecondary}>
+                          Review turns
+                        </Link>
 
                         <button
                           type="button"
@@ -423,10 +426,6 @@ export default function Dashboard() {
                         >
                           Archive
                         </button>
-
-                        <Link href={`/managers/turns`} style={ui.btnSecondary}>
-                          Review turns
-                        </Link>
                       </>
                     ) : (
                       <>
