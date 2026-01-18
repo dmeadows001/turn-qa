@@ -142,13 +142,42 @@ export default function TemplateBuilder() {
   const [thumbByPath, setThumbByPath] = useState({});
   const requestedThumbsRef = useRef(new Set());
 
+  // ✅ Cache auth token briefly to avoid calling getSession repeatedly during thumb signing
+  const authTokenRef = useRef({ token: null, fetchedAt: 0 });
+
+  async function getAccessToken() {
+    const now = Date.now();
+    if (authTokenRef.current.token && (now - authTokenRef.current.fetchedAt) < 30_000) {
+      return authTokenRef.current.token;
+    }
+    const { data } = await supabase.auth.getSession();
+    const token = data?.session?.access_token || null;
+    authTokenRef.current = { token, fetchedAt: now };
+    return token;
+  }
+
   async function signPath(path) {
+    const token = await getAccessToken();
+    if (!token) throw new Error('Not signed in (missing session). Please refresh and log in again.');
+
     const resp = await fetch('/api/sign-photo', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
       body: JSON.stringify({ path, expires: 600 }),
     });
-    if (!resp.ok) throw new Error('sign failed');
+
+    if (!resp.ok) {
+      let detail = '';
+      try {
+        const j = await resp.json();
+        detail = j?.error ? ` (${j.error})` : '';
+      } catch {}
+      throw new Error(`sign failed${detail}`);
+    }
+
     const json = await resp.json();
     return json.url;
   }
