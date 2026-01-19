@@ -4,18 +4,68 @@ import { useEffect, useMemo, useRef, useState, useCallback, memo } from 'react';
 import ChromeDark from '../../../components/ChromeDark';
 import { ui } from '../../../lib/theme';
 
+// ---- Optional manager auth header (does NOT break cleaners) ----
+function getSupabaseAccessToken() {
+  try {
+    if (typeof window === 'undefined') return null;
+    const raw = window.localStorage.getItem('turnqa-auth');
+    if (!raw) return null;
+
+    const parsed = JSON.parse(raw);
+
+    // Common Supabase shapes across versions
+    const token =
+      parsed?.currentSession?.access_token ||
+      parsed?.access_token ||
+      parsed?.data?.session?.access_token ||
+      null;
+
+    return typeof token === 'string' && token.length > 20 ? token : null;
+  } catch {
+    return null;
+  }
+}
+
+function authHeaders() {
+  const token = getSupabaseAccessToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 async function fetchTurn(turnId) {
-  const r = await fetch(`/api/get-turn?id=${turnId}`);
+  const r = await fetch(`/api/get-turn?id=${turnId}`, {
+    headers: { ...authHeaders() },
+  });
   if (!r.ok) throw new Error((await r.json()).error || 'get-turn failed');
   const j = await r.json();
   return j.turn;
 }
 
 async function fetchPhotos(turnId) {
-  const r = await fetch(`/api/list-turn-photos?id=${turnId}`);
+  const r = await fetch(`/api/list-turn-photos?id=${turnId}`, {
+    headers: { ...authHeaders() },
+  });
   if (!r.ok) throw new Error((await r.json()).error || 'list-turn-photos failed');
   const j = await r.json();
 
+  const raw = Array.isArray(j.photos) ? j.photos : [];
+
+  return raw
+    .slice()
+    .sort((a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0))
+    .map(p => ({
+      ...p,
+      shot_id: p.shot_id || null,
+      id: p.id,
+      area_key: p.area_key || '',
+      created_at: p.created_at,
+      url: p.signedUrl || p.url || '',
+      path: p.path || '',
+      is_fix: !!(p.is_fix ?? p.isFix ?? p.fix),
+      needs_fix: !!(p.needs_fix ?? p.needsFix ?? p.flagged),
+      cleaner_note: p.cleaner_note ?? p.cleanerNote ?? '',
+      manager_note: p.manager_note ?? p.manager_notes ?? p.note ?? '',
+    }));
+}
   const raw = Array.isArray(j.photos) ? j.photos : [];
 
   // Keep *all* rows (no dedupe) and normalize flags/notes
@@ -41,7 +91,9 @@ async function fetchPhotos(turnId) {
 // Load existing findings for this turn: { findings: [{ path, note, ...bilingual fields... }] }
 async function fetchFindings(turnId) {
   try {
-    const r = await fetch(`/api/turns/${turnId}/findings`);
+    const r = await fetch(`/api/turns/${turnId}/findings`, {
+      headers: { ...authHeaders() },
+    });
     if (!r.ok) return [];
     const j = await r.json().catch(() => ({}));
     return Array.isArray(j.findings) ? j.findings : [];
@@ -49,7 +101,6 @@ async function fetchFindings(turnId) {
     return [];
   }
 }
-
 async function fetchTemplate(turnId) {
   try {
     const r = await fetch(`/api/turn-template?turnId=${turnId}`);
