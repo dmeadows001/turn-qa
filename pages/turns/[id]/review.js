@@ -35,8 +35,8 @@ async function fetchTurn(turnId) {
   const r = await fetch(`/api/get-turn?id=${turnId}`, {
     headers: { ...authHeaders() },
   });
-  if (!r.ok) throw new Error((await r.json()).error || 'get-turn failed');
-  const j = await r.json();
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || 'get-turn failed');
   return j.turn;
 }
 
@@ -44,35 +44,16 @@ async function fetchPhotos(turnId) {
   const r = await fetch(`/api/list-turn-photos?id=${turnId}`, {
     headers: { ...authHeaders() },
   });
-  if (!r.ok) throw new Error((await r.json()).error || 'list-turn-photos failed');
-  const j = await r.json();
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || 'list-turn-photos failed');
 
-  const raw = Array.isArray(j.photos) ? j.photos : [];
-
-  return raw
-    .slice()
-    .sort((a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0))
-    .map(p => ({
-      ...p,
-      shot_id: p.shot_id || null,
-      id: p.id,
-      area_key: p.area_key || '',
-      created_at: p.created_at,
-      url: p.signedUrl || p.url || '',
-      path: p.path || '',
-      is_fix: !!(p.is_fix ?? p.isFix ?? p.fix),
-      needs_fix: !!(p.needs_fix ?? p.needsFix ?? p.flagged),
-      cleaner_note: p.cleaner_note ?? p.cleanerNote ?? '',
-      manager_note: p.manager_note ?? p.manager_notes ?? p.note ?? '',
-    }));
-}
   const raw = Array.isArray(j.photos) ? j.photos : [];
 
   // Keep *all* rows (no dedupe) and normalize flags/notes
   return raw
     .slice()
     .sort((a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0))
-    .map(p => ({
+    .map((p) => ({
       ...p,
       shot_id: p.shot_id || null,
       id: p.id,
@@ -101,6 +82,7 @@ async function fetchFindings(turnId) {
     return [];
   }
 }
+
 async function fetchTemplate(turnId) {
   try {
     const r = await fetch(`/api/turn-template?turnId=${turnId}`);
