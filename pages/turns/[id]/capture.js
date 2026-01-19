@@ -426,7 +426,9 @@ export default function Capture() {
     async function loadExisting() {
       if (!turnId || !Array.isArray(shots)) return;
       try {
-        const r = await fetch(`/api/list-turn-photos?id=${turnId}`);
+        const r = await fetch(`/api/list-turn-photos?id=${turnId}`, {
+          headers: { ...authHeaders() }, // ✅ optional Bearer token (managers)
+        });
         const j = await r.json();
         const items = Array.isArray(j.photos) ? j.photos : [];
 
