@@ -1,28 +1,46 @@
 // pages/api/upload-url.js
+import { createClient } from '@supabase/supabase-js';
 import { supabaseAdmin as _admin } from '@/lib/supabaseAdmin';
 
-// IMPORTANT: supabaseAdmin in your repo is a factory function.
-const supa = typeof _admin === 'function' ? _admin() : _admin;
+const admin = typeof _admin === 'function' ? _admin() : _admin;
 
 const BUCKET =
   process.env.NEXT_PUBLIC_SUPABASE_STORAGE_BUCKET ||
   process.env.SUPABASE_STORAGE_BUCKET ||
   'photos';
 
+function getBearerToken(req) {
+  const h = req.headers.authorization || '';
+  const m = h.match(/^Bearer\s+(.+)$/i);
+  return m ? m[1].trim() : null;
+}
+
+function createRlsClient(token) {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
+  const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!url || !anon) throw new Error('Missing SUPABASE url/anon key');
+
+  return createClient(url, anon, {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    global: { headers: { Authorization: `Bearer ${token}` } },
+  });
+}
+
 function sanitizeName(name = '') {
   const base = String(name).trim() || 'upload.jpg';
   return base
-    .replace(/[^\w.\-]+/g, '_')     // safe chars
+    .replace(/[^\w.\-]+/g, '_')
     .replace(/^_+|_+$/g, '')
     .slice(0, 140);
 }
 
-function nowIso() { return new Date().toISOString(); }
+function nowIso() {
+  return new Date().toISOString();
+}
 
-// prefer Node 18+ uuid if present
 function mkId() {
   if (globalThis.crypto?.randomUUID) return crypto.randomUUID();
-  return `id_${Date.now().toString(36)}_${Math.random().toString(36).slice(2,10)}`;
+  return `id_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
 export default async function handler(req, res) {
@@ -39,32 +57,41 @@ export default async function handler(req, res) {
 
     if (!tId) return res.status(400).json({ error: 'turnId required' });
 
-    // Canonical object key (what the UI stores later).
+    // ✅ Require auth
+    const token = getBearerToken(req);
+    if (!token) return res.status(401).json({ error: 'Missing Authorization token' });
+
+    const rls = createRlsClient(token);
+
+    // ✅ RLS authorization: caller must be able to read this turn
+    const { data: turn, error: tErr } = await rls
+      .from('turns')
+      .select('id')
+      .eq('id', tId)
+      .maybeSingle();
+
+    if (tErr) throw tErr;
+    if (!turn) return res.status(403).json({ error: 'Not authorized for this turn' });
+
     const key = `turns/${tId}/${sId}/${mkId()}_${name}`.replace(/\/+/g, '/');
 
-    // 1) Primary: Supabase "signed upload" (multipart/form-data)
-    //    Client must POST { file, token } to signedUploadUrl.
+    // 1) Supabase signed upload URL (preferred)
     let signedUploadUrl = null;
-    let token = null;
+    let uploadToken = null;
 
     try {
-      const { data, error } = await supa.storage
-        .from(BUCKET)
-        .createSignedUploadUrl(key);
-
-      if (error) {
-        console.error('[upload-url] createSignedUploadUrl error:', error.message || error);
-      } else {
+      const { data, error } = await admin.storage.from(BUCKET).createSignedUploadUrl(key);
+      if (!error) {
         signedUploadUrl = data?.signedUrl || null;
-        token = data?.token || null;
+        uploadToken = data?.token || null;
+      } else {
+        console.error('[upload-url] createSignedUploadUrl error:', error.message || error);
       }
     } catch (e) {
       console.error('[upload-url] createSignedUploadUrl exception:', e?.message || e);
     }
 
-    // 2) Fallback: a proxy endpoint you host that writes using service role.
-    //    Your capture.js prefers `uploadUrl` first; it will PUT the raw bytes there.
-    //    (See pages/api/upload-proxy.js below.)
+    // 2) Proxy fallback (unchanged)
     const uploadUrl = `/api/upload-proxy?path=${encodeURIComponent(key)}&bucket=${encodeURIComponent(BUCKET)}`;
 
     return res.json({
@@ -72,10 +99,9 @@ export default async function handler(req, res) {
       bucket: BUCKET,
       path: key,
       mime: mime || 'image/jpeg',
-      // Give the client *both* options; it will choose what it supports.
-      uploadUrl,            // <-- proxy PUT (service role; bypasses RLS)
-      signedUploadUrl,      // <-- Supabase signed form-data POST
-      token,                // <-- must be included in the form when using signedUploadUrl
+      uploadUrl,
+      signedUploadUrl,
+      token: uploadToken,
       created_at: nowIso(),
     });
   } catch (e) {
