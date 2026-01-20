@@ -1,6 +1,7 @@
 // pages/api/list-turn-photos.js
 import { createClient } from '@supabase/supabase-js';
 import { supabaseAdmin as _admin } from '@/lib/supabaseAdmin';
+import { readCleanerSession } from '@/lib/session';
 
 const admin = typeof _admin === 'function' ? _admin() : _admin;
 
@@ -21,6 +22,13 @@ function looksLikeFile(p) {
 function cleanPath(p) {
   return String(p || '').replace(/^\/+/, '');
 }
+function safePath(p) {
+  const s = cleanPath(p);
+  if (!s) return '';
+  // block traversal
+  if (s.includes('..')) return '';
+  return s;
+}
 
 // Create a Supabase client that enforces RLS via the caller's JWT
 function createRlsClient(token) {
@@ -36,15 +44,82 @@ function createRlsClient(token) {
 
 // List a folder to find one file under it (latest-ish by name)
 async function findOneFileUnderPrefix(prefix) {
-  const folder = cleanPath(prefix).replace(/^\/+/, '');
+  const folder = safePath(prefix);
+  if (!folder) return null;
+
   const { data, error } = await admin.storage.from(BUCKET).list(folder, {
     limit: 100,
     sortBy: { column: 'name', order: 'desc' },
   });
   if (error || !Array.isArray(data) || data.length === 0) return null;
+
   const file =
     data.find((f) => /\.(jpe?g|png|webp|heic|heif|gif)$/i.test(f.name)) || data[0];
   return file ? `${folder}/${file.name}` : null;
+}
+
+async function resolveRoleFromBearer(token) {
+  const { data: userData, error: userErr } = await admin.auth.getUser(token);
+  if (userErr || !userData?.user) return { ok: false, error: 'Invalid/expired token' };
+
+  const userId = userData.user.id;
+
+  const [{ data: mgrRow }, { data: clnRow }] = await Promise.all([
+    admin.from('managers').select('id').eq('user_id', userId).maybeSingle(),
+    admin.from('cleaners').select('id').eq('user_id', userId).maybeSingle(),
+  ]);
+
+  return {
+    ok: true,
+    userId,
+    managerId: mgrRow?.id || null,
+    cleanerId: clnRow?.id || null,
+  };
+}
+
+async function authorizeForTurn({ turnId, managerId, cleanerId }) {
+  // Turn row must exist and match manager/cleaner
+  const { data: turn, error: tErr } = await admin
+    .from('turns')
+    .select('id, property_id, manager_id, cleaner_id')
+    .eq('id', turnId)
+    .maybeSingle();
+
+  if (tErr || !turn) return { ok: false, error: 'Turn not found' };
+
+  // Manager owns the turn
+  if (managerId && turn.manager_id === managerId) {
+    return { ok: true, turn, mode: 'manager' };
+  }
+
+  // Cleaner assigned directly on the turn
+  if (cleanerId && turn.cleaner_id === cleanerId) {
+    return { ok: true, turn, mode: 'cleaner' };
+  }
+
+  // Cleaner assigned to property (support either cleaner_properties or property_cleaners)
+  if (cleanerId && turn.property_id) {
+    const [a, b] = await Promise.all([
+      admin
+        .from('cleaner_properties')
+        .select('id')
+        .eq('cleaner_id', cleanerId)
+        .eq('property_id', turn.property_id)
+        .maybeSingle(),
+      admin
+        .from('property_cleaners')
+        .select('id')
+        .eq('cleaner_id', cleanerId)
+        .eq('property_id', turn.property_id)
+        .maybeSingle(),
+    ]);
+
+    if (a?.data?.id || b?.data?.id) {
+      return { ok: true, turn, mode: 'cleaner' };
+    }
+  }
+
+  return { ok: false, error: 'Not authorized (turn)' };
 }
 
 export default async function handler(req, res) {
@@ -52,20 +127,46 @@ export default async function handler(req, res) {
     const turnId = String(req.query.id || req.query.turn_id || '').trim();
     if (!turnId) return res.status(400).json({ error: 'missing turn id' });
 
-    // Require auth (RLS enforcement depends on this)
+    // Auth: either manager/cleaner Supabase Bearer token OR cleaner cookie session
     const token = getBearerToken(req);
-    if (!token) return res.status(401).json({ error: 'Missing Authorization token' });
+    const cleanerSess = !token ? readCleanerSession(req) : null;
 
-    // Validate token
-    const { data: userData, error: userErr } = await admin.auth.getUser(token);
-    if (userErr || !userData?.user) return res.status(401).json({ error: 'Invalid/expired token' });
+    let managerId = null;
+    let cleanerId = null;
 
-    const rls = createRlsClient(token);
+    if (token) {
+      const role = await resolveRoleFromBearer(token);
+      if (!role.ok) return res.status(401).json({ error: role.error || 'Unauthorized' });
+      managerId = role.managerId;
+      cleanerId = role.cleanerId;
 
-    // 1) Select all photos for this turn (RLS enforced)
-    const { data: tpRows, error: tpErr } = await rls
+      if (!managerId && !cleanerId) {
+        return res.status(403).json({ error: 'Not authorized (no role)' });
+      }
+    } else if (cleanerSess?.cleaner_id) {
+      cleanerId = cleanerSess.cleaner_id;
+    } else {
+      return res.status(401).json({ error: 'Missing Authorization token or cleaner session' });
+    }
+
+    // Authorization for this turn
+    const authz = await authorizeForTurn({ turnId, managerId, cleanerId });
+    if (!authz.ok) {
+      return res.status(403).json({ error: authz.error || 'Not authorized' });
+    }
+
+    // Query strategy:
+    // - If Bearer token is present, keep current behavior: read via RLS client
+    // - If cleaner cookie session, use admin client AFTER explicit authorization (above)
+    const useRls = !!token;
+    const rls = useRls ? createRlsClient(token) : null;
+    const db = useRls ? rls : admin;
+
+    // 1) Select all photos for this turn
+    const { data: tpRows, error: tpErr } = await db
       .from('turn_photos')
-      .select(`
+      .select(
+        `
         id,
         turn_id,
         shot_id,
@@ -77,13 +178,14 @@ export default async function handler(req, res) {
         needs_fix,
         cleaner_note,
         manager_notes
-      `)
+      `
+      )
       .eq('turn_id', turnId)
       .order('created_at', { ascending: true });
 
     if (tpErr) throw tpErr;
 
-    // 2) Lookup missing area_key via template_shots if needed (RLS enforced)
+    // 2) Lookup missing area_key via template_shots (best effort)
     const missingShotIds = Array.from(
       new Set(
         (tpRows || [])
@@ -95,7 +197,7 @@ export default async function handler(req, res) {
 
     let tsMap = {};
     if (missingShotIds.length) {
-      const { data: tsRows, error: tsErr } = await rls
+      const { data: tsRows, error: tsErr } = await db
         .from('template_shots')
         .select('id, area_key')
         .in('id', missingShotIds);
@@ -115,14 +217,14 @@ export default async function handler(req, res) {
       const areaKey = r.area_key || tsMap[String(r.shot_id)] || '';
 
       const rawPath = r.path || r.storage_path || r.photo_path || r.url || r.file || '';
-      let objPath = cleanPath(rawPath);
-      if (!objPath) objPath = `turns/${turnId}/${r.shot_id || ''}`.replace(/\/+$/, '');
+      let objPath = safePath(rawPath);
+      if (!objPath) objPath = safePath(`turns/${turnId}/${r.shot_id || ''}`.replace(/\/+$/, ''));
 
       let finalPath = objPath;
       let signedUrl = '';
 
       try {
-        if (!looksLikeFile(finalPath)) {
+        if (finalPath && !looksLikeFile(finalPath)) {
           const found = await findOneFileUnderPrefix(finalPath);
           if (found) {
             finalPath = found;
@@ -130,7 +232,7 @@ export default async function handler(req, res) {
           }
         }
 
-        if (looksLikeFile(finalPath)) {
+        if (finalPath && looksLikeFile(finalPath)) {
           const { data: s, error: sErr } = await admin.storage
             .from(BUCKET)
             .createSignedUrl(finalPath, 60 * 60);
@@ -165,15 +267,25 @@ export default async function handler(req, res) {
       return ta - tb;
     });
 
-    // 5) Best-effort backfill (OPTIONAL):
-    // Keep behavior, but run updates via admin ONLY for rows user could read (already guaranteed),
-    // and only when we have updates.
+    // 5) Best-effort backfill updates via admin (only after authorization)
     if (updates.length) {
       try {
         await Promise.all(
-          updates.map((u) => admin.from('turn_photos').update({ path: u.path }).eq('id', u.id))
+          updates.map((u) =>
+            admin
+              .from('turn_photos')
+              .update({
+                // keep existing behavior:
+                path: u.path,
+                // best effort for canonical column too (won’t error if missing? Supabase errors if missing column)
+                // If your schema *doesn't* have storage_path, remove this line.
+                storage_path: u.path,
+              })
+              .eq('id', u.id)
+          )
         );
       } catch (e) {
+        // If your DB doesn't have storage_path, this would warn here; harmless.
         console.warn('[list-turn-photos] backfill update failed', e?.message || e);
       }
     }
