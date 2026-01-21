@@ -33,12 +33,24 @@ export default async function handler(req, res) {
     if (aErr) throw aErr;
     if (!allowed) return res.status(403).json({ error: 'Cleaner not assigned to this property' });
 
+    // lookup manager_id from property
+    const { data: propRow, error: pErr } = await supabase
+      .from('properties')
+      .select('manager_id')
+      .eq('id', property_id)
+      .maybeSingle();
+
+    if (pErr) throw pErr;
+    const manager_id = propRow?.manager_id || null;
+
+
     // create the turn
     const { data: turn, error: tErr } = await supabase
       .from('turns')
       .insert({
         property_id,
         cleaner_id,
+        manager_id,
         notes: notes || null,
         status: 'in_progress'
       })
