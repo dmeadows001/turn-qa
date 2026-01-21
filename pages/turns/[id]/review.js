@@ -85,8 +85,12 @@ async function fetchFindings(turnId) {
 
 async function fetchTemplate(turnId) {
   try {
-    const r = await fetch(`/api/turn-template?turnId=${turnId}`);
+    const r = await fetch(`/api/turn-template?turnId=${turnId}`, {
+      headers: { ...authHeaders() },
+    });
     const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || 'turn-template failed');
+
     const shots = Array.isArray(j.shots) ? j.shots : [];
     return shots.map(s => ({
       shot_id: s.shot_id,
@@ -94,7 +98,8 @@ async function fetchTemplate(turnId) {
       label: s.label || s.area_key || 'Section',
       min_count: s.min_count || 0,
     }));
-  } catch {
+  } catch (e) {
+    console.warn('[review] fetchTemplate failed:', e?.message || e);
     return [];
   }
 }
