@@ -24,12 +24,14 @@ export default async function handler(req, res) {
     {
       const { data: prop, error: pErr } = await supa
         .from('properties')
-        .select('id')
+        .select('id, manager_id')
         .eq('id', property_id)
         .maybeSingle();
       if (pErr) throw pErr;
       if (!prop) return res.status(404).json({ error: 'property not found' });
     }
+
+    const manager_id = prop?.manager_id || null;
 
     // 2) Find cleaner by phone
     const { data: cleaner, error: cErr } = await supa
@@ -56,7 +58,7 @@ export default async function handler(req, res) {
     // 4) Create turn (status = in_progress)
     const { data: turnRow, error: tErr } = await supa
       .from('turns')
-      .insert({ property_id, cleaner_id, status: 'in_progress' })
+      .insert({ property_id, cleaner_id, manager_id, status: 'in_progress' })
       .select('id')
       .maybeSingle();
     if (tErr) throw tErr;
