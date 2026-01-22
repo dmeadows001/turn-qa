@@ -78,17 +78,24 @@ async function resolveRoleFromBearer(token) {
 }
 
 async function authorizeForTurn({ turnId, managerId, cleanerId }) {
-  // Turn row must exist and match manager/cleaner
+  // Fetch turn + property owner
   const { data: turn, error: tErr } = await admin
     .from('turns')
-    .select('id, property_id, manager_id, cleaner_id')
+    .select('id, property_id, manager_id, cleaner_id, properties!inner(manager_id)')
     .eq('id', turnId)
     .maybeSingle();
 
   if (tErr || !turn) return { ok: false, error: 'Turn not found' };
 
-  // Manager owns the turn
+  const propertyManagerId = turn?.properties?.manager_id || null;
+
+  // ✅ Manager owns the turn (new schema)
   if (managerId && turn.manager_id === managerId) {
+    return { ok: true, turn, mode: 'manager' };
+  }
+
+  // ✅ Manager owns the property (works even if turn.manager_id is null/mismatched)
+  if (managerId && propertyManagerId === managerId) {
     return { ok: true, turn, mode: 'manager' };
   }
 
@@ -121,6 +128,7 @@ async function authorizeForTurn({ turnId, managerId, cleanerId }) {
 
   return { ok: false, error: 'Not authorized (turn)' };
 }
+
 
 export default async function handler(req, res) {
   try {
