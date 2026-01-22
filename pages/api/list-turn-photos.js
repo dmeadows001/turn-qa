@@ -89,10 +89,25 @@ async function authorizeForTurn({ turnId, managerId, cleanerId }) {
 
   const propertyManagerId = turn?.properties?.manager_id || null;
 
-  // ✅ Manager owns the turn (new schema)
-  if (managerId && turn.manager_id === managerId) {
+// Manager owns the turn (either direct on turn OR via property)
+if (managerId) {
+  // direct (new design)
+  if (turn.manager_id === managerId) {
     return { ok: true, turn, mode: 'manager' };
   }
+
+  // fallback (property ownership)
+  const { data: prop } = await admin
+    .from('properties')
+    .select('manager_id')
+    .eq('id', turn.property_id)
+    .maybeSingle();
+
+  if (prop?.manager_id === managerId) {
+    return { ok: true, turn, mode: 'manager' };
+  }
+}
+
 
   // ✅ Manager owns the property (works even if turn.manager_id is null/mismatched)
   if (managerId && propertyManagerId === managerId) {
