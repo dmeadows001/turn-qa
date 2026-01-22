@@ -4,17 +4,48 @@ import { useEffect, useMemo, useRef, useState, useCallback, memo } from 'react';
 import ChromeDark from '../../../components/ChromeDark';
 import { ui } from '../../../lib/theme';
 
+// ---- Optional manager auth header (does NOT break cleaners) ----
+function getSupabaseAccessToken() {
+  try {
+    if (typeof window === 'undefined') return null;
+    const raw = window.localStorage.getItem('turnqa-auth');
+    if (!raw) return null;
+
+    const parsed = JSON.parse(raw);
+
+    // Common Supabase shapes across versions
+    const token =
+      parsed?.currentSession?.access_token ||
+      parsed?.access_token ||
+      parsed?.data?.session?.access_token ||
+      null;
+
+    return typeof token === 'string' && token.length > 20 ? token : null;
+  } catch {
+    return null;
+  }
+}
+
+function authHeaders() {
+  const token = getSupabaseAccessToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 async function fetchTurn(turnId) {
-  const r = await fetch(`/api/get-turn?id=${turnId}`);
-  if (!r.ok) throw new Error((await r.json()).error || 'get-turn failed');
-  const j = await r.json();
+  const r = await fetch(`/api/get-turn?id=${turnId}`, {
+    headers: { ...authHeaders() },
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || 'get-turn failed');
   return j.turn;
 }
 
 async function fetchPhotos(turnId) {
-  const r = await fetch(`/api/list-turn-photos?id=${turnId}`);
-  if (!r.ok) throw new Error((await r.json()).error || 'list-turn-photos failed');
-  const j = await r.json();
+  const r = await fetch(`/api/list-turn-photos?id=${turnId}`, {
+    headers: { ...authHeaders() },
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || 'list-turn-photos failed');
 
   const raw = Array.isArray(j.photos) ? j.photos : [];
 
@@ -22,7 +53,7 @@ async function fetchPhotos(turnId) {
   return raw
     .slice()
     .sort((a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0))
-    .map(p => ({
+    .map((p) => ({
       ...p,
       shot_id: p.shot_id || null,
       id: p.id,
@@ -41,7 +72,9 @@ async function fetchPhotos(turnId) {
 // Load existing findings for this turn: { findings: [{ path, note, ...bilingual fields... }] }
 async function fetchFindings(turnId) {
   try {
-    const r = await fetch(`/api/turns/${turnId}/findings`);
+    const r = await fetch(`/api/turns/${turnId}/findings`, {
+      headers: { ...authHeaders() },
+    });
     if (!r.ok) return [];
     const j = await r.json().catch(() => ({}));
     return Array.isArray(j.findings) ? j.findings : [];
@@ -52,8 +85,12 @@ async function fetchFindings(turnId) {
 
 async function fetchTemplate(turnId) {
   try {
-    const r = await fetch(`/api/turn-template?turnId=${turnId}`);
+    const r = await fetch(`/api/turn-template?turnId=${turnId}`, {
+      headers: { ...authHeaders() },
+    });
     const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || 'turn-template failed');
+
     const shots = Array.isArray(j.shots) ? j.shots : [];
     return shots.map(s => ({
       shot_id: s.shot_id,
@@ -61,7 +98,8 @@ async function fetchTemplate(turnId) {
       label: s.label || s.area_key || 'Section',
       min_count: s.min_count || 0,
     }));
-  } catch {
+  } catch (e) {
+    console.warn('[review] fetchTemplate failed:', e?.message || e);
     return [];
   }
 }

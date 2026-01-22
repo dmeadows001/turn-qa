@@ -159,6 +159,37 @@ export default function Capture() {
   // ------- helpers -------
   const smallMeta = { fontSize: 12, color: '#94a3b8' };
 
+  // ---- Optional manager auth header (does NOT break cleaners) ----
+  function getSupabaseAccessToken() {
+    try {
+      const raw = window.localStorage.getItem('turnqa-auth');
+      if (!raw) return null;
+
+      const parsed = JSON.parse(raw);
+
+      // Common Supabase shapes across versions
+      const token =
+        parsed?.currentSession?.access_token ||
+        parsed?.access_token ||
+        parsed?.data?.session?.access_token ||
+        null;
+
+      return typeof token === 'string' && token.length > 20 ? token : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function authHeaders() {
+    try {
+      const token = getSupabaseAccessToken();
+      return token ? { Authorization: `Bearer ${token}` } : {};
+    } catch {
+      return {};
+    }
+  }
+
+  
   function formatCapturedAt(ts) {
     if (!ts) return '';
     try {
@@ -173,7 +204,10 @@ export default function Capture() {
   async function signPath(path) {
     const resp = await fetch('/api/sign-photo', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...authHeaders(), // ✅ optional Bearer token (managers)
+      },
       body: JSON.stringify({ path, expires: 600 })
     });
     if (!resp.ok) throw new Error('sign failed');
@@ -392,7 +426,9 @@ export default function Capture() {
     async function loadExisting() {
       if (!turnId || !Array.isArray(shots)) return;
       try {
-        const r = await fetch(`/api/list-turn-photos?id=${turnId}`);
+        const r = await fetch(`/api/list-turn-photos?id=${turnId}`, {
+          headers: { ...authHeaders() }, // ✅ optional Bearer token (managers)
+        });
         const j = await r.json();
         const items = Array.isArray(j.photos) ? j.photos : [];
 

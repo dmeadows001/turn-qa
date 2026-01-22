@@ -18,10 +18,20 @@ export default async function handler(req, res) {
     // 1) Create the turn (tolerant if your schema doesn't have a `notes` column)
     let turnRow = null;
 
+    const { data: propRow, error: pErr } = await supa
+    .from('properties')
+    .select('manager_id')
+    .eq('id', property_id)
+    .maybeSingle();
+  if (pErr) throw pErr;
+
+  const manager_id = propRow?.manager_id || null;
+
+
     // Attempt with `notes`
     let ins = await supa
       .from('turns')
-      .insert({ property_id, cleaner_id, status: 'in_progress', notes })
+      .insert({ property_id, cleaner_id, manager_id, status: 'in_progress', notes })
       .select('id')
       .maybeSingle();
 
@@ -35,7 +45,7 @@ export default async function handler(req, res) {
       // Retry without `notes`
       ins = await supa
         .from('turns')
-        .insert({ property_id, cleaner_id, status: 'in_progress' })
+        .insert({ property_id, cleaner_id, manager_id, status: 'in_progress' })
         .select('id')
         .maybeSingle();
 
