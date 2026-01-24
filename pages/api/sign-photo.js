@@ -119,14 +119,23 @@ if (token) {
       let cleanerOk = false;
       if (!managerOk && cleanerId) {
         // allow assigned cleaners to view reference photos for that property
-        const { data: cp } = await supabaseAdmin
+      const [cp, pc] = await Promise.all([
+        supabaseAdmin
           .from("cleaner_properties")
           .select("id")
           .eq("cleaner_id", cleanerId)
           .eq("property_id", propRow.id)
-          .maybeSingle();
-        cleanerOk = !!cp;
-      }
+          .maybeSingle(),
+        supabaseAdmin
+          .from("property_cleaners")
+          .select("id")
+          .eq("cleaner_id", cleanerId)
+          .eq("property_id", propRow.id)
+          .maybeSingle(),
+      ]);
+
+      cleanerOk = !!cp?.data?.id || !!pc?.data?.id;
+
 
       if (!managerOk && !cleanerOk) return res.status(403).json({ error: "Not authorized (refs)" });
 
