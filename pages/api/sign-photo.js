@@ -1,5 +1,6 @@
 // pages/api/sign-photo.js
 import { supabaseAdmin } from "../../lib/supabase";
+import { readCleanerSession } from "../../lib/session";
 
 function getBearerToken(req) {
   const h = req.headers.authorization || "";
@@ -18,27 +19,38 @@ export default async function handler(req, res) {
 
     if (!path) return res.status(400).json({ error: "Missing path" });
 
-    // 1) Auth: require a user token (client must send Authorization: Bearer <access_token>)
-    const token = getBearerToken(req);
-    if (!token) return res.status(401).json({ error: "Missing Authorization token" });
+// 1) Auth: Prefer Bearer token; fallback to cleaner cookie session
+const token = getBearerToken(req);
 
-    const { data: userData, error: userErr } = await supabaseAdmin.auth.getUser(token);
-    if (userErr || !userData?.user) return res.status(401).json({ error: "Invalid/expired token" });
+let managerId = null;
+let cleanerId = null;
 
-    const userId = userData.user.id;
+if (token) {
+  const { data: userData, error: userErr } = await supabaseAdmin.auth.getUser(token);
+  if (userErr || !userData?.user) return res.status(401).json({ error: "Invalid/expired token" });
 
-    // 2) Identify role (manager / cleaner) by user_id
-    const [{ data: mgrRow }, { data: clnRow }] = await Promise.all([
-      supabaseAdmin.from("managers").select("id").eq("user_id", userId).maybeSingle(),
-      supabaseAdmin.from("cleaners").select("id").eq("user_id", userId).maybeSingle(),
-    ]);
+  const userId = userData.user.id;
 
-    const managerId = mgrRow?.id || null;
-    const cleanerId = clnRow?.id || null;
+  // 2) Identify role (manager / cleaner) by user_id
+  const [{ data: mgrRow }, { data: clnRow }] = await Promise.all([
+    supabaseAdmin.from("managers").select("id").eq("user_id", userId).maybeSingle(),
+    supabaseAdmin.from("cleaners").select("id").eq("user_id", userId).maybeSingle(),
+  ]);
 
-    if (!managerId && !cleanerId) {
-      return res.status(403).json({ error: "Not authorized (no role)" });
-    }
+  managerId = mgrRow?.id || null;
+  cleanerId = clnRow?.id || null;
+
+  if (!managerId && !cleanerId) {
+    return res.status(403).json({ error: "Not authorized (no role)" });
+  }
+} else {
+  // Cleaner OTP session fallback (no bearer token)
+  const cleanerSess = readCleanerSession(req);
+  if (!cleanerSess?.cleaner_id) {
+    return res.status(401).json({ error: "Missing Authorization token" });
+  }
+  cleanerId = cleanerSess.cleaner_id;
+}
 
     // 3) Authorization checks based on what the path refers to
 
