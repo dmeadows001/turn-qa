@@ -10,7 +10,9 @@ function getBearerToken(req) {
 
 export default async function handler(req, res) {
   try {
-    if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+    if (req.method !== "POST") {
+      return res.status(405).json({ error: "Method not allowed" });
+    }
 
     const body = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
     const rawPath = String(body.path || "");
@@ -19,43 +21,42 @@ export default async function handler(req, res) {
 
     if (!path) return res.status(400).json({ error: "Missing path" });
 
-// 1) Auth: Prefer Bearer token; fallback to cleaner cookie session
-const token = getBearerToken(req);
+    // 1) Auth: Prefer Bearer token; fallback to cleaner cookie session
+    const token = getBearerToken(req);
 
-let managerId = null;
-let cleanerId = null;
+    let managerId = null;
+    let cleanerId = null;
 
-if (token) {
-  const { data: userData, error: userErr } = await supabaseAdmin.auth.getUser(token);
-  if (userErr || !userData?.user) return res.status(401).json({ error: "Invalid/expired token" });
+    if (token) {
+      const { data: userData, error: userErr } = await supabaseAdmin.auth.getUser(token);
+      if (userErr || !userData?.user) return res.status(401).json({ error: "Invalid/expired token" });
 
-  const userId = userData.user.id;
+      const userId = userData.user.id;
 
-  // 2) Identify role (manager / cleaner) by user_id
-  const [{ data: mgrRow }, { data: clnRow }] = await Promise.all([
-    supabaseAdmin.from("managers").select("id").eq("user_id", userId).maybeSingle(),
-    supabaseAdmin.from("cleaners").select("id").eq("user_id", userId).maybeSingle(),
-  ]);
+      // 2) Identify role (manager / cleaner) by user_id
+      const [{ data: mgrRow }, { data: clnRow }] = await Promise.all([
+        supabaseAdmin.from("managers").select("id").eq("user_id", userId).maybeSingle(),
+        supabaseAdmin.from("cleaners").select("id").eq("user_id", userId).maybeSingle(),
+      ]);
 
-  managerId = mgrRow?.id || null;
-  cleanerId = clnRow?.id || null;
+      managerId = mgrRow?.id || null;
+      cleanerId = clnRow?.id || null;
 
-  if (!managerId && !cleanerId) {
-    return res.status(403).json({ error: "Not authorized (no role)" });
-  }
-} else {
-  // Cleaner OTP session fallback (no bearer token)
-  const cleanerSess = readCleanerSession(req);
-  if (!cleanerSess?.cleaner_id) {
-    return res.status(401).json({ error: "Missing Authorization token" });
-  }
-  cleanerId = cleanerSess.cleaner_id;
-}
+      if (!managerId && !cleanerId) {
+        return res.status(403).json({ error: "Not authorized (no role)" });
+      }
+    } else {
+      // Cleaner OTP session fallback (no bearer token)
+      const cleanerSess = readCleanerSession(req);
+      if (!cleanerSess?.cleaner_id) {
+        return res.status(401).json({ error: "Missing Authorization token" });
+      }
+      cleanerId = cleanerSess.cleaner_id;
+    }
 
     // 3) Authorization checks based on what the path refers to
 
     // ---- A) Turn photos (stored in turn_photos.storage_path)
-    // Try to find a matching turn photo row for this storage path
     const { data: tp } = await supabaseAdmin
       .from("turn_photos")
       .select("turn_id, storage_path")
@@ -83,7 +84,6 @@ if (token) {
     }
 
     // ---- B) Reference photos (refs/<shotId>/...)
-    // These are uploaded from the template builder.
     if (path.startsWith("refs/")) {
       const parts = path.split("/");
       const shotId = parts[1]; // refs/<shotId>/filename
@@ -117,32 +117,46 @@ if (token) {
       const managerOk = managerId && propRow.manager_id === managerId;
 
       let cleanerOk = false;
+
       if (!managerOk && cleanerId) {
         // allow assigned cleaners to view reference photos for that property
-        const [cp, pc] = await Promise.all([
+        const [cpRes, pcRes, turnRes] = await Promise.all([
           supabaseAdmin
             .from("cleaner_properties")
             .select("id")
             .eq("cleaner_id", cleanerId)
             .eq("property_id", propRow.id)
             .maybeSingle(),
+
           supabaseAdmin
             .from("property_cleaners")
             .select("id")
             .eq("cleaner_id", cleanerId)
             .eq("property_id", propRow.id)
             .maybeSingle(),
+
+          // NEW: allow if cleaner has ANY turn for this property (common in invite/start-turn flow)
+          supabaseAdmin
+            .from("turns")
+            .select("id")
+            .eq("cleaner_id", cleanerId)
+            .eq("property_id", propRow.id)
+            .limit(1)
+            .maybeSingle(),
         ]);
 
-        cleanerOk = !!cp?.data?.id || !!pc?.data?.id;
-      } // ✅ CLOSES: if (!managerOk && cleanerId)
+        cleanerOk =
+          !!cpRes?.data?.id ||
+          !!pcRes?.data?.id ||
+          !!turnRes?.data?.id;
+      }
 
       if (!managerOk && !cleanerOk) return res.status(403).json({ error: "Not authorized (refs)" });
 
       const { data, error } = await supabaseAdmin.storage.from("photos").createSignedUrl(path, expires);
       if (error) throw error;
       return res.status(200).json({ url: data.signedUrl });
-    } // ✅ CLOSES: if (path.startsWith("refs/"))
+    }
 
     // ---- C) Default deny for anything else
     return res.status(403).json({ error: "Not authorized (unknown path type)" });
