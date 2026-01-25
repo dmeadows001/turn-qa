@@ -119,30 +119,30 @@ if (token) {
       let cleanerOk = false;
       if (!managerOk && cleanerId) {
         // allow assigned cleaners to view reference photos for that property
-      const [cp, pc] = await Promise.all([
-        supabaseAdmin
-          .from("cleaner_properties")
-          .select("id")
-          .eq("cleaner_id", cleanerId)
-          .eq("property_id", propRow.id)
-          .maybeSingle(),
-        supabaseAdmin
-          .from("property_cleaners")
-          .select("id")
-          .eq("cleaner_id", cleanerId)
-          .eq("property_id", propRow.id)
-          .maybeSingle(),
-      ]);
+        const [cp, pc] = await Promise.all([
+          supabaseAdmin
+            .from("cleaner_properties")
+            .select("id")
+            .eq("cleaner_id", cleanerId)
+            .eq("property_id", propRow.id)
+            .maybeSingle(),
+          supabaseAdmin
+            .from("property_cleaners")
+            .select("id")
+            .eq("cleaner_id", cleanerId)
+            .eq("property_id", propRow.id)
+            .maybeSingle(),
+        ]);
 
-      cleanerOk = !!cp?.data?.id || !!pc?.data?.id;
-
+        cleanerOk = !!cp?.data?.id || !!pc?.data?.id;
+      } // ✅ CLOSES: if (!managerOk && cleanerId)
 
       if (!managerOk && !cleanerOk) return res.status(403).json({ error: "Not authorized (refs)" });
 
       const { data, error } = await supabaseAdmin.storage.from("photos").createSignedUrl(path, expires);
       if (error) throw error;
       return res.status(200).json({ url: data.signedUrl });
-    }
+    } // ✅ CLOSES: if (path.startsWith("refs/"))
 
     // ---- C) Default deny for anything else
     return res.status(403).json({ error: "Not authorized (unknown path type)" });
