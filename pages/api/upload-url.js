@@ -1,6 +1,7 @@
 // pages/api/upload-url.js
 import { createClient } from '@supabase/supabase-js';
 import { supabaseAdmin as _admin } from '@/lib/supabaseAdmin';
+import { readCleanerSession } from '@/lib/session';
 
 const admin = typeof _admin === 'function' ? _admin() : _admin;
 
@@ -57,21 +58,67 @@ export default async function handler(req, res) {
 
     if (!tId) return res.status(400).json({ error: 'turnId required' });
 
-    // ✅ Require auth
+    // ✅ Auth: Prefer Bearer; fallback to cleaner cookie session
     const token = getBearerToken(req);
-    if (!token) return res.status(401).json({ error: 'Missing Authorization token' });
 
-    const rls = createRlsClient(token);
+    if (token) {
+      // ===== Manager / authed-user flow (UNCHANGED) =====
+      const rls = createRlsClient(token);
 
-    // ✅ RLS authorization: caller must be able to read this turn
-    const { data: turn, error: tErr } = await rls
-      .from('turns')
-      .select('id')
-      .eq('id', tId)
-      .maybeSingle();
+      // ✅ RLS authorization: caller must be able to read this turn
+      const { data: turn, error: tErr } = await rls
+        .from('turns')
+        .select('id')
+        .eq('id', tId)
+        .maybeSingle();
 
-    if (tErr) throw tErr;
-    if (!turn) return res.status(403).json({ error: 'Not authorized for this turn' });
+      if (tErr) throw tErr;
+      if (!turn) return res.status(403).json({ error: 'Not authorized for this turn' });
+    } else {
+      // ===== Cleaner cookie flow (NEW) =====
+      const sess = readCleanerSession(req);
+      const cleanerId = sess?.cleaner_id;
+      if (!cleanerId) {
+        return res.status(401).json({ error: 'Missing Authorization token' });
+      }
+
+      // Load turn (admin, since we have no RLS token)
+      const { data: turnRow, error: tErr } = await admin
+        .from('turns')
+        .select('id, cleaner_id, property_id')
+        .eq('id', tId)
+        .maybeSingle();
+
+      if (tErr) throw tErr;
+      if (!turnRow) return res.status(403).json({ error: 'Not authorized for this turn' });
+
+      // Authorized if:
+      // - cleaner is assigned directly on the turn
+      // OR
+      // - cleaner is assigned to the property (either table)
+      let ok = String(turnRow.cleaner_id || '') === String(cleanerId);
+
+      if (!ok && turnRow.property_id) {
+        const [cpRes, pcRes] = await Promise.all([
+          admin
+            .from('cleaner_properties')
+            .select('id')
+            .eq('cleaner_id', cleanerId)
+            .eq('property_id', turnRow.property_id)
+            .maybeSingle(),
+          admin
+            .from('property_cleaners')
+            .select('id')
+            .eq('cleaner_id', cleanerId)
+            .eq('property_id', turnRow.property_id)
+            .maybeSingle(),
+        ]);
+
+        ok = !!cpRes?.data?.id || !!pcRes?.data?.id;
+      }
+
+      if (!ok) return res.status(403).json({ error: 'Not authorized for this turn' });
+    }
 
     const key = `turns/${tId}/${sId}/${mkId()}_${name}`.replace(/\/+/g, '/');
 
