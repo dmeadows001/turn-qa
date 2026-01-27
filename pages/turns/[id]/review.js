@@ -651,14 +651,37 @@ export default function Review() {
         setStatus(t && t.status ? t.status : 'in_progress');
         setTemplateShots(ts);
 
-        const cleanerNote =
-          (t && (t.cleaner_reply ?? t.cleaner_note ?? t.cleaner_message)) || '';
+        const cleanerNote = String(
+          t?.cleaner_reply_translated ??
+          t?.cleaner_reply ??
+          t?.cleaner_note ??
+          t?.cleaner_message ??
+          ''
+        ).trim();
+
         setLastCleanerNote(cleanerNote);
+
         setCleanerReply('');
 
-        // Backward compat: if we only have legacy turn.manager_note, treat it as EN original.
-        const legacySummary = String((t && t.manager_note) || '').trim();
-        setSummaryNote({ original: legacySummary, translated: '', sourceLang: 'en', targetLang: 'es' });
+        // Summary note: prefer structured bilingual fields, fallback to legacy.
+        const summaryOriginal = String(t?.manager_note_original || '').trim();
+        const summaryTranslated = String(t?.manager_note_translated || '').trim();
+        const summarySent = String(t?.manager_note_sent || '').trim();
+
+        // Legacy field (historically stored whatever was sent — often ES)
+        const legacy = String(t?.manager_note || '').trim();
+
+        setSummaryNote({
+          original: summaryOriginal || (summaryTranslated ? '' : legacy),
+          translated: summaryTranslated || '',
+          // Keep the UI assumption: manager writes EN, cleaner receives ES
+          sourceLang: String(t?.manager_note_original_lang || 'en'),
+          targetLang: String(t?.manager_note_translated_lang || 'es'),
+        });
+
+        // OPTIONAL: if you want the Spanish “sent” to be visible somewhere without clutter,
+        // you can store it in state or show it in a collapsible (see below).
+
 
         setPhotos(ph);
 
