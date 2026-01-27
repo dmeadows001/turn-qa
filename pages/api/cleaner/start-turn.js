@@ -1,6 +1,6 @@
 // pages/api/cleaner/start-turn.js
 import { createClient } from '@supabase/supabase-js';
-import { readCleanerSession } from '@/lib/session'; // ✅ use the existing helper
+import { readCleanerSession } from '@/lib/session';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -14,15 +14,13 @@ export default async function handler(req, res) {
     const { property_id, notes } = req.body || {};
     if (!property_id) return res.status(400).json({ error: 'property_id is required' });
 
-    // ✅ get cleaner identity from the session cookie (set by /api/otp/verify)
     const sess = readCleanerSession(req);
     if (!sess) return res.status(401).json({ error: 'not_authenticated' });
 
-    // depending on how you shaped the session, one of these should be present
     const cleaner_id = sess.cleaner_id || sess.sub;
     if (!cleaner_id) return res.status(401).json({ error: 'not_authenticated' });
 
-    // sanity: ensure this cleaner is assigned to the property
+    // ensure assigned
     const { data: allowed, error: aErr } = await supabase
       .from('property_cleaners')
       .select('property_id')
@@ -33,7 +31,7 @@ export default async function handler(req, res) {
     if (aErr) throw aErr;
     if (!allowed) return res.status(403).json({ error: 'Cleaner not assigned to this property' });
 
-    // lookup manager_id from property
+    // lookup manager_id
     const { data: propRow, error: pErr } = await supabase
       .from('properties')
       .select('manager_id')
@@ -43,8 +41,22 @@ export default async function handler(req, res) {
     if (pErr) throw pErr;
     const manager_id = propRow?.manager_id || null;
 
+    // ✅ IDPOTENT: return existing in-progress turn if it exists
+    const { data: existing, error: eErr } = await supabase
+      .from('turns')
+      .select('id')
+      .eq('property_id', property_id)
+      .eq('cleaner_id', cleaner_id)
+      .eq('status', 'in_progress')
+      .order('created_at', { ascending: false })
+      .maybeSingle();
 
-    // create the turn
+    if (eErr) throw eErr;
+    if (existing?.id) {
+      return res.json({ ok: true, turn_id: existing.id, reused: true });
+    }
+
+    // create new turn only if none exists
     const { data: turn, error: tErr } = await supabase
       .from('turns')
       .insert({
@@ -59,7 +71,7 @@ export default async function handler(req, res) {
 
     if (tErr) throw tErr;
 
-    return res.json({ ok: true, turn_id: turn.id });
+    return res.json({ ok: true, turn_id: turn.id, reused: false });
   } catch (e) {
     console.error('start-turn error', e);
     return res.status(500).json({ error: e.message || 'server error' });
