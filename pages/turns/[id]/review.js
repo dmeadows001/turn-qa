@@ -663,25 +663,23 @@ export default function Review() {
 
         setCleanerReply('');
 
-        // Summary note: prefer structured bilingual fields, fallback to legacy.
-        const summaryOriginal = String(t?.manager_note_original || '').trim();
-        const summaryTranslated = String(t?.manager_note_translated || '').trim();
-        const summarySent = String(t?.manager_note_sent || '').trim();
+// Summary note: STRICT structured fields.
+// - Original (EN) should never come from legacy manager_note (often ES).
+// - Translated (ES) can come from translated or sent.
+// - Legacy is only a last resort (older turns before new columns existed).
+const summaryOriginal = String(t?.manager_note_original || '').trim();
+const summaryTranslated = String(t?.manager_note_translated || '').trim();
+const summarySent = String(t?.manager_note_sent || '').trim();
+const legacy = String(t?.manager_note || '').trim(); // legacy "sent" mirror
 
-        // Legacy field (historically stored whatever was sent — often ES)
-        const legacy = String(t?.manager_note || '').trim();
-
-        setSummaryNote({
-        // Manager-facing: always prefer real EN original
-        original: summaryOriginal || '',
-
-        // UI “Translated (ES)” box:
-        // prefer stored translation, else fall back to what was sent (often ES), else legacy
-        translated: summaryTranslated || summarySent || (!summaryOriginal ? legacy : ''),
-
-        sourceLang: String(t?.manager_note_original_lang || 'en'),
-        targetLang: String(t?.manager_note_translated_lang || 'es'),
-      });
+setSummaryNote({
+  // Only allow legacy to populate original if you truly have no structured fields.
+  // (This covers old data where manager_note was actually EN.)
+  original: summaryOriginal || (!summarySent && !summaryTranslated ? legacy : ''),
+  translated: summaryTranslated || summarySent || '',
+  sourceLang: String(t?.manager_note_original_lang || 'en'),
+  targetLang: String(t?.manager_note_translated_lang || t?.manager_note_sent_lang || 'es'),
+});
 
         // OPTIONAL: if you want the Spanish “sent” to be visible somewhere without clutter,
         // you can store it in state or show it in a collapsible (see below).
