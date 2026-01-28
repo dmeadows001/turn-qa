@@ -672,12 +672,16 @@ export default function Review() {
         const legacy = String(t?.manager_note || '').trim();
 
         setSummaryNote({
-          original: summaryOriginal || (summaryTranslated ? '' : legacy),
-          translated: summaryTranslated || '',
-          // Keep the UI assumption: manager writes EN, cleaner receives ES
-          sourceLang: String(t?.manager_note_original_lang || 'en'),
-          targetLang: String(t?.manager_note_translated_lang || 'es'),
-        });
+        // Manager-facing: always prefer real EN original
+        original: summaryOriginal || '',
+
+        // UI “Translated (ES)” box:
+        // prefer stored translation, else fall back to what was sent (often ES), else legacy
+        translated: summaryTranslated || summarySent || (!summaryOriginal ? legacy : ''),
+
+        sourceLang: String(t?.manager_note_original_lang || 'en'),
+        targetLang: String(t?.manager_note_translated_lang || 'es'),
+      });
 
         // OPTIONAL: if you want the Spanish “sent” to be visible somewhere without clutter,
         // you can store it in state or show it in a collapsible (see below).
