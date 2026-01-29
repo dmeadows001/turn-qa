@@ -638,6 +638,92 @@ const PhotoCard = memo(
   }
 );
 
+// ---------- NEW: History helpers (safe, non-breaking) ----------
+function nonEmpty(s) {
+  const t = String(s ?? '').trim();
+  return t ? t : '';
+}
+
+function getHistoryMessageParts(it) {
+  // it.text is what we currently show (usually "sent")
+  const meta = it?.meta || {};
+  const sent = nonEmpty(meta.sent) || nonEmpty(it?.text);
+  const original = nonEmpty(meta.original);
+  const translated = nonEmpty(meta.translated);
+
+  const sentLang = nonEmpty(meta.sent_lang) || nonEmpty(it?.lang);
+  const originalLang = nonEmpty(meta.original_lang);
+  const translatedLang = nonEmpty(meta.translated_lang);
+
+  // Avoid duplicating identical strings
+  const norm = (v) => String(v || '').trim();
+  const s0 = norm(sent);
+  const o0 = norm(original);
+  const t0 = norm(translated);
+
+  const showSent = !!s0;
+  const showOriginal = !!o0 && o0 !== s0;
+  const showTranslated = !!t0 && t0 !== s0 && t0 !== o0;
+
+  return {
+    showSent,
+    showOriginal,
+    showTranslated,
+    sent: s0,
+    original: o0,
+    translated: t0,
+    sentLang: sentLang || null,
+    originalLang: originalLang || null,
+    translatedLang: translatedLang || null,
+  };
+}
+
+function langChip(lang) {
+  const v = String(lang || '').trim();
+  if (!v) return null;
+  return (
+    <span
+      style={{
+        fontSize: 10,
+        fontWeight: 800,
+        padding: '2px 8px',
+        borderRadius: 999,
+        border: '1px solid #334155',
+        background: '#0f172a',
+        color: '#cbd5e1',
+        textTransform: 'uppercase',
+        letterSpacing: 0.04,
+      }}
+    >
+      {v}
+    </span>
+  );
+}
+
+function block(label, value, chip) {
+  return (
+    <div
+      style={{
+        marginTop: 8,
+        padding: '10px 12px',
+        borderRadius: 10,
+        border: '1px solid #334155',
+        background: '#0f172a',
+        color: '#cbd5e1',
+      }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+        <div style={{ fontSize: 11, fontWeight: 900, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.04 }}>
+          {label}
+        </div>
+        {chip}
+      </div>
+      <div style={{ whiteSpace: 'pre-wrap' }}>{value}</div>
+    </div>
+  );
+}
+// -------------------------------------------------------------
+
 export default function Review() {
   const router = useRouter();
   const turnId = router.query.id;
@@ -696,7 +782,9 @@ export default function Review() {
         setStatus(t && t.status ? t.status : 'in_progress');
         setTemplateShots(ts);
 
-        const cleanerNote = String(t?.cleaner_reply_translated ?? t?.cleaner_reply ?? t?.cleaner_note ?? t?.cleaner_message ?? '').trim();
+        const cleanerNote = String(
+          t?.cleaner_reply_translated ?? t?.cleaner_reply ?? t?.cleaner_note ?? t?.cleaner_message ?? ''
+        ).trim();
         setLastCleanerNote(cleanerNote);
 
         setCleanerReply('');
@@ -1095,32 +1183,54 @@ export default function Review() {
                 <div style={ui.muted}>No history items yet.</div>
               ) : (
                 <div style={{ display: 'grid', gap: 10 }}>
-                  {historyItems.map((it, idx) => (
-                    <div
-                      key={it.id ? `ev:${it.id}` : `h:${idx}`}
-                      style={{
-                        border: '1px solid #334155',
-                        borderRadius: 12,
-                        padding: 10,
-                        background: '#0b1220',
-                      }}
-                    >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
-                        <div style={{ fontWeight: 800 }}>
-                          {it.type === 'message' ? (it.actor === 'manager' ? 'Manager' : 'Cleaner') : 'Event'}
-                          {' — '}
-                          <span style={{ color: '#93c5fd' }}>{String(it.event || '')}</span>
-                        </div>
-                        <div style={{ fontSize: 12, color: '#94a3b8' }}>
-                          {it.at ? new Date(it.at).toLocaleString() : ''}
-                        </div>
-                      </div>
+                  {historyItems.map((it, idx) => {
+                    const isMsg = it?.type === 'message';
+                    const who = isMsg ? (it.actor === 'manager' ? 'Manager' : 'Cleaner') : 'Event';
 
-                      {it.text ? (
-                        <div style={{ marginTop: 8, whiteSpace: 'pre-wrap', color: '#cbd5e1' }}>{it.text}</div>
-                      ) : null}
-                    </div>
-                  ))}
+                    const parts = isMsg ? getHistoryMessageParts(it) : null;
+
+                    return (
+                      <div
+                        key={it.id ? `ev:${it.id}` : `h:${idx}`}
+                        style={{
+                          border: '1px solid #334155',
+                          borderRadius: 12,
+                          padding: 10,
+                          background: '#0b1220',
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+                          <div style={{ fontWeight: 800 }}>
+                            {who}
+                            {' — '}
+                            <span style={{ color: '#93c5fd' }}>{String(it.event || '')}</span>
+                          </div>
+                          <div style={{ fontSize: 12, color: '#94a3b8' }}>
+                            {it.at ? new Date(it.at).toLocaleString() : ''}
+                          </div>
+                        </div>
+
+                        {/* Events: keep old behavior */}
+                        {!isMsg && it.text ? (
+                          <div style={{ marginTop: 8, whiteSpace: 'pre-wrap', color: '#cbd5e1' }}>{it.text}</div>
+                        ) : null}
+
+                        {/* Messages: show Sent + Original + Translated */}
+                        {isMsg ? (
+                          <div style={{ marginTop: 8 }}>
+                            {parts?.showSent ? block('Sent (what receiver saw)', parts.sent, langChip(parts.sentLang)) : null}
+                            {parts?.showOriginal ? block('Original (what sender wrote)', parts.original, langChip(parts.originalLang)) : null}
+                            {parts?.showTranslated ? block('Translated', parts.translated, langChip(parts.translatedLang)) : null}
+
+                            {/* Absolute fallback (should rarely be needed) */}
+                            {!parts?.showSent && !parts?.showOriginal && !parts?.showTranslated && it.text ? (
+                              <div style={{ marginTop: 8, whiteSpace: 'pre-wrap', color: '#cbd5e1' }}>{it.text}</div>
+                            ) : null}
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -1279,7 +1389,7 @@ export default function Review() {
                 </div>
               </div>
 
-              <div style={{ display: 'flex', gap: 10, marginTop: 12, flexWrap: 'wrap' }}>            
+              <div style={{ display: 'flex', gap: 10, marginTop: 12, flexWrap: 'wrap' }}>
                 <button
                   onClick={sendNeedsFix}
                   disabled={acting || !turnId}
@@ -1296,10 +1406,10 @@ export default function Review() {
                 <button onClick={markApproved} disabled={acting || !turnId} style={ui.btnPrimary}>
                   {acting ? '…' : '✅ Approve'}
                 </button>
-                 <button type="button" onClick={openHistory} disabled={!turnId} style={ui.btnSecondary}>
+
+                <button type="button" onClick={openHistory} disabled={!turnId} style={ui.btnSecondary}>
                   🕘 View History
                 </button>
-                  
               </div>
             </div>
           )}
