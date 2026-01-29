@@ -1279,11 +1279,7 @@ export default function Review() {
                 </div>
               </div>
 
-              <div style={{ display: 'flex', gap: 10, marginTop: 12, flexWrap: 'wrap' }}>
-                <button type="button" onClick={openHistory} disabled={!turnId} style={ui.btnSecondary}>
-                  🕘 View History
-                </button>
-
+              <div style={{ display: 'flex', gap: 10, marginTop: 12, flexWrap: 'wrap' }}>            
                 <button
                   onClick={sendNeedsFix}
                   disabled={acting || !turnId}
@@ -1300,6 +1296,10 @@ export default function Review() {
                 <button onClick={markApproved} disabled={acting || !turnId} style={ui.btnPrimary}>
                   {acting ? '…' : '✅ Approve'}
                 </button>
+                 <button type="button" onClick={openHistory} disabled={!turnId} style={ui.btnSecondary}>
+                  🕘 View History
+                </button>
+                  
               </div>
             </div>
           )}
