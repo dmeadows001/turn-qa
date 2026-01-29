@@ -92,7 +92,7 @@ async function fetchTemplate(turnId) {
     if (!r.ok) throw new Error(j.error || 'turn-template failed');
 
     const shots = Array.isArray(j.shots) ? j.shots : [];
-    return shots.map(s => ({
+    return shots.map((s) => ({
       shot_id: s.shot_id,
       area_key: s.area_key || '',
       label: s.label || s.area_key || 'Section',
@@ -104,12 +104,22 @@ async function fetchTemplate(turnId) {
   }
 }
 
-function buildSections(photos, templateShots) {
-  const byShot = new Map();      // shot_id -> Photo[]
-  const leftovers = [];          // photos without a matching shot_id
-  const hasShotId = p => p && typeof p.shot_id === 'string' && p.shot_id;
+// NEW: turn history
+async function fetchTurnHistory(turnId) {
+  const r = await fetch(`/api/turn-history?id=${turnId}`, {
+    headers: { ...authHeaders() },
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || 'turn-history failed');
+  return j; // { ok, mode, items }
+}
 
-  (photos || []).forEach(p => {
+function buildSections(photos, templateShots) {
+  const byShot = new Map(); // shot_id -> Photo[]
+  const leftovers = []; // photos without a matching shot_id
+  const hasShotId = (p) => p && typeof p.shot_id === 'string' && p.shot_id;
+
+  (photos || []).forEach((p) => {
     if (hasShotId(p)) {
       const sid = p.shot_id;
       if (!byShot.has(sid)) byShot.set(sid, []);
@@ -122,10 +132,10 @@ function buildSections(photos, templateShots) {
   const sections = [];
 
   // template order first
-  templateShots.forEach(s => {
+  templateShots.forEach((s) => {
     const list = byShot.get(s.shot_id) || [];
     if (list.length) {
-      list.sort((a,b) => new Date(b.created_at) - new Date(a.created_at));
+      list.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
       sections.push({ key: s.shot_id, title: s.label || s.area_key || 'Section', photos: list });
       byShot.delete(s.shot_id);
     }
@@ -133,7 +143,7 @@ function buildSections(photos, templateShots) {
 
   // any shot_ids not in template (edge cases)
   for (const [sid, list] of byShot.entries()) {
-    list.sort((a,b) => new Date(b.created_at) - new Date(a.created_at));
+    list.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
     sections.push({ key: sid, title: 'Additional uploads', photos: list });
   }
 
@@ -145,7 +155,7 @@ function buildSections(photos, templateShots) {
       return acc;
     }, {});
     Object.entries(byArea).forEach(([k, list]) => {
-      list.sort((a,b) => new Date(b.created_at) - new Date(a.created_at));
+      list.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
       sections.push({
         key: `area:${k}`,
         title: k === '__UNCAT__' ? 'Additional uploads' : k,
@@ -159,21 +169,21 @@ function buildSections(photos, templateShots) {
 
 function badgeStyle(status) {
   const map = {
-    approved:    { bg:'#064e3b', fg:'#86efac', bd:'#065f46' },  // green
-    submitted:   { bg:'#0b3b72', fg:'#93c5fd', bd:'#1d4ed8' },  // blue
-    needs_fix:   { bg:'#4a2f04', fg:'#fcd34d', bd:'#d97706' },  // amber
-    in_progress: { bg:'#1f2937', fg:'#cbd5e1', bd:'#334155' }   // slate
+    approved: { bg: '#064e3b', fg: '#86efac', bd: '#065f46' }, // green
+    submitted: { bg: '#0b3b72', fg: '#93c5fd', bd: '#1d4ed8' }, // blue
+    needs_fix: { bg: '#4a2f04', fg: '#fcd34d', bd: '#d97706' }, // amber
+    in_progress: { bg: '#1f2937', fg: '#cbd5e1', bd: '#334155' }, // slate
   };
-  const c = map[status] || { bg:'#1f2937', fg:'#cbd5e1', bd:'#334155' };
+  const c = map[status] || { bg: '#1f2937', fg: '#cbd5e1', bd: '#334155' };
   return {
     background: c.bg,
     color: c.fg,
     border: `1px solid ${c.bd}`,
-    padding:'2px 8px',
+    padding: '2px 8px',
     borderRadius: 999,
-    fontSize:12,
-    fontWeight:700,
-    display:'inline-block'
+    fontSize: 12,
+    fontWeight: 700,
+    display: 'inline-block',
   };
 }
 
@@ -181,14 +191,14 @@ function badgeStyle(status) {
 const flaggedCardStyle = {
   border: '1px solid #d97706',
   boxShadow: '0 0 0 3px rgba(217,119,6,0.25) inset',
-  background: '#0b1220'
+  background: '#0b1220',
 };
 
 // Green “FIX” highlight (cleaner resubmitted photo)
 const fixCardStyle = {
   border: '1px solid #065f46',
   boxShadow: '0 0 0 3px rgba(5,150,105,0.20) inset',
-  background: '#071a16'
+  background: '#071a16',
 };
 
 // Dashed section frame, like cleaner need-fix
@@ -203,7 +213,7 @@ const sectionWrapStyle = {
 // Stable per-photo key: prefer storage path, then id; never include created_at
 function keyFor(p) {
   if (!p) return '';
-  if (p.path && p.path.length) return p.path;   // canonical, stable across renders
+  if (p.path && p.path.length) return p.path; // canonical, stable across renders
   if (p.id) return String(p.id);
   // last resort: area + shot (stable enough within a turn)
   return `${p.area_key || 'area'}::${p.shot_id || 'shot'}`;
@@ -227,7 +237,9 @@ async function translateViaApi(text, targetLang) {
   return String(j.translatedText || '').trim();
 }
 
-function lc(s) { return String(s || '').toLowerCase(); }
+function lc(s) {
+  return String(s || '').toLowerCase();
+}
 
 // For manager review:
 // - Needs-fix (manager→cleaner): show manager ORIGINAL EN for manager reference.
@@ -321,12 +333,27 @@ function GettingStartedModal({ enabled, storageKey, children }) {
           </button>
         </div>
 
-        <div style={{ marginTop: 14, color: '#cbd5e1', lineHeight: 1.5 }}>
-          {children}
-        </div>
+        <div style={{ marginTop: 14, color: '#cbd5e1', lineHeight: 1.5 }}>{children}</div>
 
-        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', marginTop: 16, flexWrap: 'wrap' }}>
-          <label style={{ display: 'flex', gap: 8, alignItems: 'center', cursor: 'pointer', color: '#cbd5e1' }}>
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            gap: 12,
+            alignItems: 'center',
+            marginTop: 16,
+            flexWrap: 'wrap',
+          }}
+        >
+          <label
+            style={{
+              display: 'flex',
+              gap: 8,
+              alignItems: 'center',
+              cursor: 'pointer',
+              color: '#cbd5e1',
+            }}
+          >
             <input
               type="checkbox"
               checked={dontShow}
@@ -346,253 +373,270 @@ function GettingStartedModal({ enabled, storageKey, children }) {
 }
 
 // --- PhotoCard at module scope so it doesn't remount each render ---
-const PhotoCard = memo(function PhotoCard({
-  p,
-  isManagerMode,
-  selectedKeys,
-  notesByKey,
-  findingsByKey,
-  setNoteFor,
-  toggleKey,
-  onTranslate,
-  translateBusyByKey
-}) {
-  const k = keyFor(p);
-  const selected = selectedKeys.has(k);
+const PhotoCard = memo(
+  function PhotoCard({
+    p,
+    isManagerMode,
+    selectedKeys,
+    notesByKey,
+    findingsByKey,
+    setNoteFor,
+    toggleKey,
+    onTranslate,
+    translateBusyByKey,
+  }) {
+    const k = keyFor(p);
+    const selected = selectedKeys.has(k);
 
-  const noteObj = normalizeNote(notesByKey[k]);
-  const originalVal = noteObj.original || '';
-  const translatedVal = noteObj.translated || '';
+    const noteObj = normalizeNote(notesByKey[k]);
+    const originalVal = noteObj.original || '';
+    const translatedVal = noteObj.translated || '';
 
-  const isFix = !!p.is_fix;
+    const isFix = !!p.is_fix;
 
-  const finding = findingsByKey[k] || null;
+    const finding = findingsByKey[k] || null;
 
-  const flaggedFromFindings = !!finding;
-  const flaggedFromRow = !!p.needs_fix;
-  // Only ORIGINAL photos can be “needs fix”
-  const flagged = !isFix && (flaggedFromFindings || flaggedFromRow);
+    const flaggedFromFindings = !!finding;
+    const flaggedFromRow = !!p.needs_fix;
+    // Only ORIGINAL photos can be “needs fix”
+    const flagged = !isFix && (flaggedFromFindings || flaggedFromRow);
 
-  const styleCard = isFix ? fixCardStyle : (flagged ? flaggedCardStyle : null);
+    const styleCard = isFix ? fixCardStyle : flagged ? flaggedCardStyle : null;
 
-  const busy = !!(translateBusyByKey && translateBusyByKey[k]);
+    const busy = !!(translateBusyByKey && translateBusyByKey[k]);
 
-  // Manager-facing note logic:
-  // - Needs-fix (amber): manager should see their ORIGINAL EN reference
-  // - Fix (green): manager sees EN only (cleaner’s translated)
-  const managerNoteEnglish =
-    (isManagerMode && flagged)
-      ? (pickEnglishForManager(finding) || String(p.manager_note || '').trim())
-      : '';
+    // Manager-facing note logic:
+    // - Needs-fix (amber): manager should see their ORIGINAL EN reference
+    // - Fix (green): manager sees EN only (cleaner’s translated)
+    const managerNoteEnglish =
+      isManagerMode && flagged ? pickEnglishForManager(finding) || String(p.manager_note || '').trim() : '';
 
-  // What cleaner sees (ES) — keep for non-manager view
-  const noteToCleaner = pickNoteSentToCleaner(finding) || String(p.manager_note || '').trim();
+    // What cleaner sees (ES) — keep for non-manager view
+    const noteToCleaner = pickNoteSentToCleaner(finding) || String(p.manager_note || '').trim();
 
-  return (
-    <div
-      style={{
-        border: '1px solid #334155',
-        borderRadius: 12,
-        overflow: 'hidden',
-        background: '#0b1220',
-        ...(styleCard || {})
-      }}
-    >
-      <a href={p.url} target="_blank" rel="noreferrer">
-        <img
-          src={p.url}
-          alt={p.area_key || 'photo'}
-          style={{ width: '100%', display: 'block', aspectRatio: '4/3', objectFit: 'cover' }}
-        />
-      </a>
+    return (
+      <div
+        style={{
+          border: '1px solid #334155',
+          borderRadius: 12,
+          overflow: 'hidden',
+          background: '#0b1220',
+          ...(styleCard || {}),
+        }}
+      >
+        <a href={p.url} target="_blank" rel="noreferrer">
+          <img
+            src={p.url}
+            alt={p.area_key || 'photo'}
+            style={{ width: '100%', display: 'block', aspectRatio: '4/3', objectFit: 'cover' }}
+          />
+        </a>
 
-      <div style={{ padding: 10, fontSize: 12 }}>
-        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:8 }}>
-          <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-            <b>{p.area_key || '—'}</b>
+        <div style={{ padding: 10, fontSize: 12 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <b>{p.area_key || '—'}</b>
 
-            {flagged && (
-              <span style={{
-                padding:'2px 8px',
-                borderRadius:999,
-                fontSize:11,
-                fontWeight:700,
-                color:'#fcd34d',
-                background:'#4a2f04',
-                border:'1px solid #d97706'
-              }}>
-                needs fix
-              </span>
-            )}
+              {flagged && (
+                <span
+                  style={{
+                    padding: '2px 8px',
+                    borderRadius: 999,
+                    fontSize: 11,
+                    fontWeight: 700,
+                    color: '#fcd34d',
+                    background: '#4a2f04',
+                    border: '1px solid #d97706',
+                  }}
+                >
+                  needs fix
+                </span>
+              )}
 
-            {isFix && (
-              <span style={{
-                padding:'2px 8px',
-                borderRadius:999,
-                fontSize:11,
-                fontWeight:700,
-                color:'#86efac',
-                background:'#064e3b',
-                border:'1px solid #065f46'
-              }}>
-                FIX
-              </span>
+              {isFix && (
+                <span
+                  style={{
+                    padding: '2px 8px',
+                    borderRadius: 999,
+                    fontSize: 11,
+                    fontWeight: 700,
+                    color: '#86efac',
+                    background: '#064e3b',
+                    border: '1px solid #065f46',
+                  }}
+                >
+                  FIX
+                </span>
+              )}
+            </div>
+
+            {isManagerMode && (
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', userSelect: 'none' }}>
+                <input
+                  type="checkbox"
+                  checked={selected}
+                  onChange={() => toggleKey(p)}
+                  style={{ transform: 'scale(1.1)' }}
+                />
+                <span>Needs fix</span>
+              </label>
             )}
           </div>
 
-          {isManagerMode && (
-            <label style={{ display:'flex', alignItems:'center', gap:6, cursor:'pointer', userSelect:'none' }}>
-              <input
-                type="checkbox"
-                checked={selected}
-                onChange={() => toggleKey(p)}
-                style={{ transform:'scale(1.1)' }}
-              />
-              <span>Needs fix</span>
-            </label>
-          )}
-        </div>
+          <div style={{ color: '#9ca3af' }}>{new Date(p.created_at).toLocaleString()}</div>
+          <div style={{ color: '#64748b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {p.path}
+          </div>
 
-        <div style={{ color: '#9ca3af' }}>{new Date(p.created_at).toLocaleString()}</div>
-        <div style={{ color: '#64748b', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{p.path}</div>
+          {/* OPTION A: Only show note + translation UI when checkbox is checked */}
+          {isManagerMode && selected && !isFix && (
+            <div style={{ marginTop: 10 }}>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 10,
+                  marginBottom: 6,
+                }}
+              >
+                <div style={{ fontSize: 11, color: '#94a3b8', fontWeight: 700 }}>Original note (EN)</div>
 
-        {/* OPTION A: Only show note + translation UI when checkbox is checked */}
-        {isManagerMode && selected && !isFix && (
-          <div style={{ marginTop: 10 }}>
-            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:10, marginBottom:6 }}>
-              <div style={{ fontSize: 11, color: '#94a3b8', fontWeight: 700 }}>
-                Original note (EN)
+                <button
+                  type="button"
+                  onClick={() => onTranslate(p)}
+                  disabled={busy || !originalVal.trim()}
+                  style={{
+                    ...ui.btnSecondary,
+                    padding: '6px 10px',
+                    border: '1px solid #334155',
+                    background: '#0f172a',
+                    color: '#cbd5e1',
+                    opacity: busy || !originalVal.trim() ? 0.6 : 1,
+                  }}
+                  title="Translate English → Spanish"
+                >
+                  {busy ? 'Translating…' : 'Translate → ES'}
+                </button>
               </div>
 
-              <button
-                type="button"
-                onClick={() => onTranslate(p)}
-                disabled={busy || !originalVal.trim()}
-                style={{
-                  ...ui.btnSecondary,
-                  padding: '6px 10px',
-                  border: '1px solid #334155',
-                  background: '#0f172a',
-                  color: '#cbd5e1',
-                  opacity: (busy || !originalVal.trim()) ? 0.6 : 1
-                }}
-                title="Translate English → Spanish"
-              >
-                {busy ? 'Translating…' : 'Translate → ES'}
-              </button>
+              <textarea
+                value={originalVal}
+                onChange={(e) => setNoteFor(p, { original: e.target.value, sourceLang: 'en' })}
+                rows={2}
+                placeholder="Write your note in English…"
+                style={{ ...ui.input, width: '100%', padding: '8px 10px', resize: 'vertical', background: '#0b1220' }}
+              />
+
+              <div style={{ fontSize: 11, color: '#94a3b8', fontWeight: 700, margin: '8px 0 6px' }}>
+                Translated note (ES) — sent to cleaner
+              </div>
+
+              <textarea
+                value={translatedVal}
+                onChange={(e) => setNoteFor(p, { translated: e.target.value, targetLang: 'es' })}
+                rows={2}
+                placeholder="Spanish will appear here… (editable)"
+                style={{ ...ui.input, width: '100%', padding: '8px 10px', resize: 'vertical', background: '#0b1220' }}
+              />
+
+              <div style={{ marginTop: 6, fontSize: 11, color: '#64748b' }}>
+                Tip: If you change the English above, click Translate again to refresh the Spanish.
+              </div>
             </div>
+          )}
 
-            <textarea
-              value={originalVal}
-              onChange={e => setNoteFor(p, { original: e.target.value, sourceLang: 'en' })}
-              rows={2}
-              placeholder="Write your note in English…"
-              style={{ ...ui.input, width:'100%', padding:'8px 10px', resize:'vertical', background:'#0b1220' }}
-            />
-
-            <div style={{ fontSize: 11, color: '#94a3b8', fontWeight: 700, margin: '8px 0 6px' }}>
-              Translated note (ES) — sent to cleaner
+          {/* Manager view: show ORIGINAL EN for needs-fix cards (manager memory) */}
+          {isManagerMode && flagged && !!managerNoteEnglish && (
+            <div
+              style={{
+                marginTop: 8,
+                padding: '8px 10px',
+                background: '#0f172a',
+                border: '1px solid #334155',
+                borderRadius: 8,
+                color: '#cbd5e1',
+              }}
+            >
+              <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 4, fontWeight: 700 }}>
+                Manager note (original EN)
+              </div>
+              <div style={{ whiteSpace: 'pre-wrap' }}>{managerNoteEnglish}</div>
             </div>
+          )}
 
-            <textarea
-              value={translatedVal}
-              onChange={e => setNoteFor(p, { translated: e.target.value, targetLang: 'es' })}
-              rows={2}
-              placeholder="Spanish will appear here… (editable)"
-              style={{ ...ui.input, width:'100%', padding:'8px 10px', resize:'vertical', background:'#0b1220' }}
-            />
-
-            <div style={{ marginTop: 6, fontSize: 11, color: '#64748b' }}>
-              Tip: If you change the English above, click Translate again to refresh the Spanish.
+          {/* Fix photo: show cleaner note (assumed already EN for manager) */}
+          {isFix && !!p.cleaner_note && (
+            <div
+              style={{
+                marginTop: 8,
+                padding: '8px 10px',
+                background: '#052e2b',
+                border: '1px solid #065f46',
+                borderRadius: 8,
+                color: '#86efac',
+                whiteSpace: 'pre-wrap',
+              }}
+            >
+              {p.cleaner_note}
             </div>
-          </div>
-        )}
+          )}
 
-        {/* Manager view: show ORIGINAL EN for needs-fix cards (manager memory) */}
-        {isManagerMode && flagged && !!managerNoteEnglish && (
-          <div
-            style={{
-              marginTop: 8,
-              padding: '8px 10px',
-              background: '#0f172a',
-              border: '1px solid #334155',
-              borderRadius: 8,
-              color: '#cbd5e1'
-            }}
-          >
-            <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 4, fontWeight: 700 }}>
-              Manager note (original EN)
+          {/* Cleaner / non-manager view: show the note that was SENT to cleaner (normally ES) */}
+          {!isManagerMode && flagged && !!noteToCleaner && (
+            <div
+              style={{
+                marginTop: 8,
+                padding: '8px 10px',
+                background: '#0f172a',
+                border: '1px solid #334155',
+                borderRadius: 8,
+                color: '#cbd5e1',
+              }}
+            >
+              <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 4, fontWeight: 700 }}>Manager note</div>
+              <div style={{ whiteSpace: 'pre-wrap' }}>{noteToCleaner}</div>
             </div>
-            <div style={{ whiteSpace: 'pre-wrap' }}>{managerNoteEnglish}</div>
-          </div>
-        )}
-
-        {/* Fix photo: show cleaner note (assumed already EN for manager) */}
-        {isFix && !!p.cleaner_note && (
-          <div style={{
-            marginTop:8,
-            padding:'8px 10px',
-            background:'#052e2b',
-            border:'1px solid #065f46',
-            borderRadius:8,
-            color:'#86efac',
-            whiteSpace:'pre-wrap'
-          }}>
-            {p.cleaner_note}
-          </div>
-        )}
-
-        {/* Cleaner / non-manager view: show the note that was SENT to cleaner (normally ES) */}
-        {!isManagerMode && flagged && !!noteToCleaner && (
-          <div style={{
-            marginTop:8,
-            padding:'8px 10px',
-            background:'#0f172a',
-            border:'1px solid #334155',
-            borderRadius:8,
-            color:'#cbd5e1'
-          }}>
-            <div style={{ fontSize:11, color:'#94a3b8', marginBottom:4, fontWeight:700 }}>Manager note</div>
-            <div style={{ whiteSpace:'pre-wrap' }}>{noteToCleaner}</div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
-    </div>
-  );
-}, (prev, next) => {
-  // only re-render this card when its own props change
-  const pk = keyFor(prev.p);
-  const nk = keyFor(next.p);
-  if (pk !== nk) return false; // different photo instance
+    );
+  },
+  (prev, next) => {
+    // only re-render this card when its own props change
+    const pk = keyFor(prev.p);
+    const nk = keyFor(next.p);
+    if (pk !== nk) return false; // different photo instance
 
-  // note value for THIS photo (stringify for object support)
-  const prevNote = prev.notesByKey[pk];
-  const nextNote = next.notesByKey[nk];
-  const prevStr = typeof prevNote === 'string' ? prevNote : JSON.stringify(prevNote || {});
-  const nextStr = typeof nextNote === 'string' ? nextNote : JSON.stringify(nextNote || {});
-  if (prevStr !== nextStr) return false;
+    // note value for THIS photo (stringify for object support)
+    const prevNote = prev.notesByKey[pk];
+    const nextNote = next.notesByKey[nk];
+    const prevStr = typeof prevNote === 'string' ? prevNote : JSON.stringify(prevNote || {});
+    const nextStr = typeof nextNote === 'string' ? nextNote : JSON.stringify(nextNote || {});
+    if (prevStr !== nextStr) return false;
 
-  // selection for THIS photo
-  const prevSel = prev.selectedKeys.has(pk);
-  const nextSel = next.selectedKeys.has(nk);
-  if (prevSel !== nextSel) return false;
+    // selection for THIS photo
+    const prevSel = prev.selectedKeys.has(pk);
+    const nextSel = next.selectedKeys.has(nk);
+    if (prevSel !== nextSel) return false;
 
-  // flagged state for THIS photo (presence of finding)
-  const prevFlag = !!prev.findingsByKey[pk];
-  const nextFlag = !!next.findingsByKey[nk];
-  if (prevFlag !== nextFlag) return false;
+    // flagged state for THIS photo (presence of finding)
+    const prevFlag = !!prev.findingsByKey[pk];
+    const nextFlag = !!next.findingsByKey[nk];
+    if (prevFlag !== nextFlag) return false;
 
-  const prevFix = !!prev.p.is_fix;
-  const nextFix = !!next.p.is_fix;
-  if (prevFix !== nextFix) return false;
+    const prevFix = !!prev.p.is_fix;
+    const nextFix = !!next.p.is_fix;
+    if (prevFix !== nextFix) return false;
 
-  // translate busy state for THIS photo (optional prop)
-  const prevBusy = !!(prev.translateBusyByKey && prev.translateBusyByKey[pk]);
-  const nextBusy = !!(next.translateBusyByKey && next.translateBusyByKey[nk]);
-  if (prevBusy !== nextBusy) return false;
+    // translate busy state for THIS photo (optional prop)
+    const prevBusy = !!(prev.translateBusyByKey && prev.translateBusyByKey[pk]);
+    const nextBusy = !!(next.translateBusyByKey && next.translateBusyByKey[nk]);
+    if (prevBusy !== nextBusy) return false;
 
-  return true; // unchanged → skip render
-});
+    return true; // unchanged → skip render
+  }
+);
 
 export default function Review() {
   const router = useRouter();
@@ -600,8 +644,7 @@ export default function Review() {
 
   // Manager controls are only shown with ?manager=1
   const isManagerMode =
-    typeof window !== 'undefined' &&
-    new URLSearchParams(window.location.search).get('manager') === '1';
+    typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('manager') === '1';
 
   const [turn, setTurn] = useState(null);
   const [status, setStatus] = useState(null);
@@ -636,54 +679,45 @@ export default function Review() {
   // manager-side display of the most recent cleaner message
   const [lastCleanerNote, setLastCleanerNote] = useState('');
 
+  // NEW: History modal state
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyErr, setHistoryErr] = useState('');
+  const [historyItems, setHistoryItems] = useState([]);
+
   useEffect(() => {
     if (!turnId) return;
     (async () => {
       setLoading(true);
       setLoadErr('');
       try {
-        const [t, ph, ts] = await Promise.all([
-          fetchTurn(turnId),
-          fetchPhotos(turnId),
-          fetchTemplate(turnId),
-        ]);
+        const [t, ph, ts] = await Promise.all([fetchTurn(turnId), fetchPhotos(turnId), fetchTemplate(turnId)]);
         setTurn(t);
         setStatus(t && t.status ? t.status : 'in_progress');
         setTemplateShots(ts);
 
-        const cleanerNote = String(
-          t?.cleaner_reply_translated ??
-          t?.cleaner_reply ??
-          t?.cleaner_note ??
-          t?.cleaner_message ??
-          ''
-        ).trim();
-
+        const cleanerNote = String(t?.cleaner_reply_translated ?? t?.cleaner_reply ?? t?.cleaner_note ?? t?.cleaner_message ?? '').trim();
         setLastCleanerNote(cleanerNote);
 
         setCleanerReply('');
 
-// Summary note: STRICT structured fields.
-// - Original (EN) should never come from legacy manager_note (often ES).
-// - Translated (ES) can come from translated or sent.
-// - Legacy is only a last resort (older turns before new columns existed).
-const summaryOriginal = String(t?.manager_note_original || '').trim();
-const summaryTranslated = String(t?.manager_note_translated || '').trim();
-const summarySent = String(t?.manager_note_sent || '').trim();
-const legacy = String(t?.manager_note || '').trim(); // legacy "sent" mirror
+        // Summary note: STRICT structured fields.
+        // - Original (EN) should never come from legacy manager_note (often ES).
+        // - Translated (ES) can come from translated or sent.
+        // - Legacy is only a last resort (older turns before new columns existed).
+        const summaryOriginal = String(t?.manager_note_original || '').trim();
+        const summaryTranslated = String(t?.manager_note_translated || '').trim();
+        const summarySent = String(t?.manager_note_sent || '').trim();
+        const legacy = String(t?.manager_note || '').trim(); // legacy "sent" mirror
 
-setSummaryNote({
-  // Only allow legacy to populate original if you truly have no structured fields.
-  // (This covers old data where manager_note was actually EN.)
-  original: summaryOriginal || (!summarySent && !summaryTranslated ? legacy : ''),
-  translated: summaryTranslated || summarySent || '',
-  sourceLang: String(t?.manager_note_original_lang || 'en'),
-  targetLang: String(t?.manager_note_translated_lang || t?.manager_note_sent_lang || 'es'),
-});
-
-        // OPTIONAL: if you want the Spanish “sent” to be visible somewhere without clutter,
-        // you can store it in state or show it in a collapsible (see below).
-
+        setSummaryNote({
+          // Only allow legacy to populate original if you truly have no structured fields.
+          // (This covers old data where manager_note was actually EN.)
+          original: summaryOriginal || (!summarySent && !summaryTranslated ? legacy : ''),
+          translated: summaryTranslated || summarySent || '',
+          sourceLang: String(t?.manager_note_original_lang || 'en'),
+          targetLang: String(t?.manager_note_translated_lang || t?.manager_note_sent_lang || 'es'),
+        });
 
         setPhotos(ph);
 
@@ -703,7 +737,7 @@ setSummaryNote({
           const sel = new Set();
           const notes = {};
 
-          f.forEach(it => {
+          f.forEach((it) => {
             const path = (it && it.path) || '';
             const keys = pathToKeys[path] || [];
             for (const k of keys) {
@@ -720,13 +754,8 @@ setSummaryNote({
               const oLang = lc(it.note_original_lang);
               const tLang = lc(it.note_translated_lang);
 
-              const originalPref =
-                (oLang === 'en' && o) ? o :
-                (o ? o : String(it.note || ''));
-
-              const translatedPref =
-                (tLang === 'es' && t2) ? t2 :
-                (t2 ? t2 : '');
+              const originalPref = oLang === 'en' && o ? o : o ? o : String(it.note || '');
+              const translatedPref = tLang === 'es' && t2 ? t2 : t2 ? t2 : '';
 
               notes[k] = {
                 original: originalPref || '',
@@ -739,7 +768,7 @@ setSummaryNote({
 
           setFindingsByKey(map);
           if (isManagerMode) setSelectedKeys(sel);
-          setNotesByKey(prev => ({ ...notes, ...prev }));
+          setNotesByKey((prev) => ({ ...notes, ...prev }));
         } else {
           setFindingsByKey({});
         }
@@ -753,20 +782,17 @@ setSummaryNote({
   }, [turnId, isManagerMode]);
 
   const uniqueAreas = useMemo(() => {
-    const set = new Set((photos || []).map(p => p.area_key).filter(Boolean));
+    const set = new Set((photos || []).map((p) => p.area_key).filter(Boolean));
     return Array.from(set);
   }, [photos]);
 
   // Build the same sections structure the cleaner page uses
-  const sections = useMemo(
-    () => buildSections(photos, templateShots),
-    [photos, templateShots]
-  );
+  const sections = useMemo(() => buildSections(photos, templateShots), [photos, templateShots]);
 
   // --- Stable callbacks so children don't remount during typing ---
   const toggleKey = useCallback((p) => {
     const k = keyFor(p);
-    setSelectedKeys(prev => {
+    setSelectedKeys((prev) => {
       const next = new Set(prev);
       if (next.has(k)) next.delete(k);
       else next.add(k);
@@ -776,39 +802,42 @@ setSummaryNote({
 
   const setNoteFor = useCallback((p, patch) => {
     const k = keyFor(p);
-    setNotesByKey(prev => {
+    setNotesByKey((prev) => {
       const cur = normalizeNote(prev[k]);
       return { ...prev, [k]: { ...cur, ...patch } };
     });
   }, []);
 
-  const onTranslate = useCallback(async (p) => {
-    const k = keyFor(p);
-    const cur = normalizeNote(notesByKey[k]);
-    const text = (cur.original || '').trim();
-    if (!text) return;
+  const onTranslate = useCallback(
+    async (p) => {
+      const k = keyFor(p);
+      const cur = normalizeNote(notesByKey[k]);
+      const text = (cur.original || '').trim();
+      if (!text) return;
 
-    setTranslateBusyByKey(prev => ({ ...prev, [k]: true }));
-    try {
-      const es = await translateViaApi(text, 'es');
-      setNotesByKey(prev => {
-        const cur2 = normalizeNote(prev[k]);
-        return {
-          ...prev,
-          [k]: {
-            ...cur2,
-            sourceLang: 'en',
-            targetLang: 'es',
-            translated: es
-          }
-        };
-      });
-    } catch (e) {
-      alert(e.message || 'Translate failed');
-    } finally {
-      setTranslateBusyByKey(prev => ({ ...prev, [k]: false }));
-    }
-  }, [notesByKey]);
+      setTranslateBusyByKey((prev) => ({ ...prev, [k]: true }));
+      try {
+        const es = await translateViaApi(text, 'es');
+        setNotesByKey((prev) => {
+          const cur2 = normalizeNote(prev[k]);
+          return {
+            ...prev,
+            [k]: {
+              ...cur2,
+              sourceLang: 'en',
+              targetLang: 'es',
+              translated: es,
+            },
+          };
+        });
+      } catch (e) {
+        alert(e.message || 'Translate failed');
+      } finally {
+        setTranslateBusyByKey((prev) => ({ ...prev, [k]: false }));
+      }
+    },
+    [notesByKey]
+  );
 
   async function translateSummaryToEs() {
     const text = String(summaryNote.original || '').trim();
@@ -816,16 +845,33 @@ setSummaryNote({
     setSummaryBusy(true);
     try {
       const es = await translateViaApi(text, 'es');
-      setSummaryNote(prev => ({
+      setSummaryNote((prev) => ({
         ...prev,
         sourceLang: 'en',
         targetLang: 'es',
-        translated: es
+        translated: es,
       }));
     } catch (e) {
       alert(e.message || 'Translate failed');
     } finally {
       setSummaryBusy(false);
+    }
+  }
+
+  // NEW: open history modal + fetch items
+  async function openHistory() {
+    if (!turnId) return;
+    setHistoryOpen(true);
+    setHistoryLoading(true);
+    setHistoryErr('');
+    try {
+      const data = await fetchTurnHistory(turnId);
+      setHistoryItems(Array.isArray(data.items) ? data.items : []);
+    } catch (e) {
+      setHistoryErr(e?.message || 'Could not load history');
+      setHistoryItems([]);
+    } finally {
+      setHistoryLoading(false);
     }
   }
 
@@ -844,7 +890,7 @@ setSummaryNote({
       const r = await fetch('/api/update-turn-status', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ turn_id: turnId, new_status: 'approved', manager_note })
+        body: JSON.stringify({ turn_id: turnId, new_status: 'approved', manager_note }),
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error || 'update failed');
@@ -867,7 +913,7 @@ setSummaryNote({
     try {
       const payloadNotes = [];
 
-      photos.forEach(p => {
+      photos.forEach((p) => {
         const k = keyFor(p);
         const selected = selectedKeys.has(k);
         const obj = normalizeNote(notesByKey[k]);
@@ -888,12 +934,12 @@ setSummaryNote({
             // Robust fields
             note_original: original || null,
             note_translated: translated || null,
-            note_original_lang: original ? (obj.sourceLang || 'en') : null,
-            note_translated_lang: translated ? (obj.targetLang || 'es') : null,
+            note_original_lang: original ? obj.sourceLang || 'en' : null,
+            note_translated_lang: translated ? obj.targetLang || 'es' : null,
 
             // Also include "sent" explicitly for robustness
             note_sent: note_to_cleaner || null,
-            note_sent_lang: translated ? (obj.targetLang || 'es') : (original ? (obj.sourceLang || 'en') : null),
+            note_sent_lang: translated ? obj.targetLang || 'es' : original ? obj.sourceLang || 'en' : null,
           });
         }
       });
@@ -909,23 +955,25 @@ setSummaryNote({
       }
 
       // Send bilingual summary object (backend supports this now)
-      const summaryPayload = summarySent ? {
-        original: summaryOriginal || '',
-        translated: summaryTranslated || '',
-        sent: summarySent || '',
-        original_lang: summaryOriginal ? (summaryNote.sourceLang || 'en') : null,
-        translated_lang: summaryTranslated ? (summaryNote.targetLang || 'es') : null,
-        sent_lang: summaryTranslated ? (summaryNote.targetLang || 'es') : (summaryOriginal ? (summaryNote.sourceLang || 'en') : null),
-      } : null;
+      const summaryPayload = summarySent
+        ? {
+            original: summaryOriginal || '',
+            translated: summaryTranslated || '',
+            sent: summarySent || '',
+            original_lang: summaryOriginal ? summaryNote.sourceLang || 'en' : null,
+            translated_lang: summaryTranslated ? summaryNote.targetLang || 'es' : null,
+            sent_lang: summaryTranslated ? summaryNote.targetLang || 'es' : summaryOriginal ? summaryNote.sourceLang || 'en' : null,
+          }
+        : null;
 
       const r = await fetch(`/api/turns/${turnId}/needs-fix`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          notes: payloadNotes,                 // [{ path, note, note_original, note_translated, ... }]
+          notes: payloadNotes, // [{ path, note, note_original, note_translated, ... }]
           summary: summaryPayload,
-          send_sms: true
-        })
+          send_sms: true,
+        }),
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error || 'Needs-fix failed');
@@ -937,38 +985,40 @@ setSummaryNote({
       const sel = new Set();
       const newNotes = {};
 
-      payloadNotes.forEach(it => {
-        photos.filter(p => (p.path || '') === it.path).forEach(p => {
-          const k = keyFor(p);
+      payloadNotes.forEach((it) => {
+        photos
+          .filter((p) => (p.path || '') === it.path)
+          .forEach((p) => {
+            const k = keyFor(p);
 
-          // IMPORTANT: keep a finding-like object so PhotoCard can pick EN/ES correctly
-          newMap[k] = {
-            path: it.path || '',
-            note: it.note || '',
-            note_original: it.note_original || '',
-            note_translated: it.note_translated || '',
-            note_original_lang: it.note_original_lang || 'en',
-            note_translated_lang: it.note_translated_lang || 'es',
-            note_sent: it.note_sent || it.note || '',
-            note_sent_lang: it.note_sent_lang || (it.note_translated ? 'es' : 'en'),
-            severity: 'warn'
-          };
+            // IMPORTANT: keep a finding-like object so PhotoCard can pick EN/ES correctly
+            newMap[k] = {
+              path: it.path || '',
+              note: it.note || '',
+              note_original: it.note_original || '',
+              note_translated: it.note_translated || '',
+              note_original_lang: it.note_original_lang || 'en',
+              note_translated_lang: it.note_translated_lang || 'es',
+              note_sent: it.note_sent || it.note || '',
+              note_sent_lang: it.note_sent_lang || (it.note_translated ? 'es' : 'en'),
+              severity: 'warn',
+            };
 
-          sel.add(k);
+            sel.add(k);
 
-          // Keep note object for history in UI
-          newNotes[k] = {
-            original: it.note_original || '',
-            translated: it.note_translated || '',
-            sourceLang: it.note_original_lang || 'en',
-            targetLang: it.note_translated_lang || 'es',
-          };
-        });
+            // Keep note object for history in UI
+            newNotes[k] = {
+              original: it.note_original || '',
+              translated: it.note_translated || '',
+              sourceLang: it.note_original_lang || 'en',
+              targetLang: it.note_translated_lang || 'es',
+            };
+          });
       });
 
       setFindingsByKey(newMap);
       setSelectedKeys(sel);
-      setNotesByKey(prev => ({ ...prev, ...newNotes }));
+      setNotesByKey((prev) => ({ ...prev, ...newNotes }));
 
       alert('Marked Needs Fix. Cleaner notified via SMS.');
 
@@ -998,72 +1048,151 @@ setSummaryNote({
       {/* ✅ Manager Getting Started popup */}
       <GettingStartedModal enabled={isManagerMode} storageKey="turnqa_gs_manager_review_v1">
         <div style={{ marginBottom: 10 }}>
-          For any photo that needs fixing, check <b>Needs fix</b>.
-          Then type your note in <b>English</b>.
+          For any photo that needs fixing, check <b>Needs fix</b>. Then type your note in <b>English</b>.
         </div>
         <div style={{ marginBottom: 10 }}>
-          If your cleaner speaks Spanish, click <b>Translate → ES</b> so the cleaner receives Spanish.
-          If your cleaner speaks English, just leave it in English (no need to translate).
+          If your cleaner speaks Spanish, click <b>Translate → ES</b> so the cleaner receives Spanish. If your cleaner
+          speaks English, just leave it in English (no need to translate).
         </div>
         <div>
           When you&apos;re done, click <b>🛠️ Send Needs Fix</b> to notify the cleaner.
         </div>
       </GettingStartedModal>
 
+      {/* 🕘 Turn History Modal */}
+      {historyOpen && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(2, 6, 23, 0.72)',
+            zIndex: 9999,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 16,
+          }}
+          onClick={() => setHistoryOpen(false)}
+        >
+          <div style={{ ...ui.card, maxWidth: 900, width: '100%' }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', gap: 12 }}>
+              <div>
+                <h2 style={{ margin: 0 }}>Turn History</h2>
+                <div style={{ ...ui.subtle, marginTop: 6 }}>Events + manager/cleaner notes for this turn</div>
+              </div>
+
+              <button type="button" onClick={() => setHistoryOpen(false)} style={ui.btnSecondary} aria-label="Close">
+                ✕
+              </button>
+            </div>
+
+            <div style={{ marginTop: 12 }}>
+              {historyLoading ? (
+                <div style={ui.muted}>Loading history…</div>
+              ) : historyErr ? (
+                <div style={{ color: '#fca5a5' }}>{historyErr}</div>
+              ) : historyItems.length === 0 ? (
+                <div style={ui.muted}>No history items yet.</div>
+              ) : (
+                <div style={{ display: 'grid', gap: 10 }}>
+                  {historyItems.map((it, idx) => (
+                    <div
+                      key={it.id ? `ev:${it.id}` : `h:${idx}`}
+                      style={{
+                        border: '1px solid #334155',
+                        borderRadius: 12,
+                        padding: 10,
+                        background: '#0b1220',
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+                        <div style={{ fontWeight: 800 }}>
+                          {it.type === 'message' ? (it.actor === 'manager' ? 'Manager' : 'Cleaner') : 'Event'}
+                          {' — '}
+                          <span style={{ color: '#93c5fd' }}>{String(it.event || '')}</span>
+                        </div>
+                        <div style={{ fontSize: 12, color: '#94a3b8' }}>
+                          {it.at ? new Date(it.at).toLocaleString() : ''}
+                        </div>
+                      </div>
+
+                      {it.text ? (
+                        <div style={{ marginTop: 8, whiteSpace: 'pre-wrap', color: '#cbd5e1' }}>{it.text}</div>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       <section style={ui.sectionGrid}>
         {/* Header / Meta */}
         <div style={ui.card}>
-          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:12, flexWrap:'wrap' }}>
-            <a href={backHref} style={{ ...ui.btnSecondary, textDecoration:'none' }}>← Back to turns</a>
-            <div style={{ fontSize:12, color:'#94a3b8' }}>
-              Turn ID: <code style={{ userSelect:'all' }}>{turnId}</code>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+            <a href={backHref} style={{ ...ui.btnSecondary, textDecoration: 'none' }}>
+              ← Back to turns
+            </a>
+            <div style={{ fontSize: 12, color: '#94a3b8' }}>
+              Turn ID: <code style={{ userSelect: 'all' }}>{turnId}</code>
             </div>
           </div>
 
           <h2 style={{ marginTop: 12, marginBottom: 6 }}>
             Review Photos
-            <span style={{ marginLeft:10, verticalAlign:'middle' }}>
-              <span style={badgeStyle(status)}>{(status || '—').replace('_',' ')}</span>
+            <span style={{ marginLeft: 10, verticalAlign: 'middle' }}>
+              <span style={badgeStyle(status)}>{(status || '—').replace('_', ' ')}</span>
             </span>
           </h2>
 
           {!isManagerMode && (
-            <div style={{
-              marginTop: 8, padding: '8px 10px',
-              background:'#0b1220', border:'1px solid #334155', borderRadius:10,
-              color:'#cbd5e1', fontSize:13
-            }}>
+            <div
+              style={{
+                marginTop: 8,
+                padding: '8px 10px',
+                background: '#0b1220',
+                border: '1px solid #334155',
+                borderRadius: 10,
+                color: '#cbd5e1',
+                fontSize: 13,
+              }}
+            >
               Read-only manager controls hidden. If your manager asked for fixes, use the “Fix & resubmit” box below.
             </div>
           )}
 
           {/* Manager actions */}
           {isManagerMode && (
-            <div style={{
-              margin:'12px 0 6px',
-              padding:12,
-              border:'1px solid #334155',
-              borderRadius:12,
-              background:'#0f172a'
-            }}>
-              <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
-                <div style={{ fontWeight:700 }}>Status:</div>
+            <div
+              style={{
+                margin: '12px 0 6px',
+                padding: 12,
+                border: '1px solid #334155',
+                borderRadius: 12,
+                background: '#0f172a',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                <div style={{ fontWeight: 700 }}>Status:</div>
                 <span style={badgeStyle(status)}>{status || '—'}</span>
-                {loadErr && <span style={{ color:'#fca5a5' }}>({loadErr})</span>}
+                {loadErr && <span style={{ color: '#fca5a5' }}>({loadErr})</span>}
               </div>
 
               {/* Show most recent cleaner message to the manager */}
               {lastCleanerNote && (
-                <div style={{
-                  marginTop: 10,
-                  padding: 12,
-                  borderRadius: 8,
-                  // match FIX / cleaner-note green styling
-                  border: '1px solid #065f46',
-                  background: '#052e2b',
-                  color: '#86efac',
-                  boxShadow: '0 0 0 3px rgba(5,150,105,0.20) inset',
-                }}>
+                <div
+                  style={{
+                    marginTop: 10,
+                    padding: 12,
+                    borderRadius: 8,
+                    border: '1px solid #065f46',
+                    background: '#052e2b',
+                    color: '#86efac',
+                    boxShadow: '0 0 0 3px rgba(5,150,105,0.20) inset',
+                  }}
+                >
                   <div
                     style={{
                       fontSize: 12,
@@ -1076,16 +1205,22 @@ setSummaryNote({
                   >
                     Cleaner note
                   </div>
-                  <div style={{ whiteSpace: 'pre-wrap' }}>
-                    {lastCleanerNote}
-                  </div>
+                  <div style={{ whiteSpace: 'pre-wrap' }}>{lastCleanerNote}</div>
                 </div>
               )}
 
               {/* SUMMARY (Option B translator) */}
-              <div style={{ marginTop:10 }}>
-                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:10, marginBottom:6 }}>
-                  <div style={{ fontSize:12, fontWeight:700, color:'#9ca3af' }}>
+              <div style={{ marginTop: 10 }}>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 10,
+                    marginBottom: 6,
+                  }}
+                >
+                  <div style={{ fontSize: 12, fontWeight: 700, color: '#9ca3af' }}>
                     Optional overall note to cleaner (summary) — Original (EN)
                   </div>
 
@@ -1099,7 +1234,7 @@ setSummaryNote({
                       border: '1px solid #334155',
                       background: '#0b1220',
                       color: '#cbd5e1',
-                      opacity: (summaryBusy || !String(summaryNote.original || '').trim()) ? 0.6 : 1
+                      opacity: summaryBusy || !String(summaryNote.original || '').trim() ? 0.6 : 1,
                     }}
                     title="Translate English → Spanish"
                   >
@@ -1109,33 +1244,33 @@ setSummaryNote({
 
                 <textarea
                   value={summaryNote.original}
-                  onChange={e => setSummaryNote(prev => ({ ...prev, original: e.target.value, sourceLang: 'en' }))}
+                  onChange={(e) => setSummaryNote((prev) => ({ ...prev, original: e.target.value, sourceLang: 'en' }))}
                   rows={3}
                   placeholder="Write your summary in English…"
                   style={{
                     ...ui.input,
-                    width:'100%',
-                    padding:'10px 12px',
-                    resize:'vertical',
-                    background:'#0b1220'
+                    width: '100%',
+                    padding: '10px 12px',
+                    resize: 'vertical',
+                    background: '#0b1220',
                   }}
                 />
 
-                <div style={{ fontSize:12, fontWeight:700, color:'#9ca3af', margin:'10px 0 6px' }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: '#9ca3af', margin: '10px 0 6px' }}>
                   Translated (ES) — sent to cleaner
                 </div>
 
                 <textarea
                   value={summaryNote.translated}
-                  onChange={e => setSummaryNote(prev => ({ ...prev, translated: e.target.value, targetLang: 'es' }))}
+                  onChange={(e) => setSummaryNote((prev) => ({ ...prev, translated: e.target.value, targetLang: 'es' }))}
                   rows={3}
                   placeholder="Spanish will appear here… (editable)"
                   style={{
                     ...ui.input,
-                    width:'100%',
-                    padding:'10px 12px',
-                    resize:'vertical',
-                    background:'#0b1220'
+                    width: '100%',
+                    padding: '10px 12px',
+                    resize: 'vertical',
+                    background: '#0b1220',
                   }}
                 />
 
@@ -1144,52 +1279,57 @@ setSummaryNote({
                 </div>
               </div>
 
-              <div style={{ display:'flex', gap:10, marginTop:12, flexWrap:'wrap' }}>
+              <div style={{ display: 'flex', gap: 10, marginTop: 12, flexWrap: 'wrap' }}>
+                <button type="button" onClick={openHistory} disabled={!turnId} style={ui.btnSecondary}>
+                  🕘 View History
+                </button>
+
                 <button
                   onClick={sendNeedsFix}
                   disabled={acting || !turnId}
                   style={{
                     ...ui.btnSecondary,
-                    border:'1px solid #d97706',
-                    background:'#4a2f04',
-                    color:'#fcd34d'
+                    border: '1px solid #d97706',
+                    background: '#4a2f04',
+                    color: '#fcd34d',
                   }}
                 >
                   {acting ? '…' : '🛠️ Send Needs Fix (with notes)'}
                 </button>
 
-                <button
-                  onClick={markApproved}
-                  disabled={acting || !turnId}
-                  style={ui.btnPrimary}
-                >
+                <button onClick={markApproved} disabled={acting || !turnId} style={ui.btnPrimary}>
                   {acting ? '…' : '✅ Approve'}
                 </button>
               </div>
             </div>
           )}
 
-          <div style={{ ...ui.subtle, marginTop: 10 }}>
-            Click any photo to open full-size in a new tab.
-          </div>
+          <div style={{ ...ui.subtle, marginTop: 10 }}>Click any photo to open full-size in a new tab.</div>
         </div>
 
         {/* Photos (grouped like cleaner: by shot label, then leftovers) */}
         <div style={ui.card}>
           {loading ? (
             <div>Loading photos…</div>
-          ) : (sections && sections.length > 0) ? (
-            sections.map(sec => (
+          ) : sections && sections.length > 0 ? (
+            sections.map((sec) => (
               <div key={sec.key} style={sectionWrapStyle}>
-                <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between', margin:'2px 4px 10px' }}>
-                  <h3 style={{ margin:0 }}>{sec.title || 'Section'}</h3>
-                  <div style={{ fontSize:12, color:'#94a3b8' }}>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'baseline',
+                    justifyContent: 'space-between',
+                    margin: '2px 4px 10px',
+                  }}
+                >
+                  <h3 style={{ margin: 0 }}>{sec.title || 'Section'}</h3>
+                  <div style={{ fontSize: 12, color: '#94a3b8' }}>
                     {sec.photos.length} photo{sec.photos.length === 1 ? '' : 's'}
                   </div>
                 </div>
 
-                <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(220px,1fr))', gap:12 }}>
-                  {sec.photos.map(p => (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px,1fr))', gap: 12 }}>
+                  {sec.photos.map((p) => (
                     <PhotoCard
                       key={keyFor(p)}
                       p={p}
@@ -1206,7 +1346,7 @@ setSummaryNote({
                 </div>
               </div>
             ))
-          ) : (photos && photos.length > 0) ? (
+          ) : photos && photos.length > 0 ? (
             (() => {
               // Fallback: group by area_key so managers still see everything
               const byArea = (photos || []).reduce((acc, p) => {
@@ -1214,27 +1354,30 @@ setSummaryNote({
                 (acc[k] ||= []).push(p);
                 return acc;
               }, {});
-              Object.values(byArea).forEach(list =>
-                list.sort((a,b) => new Date(b.created_at) - new Date(a.created_at))
-              );
+              Object.values(byArea).forEach((list) => list.sort((a, b) => new Date(b.created_at) - new Date(a.created_at)));
               const areas = Object.keys(byArea)
-                .filter(k => k !== '__UNCAT__')
-                .sort((a,b) => a.localeCompare(b, undefined, { numeric:true }))
-                .concat(byArea['__UNCAT__'] ? ['__UNCAT__'] : []);
+                .filter((k) => k !== '__UNCAT__')
+                .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+                .concat(byArea.__UNCAT__ ? ['__UNCAT__'] : []);
 
-              return areas.map(areaKey => (
+              return areas.map((areaKey) => (
                 <div key={areaKey} style={sectionWrapStyle}>
-                  <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between', margin:'2px 4px 10px' }}>
-                    <h3 style={{ margin:0 }}>
-                      {areaKey === '__UNCAT__' ? 'Additional uploads' : areaKey}
-                    </h3>
-                    <div style={{ fontSize:12, color:'#94a3b8' }}>
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'baseline',
+                      justifyContent: 'space-between',
+                      margin: '2px 4px 10px',
+                    }}
+                  >
+                    <h3 style={{ margin: 0 }}>{areaKey === '__UNCAT__' ? 'Additional uploads' : areaKey}</h3>
+                    <div style={{ fontSize: 12, color: '#94a3b8' }}>
                       {byArea[areaKey].length} photo{byArea[areaKey].length === 1 ? '' : 's'}
                     </div>
                   </div>
 
-                  <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(220px,1fr))', gap:12 }}>
-                    {byArea[areaKey].map(p => (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px,1fr))', gap: 12 }}>
+                    {byArea[areaKey].map((p) => (
                       <PhotoCard
                         key={keyFor(p)}
                         p={p}
@@ -1257,11 +1400,7 @@ setSummaryNote({
           )}
         </div>
 
-        {uniqueAreas.length > 1 && (
-          <div style={{ ...ui.subtle }}>
-            Areas in this turn: {uniqueAreas.join(' • ')}
-          </div>
-        )}
+        {uniqueAreas.length > 1 && <div style={{ ...ui.subtle }}>Areas in this turn: {uniqueAreas.join(' • ')}</div>}
       </section>
     </ChromeDark>
   );
