@@ -95,59 +95,91 @@ function firstNonEmpty(...vals) {
   return '';
 }
 
-function buildManagerMessage(turn) {
-  // What the cleaner actually saw (preferred)
-  const sent = firstNonEmpty(
-    turn?.manager_note_sent,
-    turn?.manager_note_translated,
-    turn?.manager_note_original,
-    turn?.manager_note,
-    turn?.manager_notes
-  );
+function cleanStr(v) {
+  const s = String(v ?? '').trim();
+  return s ? s : '';
+}
 
+function cleanLang(v) {
+  const s = String(v ?? '').trim();
+  return s ? s : null;
+}
+
+/**
+ * Build a message object that ALWAYS includes:
+ * - text = "sent" (what the receiver saw)
+ * - text_sent/text_sent_lang
+ * - text_original/text_original_lang
+ * - text_translated/text_translated_lang
+ * and keeps meta for debugging/compat.
+ */
+function makeMessageBase({ actor, event, at, original, original_lang, translated, translated_lang, sent, sent_lang, legacy }) {
+  const o = cleanStr(original);
+  const t = cleanStr(translated);
+  const s = cleanStr(sent);
+  const l = cleanStr(legacy);
+
+  // Determine what "text" should be (prefer "sent", then translated, then original, then legacy)
+  const text = firstNonEmpty(s, t, o, l);
+
+  return {
+    type: 'message',
+    actor,
+    event,
+    at: at || null,
+
+    // Keep existing keys
+    text,
+    lang: cleanLang(sent_lang || translated_lang || original_lang),
+
+    // NEW: explicit bilingual keys (top-level, easy for UI)
+    text_sent: s || null,
+    text_sent_lang: cleanLang(sent_lang),
+    text_original: o || null,
+    text_original_lang: cleanLang(original_lang),
+    text_translated: t || null,
+    text_translated_lang: cleanLang(translated_lang),
+
+    // Keep meta (backward compat + debugging)
+    meta: {
+      original: o || null,
+      original_lang: cleanLang(original_lang),
+      translated: t || null,
+      translated_lang: cleanLang(translated_lang),
+      sent: s || null,
+      sent_lang: cleanLang(sent_lang),
+      legacy: l || null,
+    },
+  };
+}
+
+function buildManagerMessage(turn) {
+  // Prefer explicit "sent" (what cleaner saw), then translated, then original, then legacy
+  const sent = firstNonEmpty(turn?.manager_note_sent, turn?.manager_note_translated, turn?.manager_note_original, turn?.manager_note, turn?.manager_notes);
   if (!sent) return null;
 
-  // Best timestamp for when manager sent “needs fix”
   const at =
     toIso(turn?.needs_fix_at) ||
     toIso(turn?.submitted_at) ||
     toIso(turn?.created_at) ||
     null;
 
-  const lang = firstNonEmpty(
-    turn?.manager_note_sent_lang,
-    turn?.manager_note_translated_lang,
-    turn?.manager_note_original_lang
-  ) || null;
-
-  return {
-    type: 'message',
+  return makeMessageBase({
     actor: 'manager',
     event: 'manager_note',
-    text: sent,
-    lang,
     at,
-    meta: {
-      original: String(turn?.manager_note_original ?? '').trim() || null,
-      original_lang: String(turn?.manager_note_original_lang ?? '').trim() || null,
-      translated: String(turn?.manager_note_translated ?? '').trim() || null,
-      translated_lang: String(turn?.manager_note_translated_lang ?? '').trim() || null,
-      sent: String(turn?.manager_note_sent ?? '').trim() || null,
-      sent_lang: String(turn?.manager_note_sent_lang ?? '').trim() || null,
-      legacy: String(turn?.manager_note ?? '').trim() || null,
-    },
-  };
+    original: turn?.manager_note_original,
+    original_lang: turn?.manager_note_original_lang,
+    translated: turn?.manager_note_translated,
+    translated_lang: turn?.manager_note_translated_lang,
+    sent: turn?.manager_note_sent || turn?.manager_note_translated || turn?.manager_note_original || turn?.manager_note || turn?.manager_notes,
+    sent_lang: turn?.manager_note_sent_lang || turn?.manager_note_translated_lang || turn?.manager_note_original_lang,
+    legacy: turn?.manager_note,
+  });
 }
 
 function buildCleanerMessage(turn) {
-  const sent = firstNonEmpty(
-    turn?.cleaner_reply_sent,
-    turn?.cleaner_reply_translated,
-    turn?.cleaner_reply_original,
-    turn?.cleaner_reply,
-    turn?.cleaner_note
-  );
-
+  const sent = firstNonEmpty(turn?.cleaner_reply_sent, turn?.cleaner_reply_translated, turn?.cleaner_reply_original, turn?.cleaner_reply, turn?.cleaner_note);
   if (!sent) return null;
 
   const at =
@@ -156,29 +188,18 @@ function buildCleanerMessage(turn) {
     toIso(turn?.created_at) ||
     null;
 
-  const lang = firstNonEmpty(
-    turn?.cleaner_reply_sent_lang,
-    turn?.cleaner_reply_translated_lang,
-    turn?.cleaner_reply_original_lang
-  ) || null;
-
-  return {
-    type: 'message',
+  return makeMessageBase({
     actor: 'cleaner',
     event: 'cleaner_reply',
-    text: sent,
-    lang,
     at,
-    meta: {
-      original: String(turn?.cleaner_reply_original ?? '').trim() || null,
-      original_lang: String(turn?.cleaner_reply_original_lang ?? '').trim() || null,
-      translated: String(turn?.cleaner_reply_translated ?? '').trim() || null,
-      translated_lang: String(turn?.cleaner_reply_translated_lang ?? '').trim() || null,
-      sent: String(turn?.cleaner_reply_sent ?? '').trim() || null,
-      sent_lang: String(turn?.cleaner_reply_sent_lang ?? '').trim() || null,
-      legacy: String(turn?.cleaner_reply ?? '').trim() || null,
-    },
-  };
+    original: turn?.cleaner_reply_original,
+    original_lang: turn?.cleaner_reply_original_lang,
+    translated: turn?.cleaner_reply_translated,
+    translated_lang: turn?.cleaner_reply_translated_lang,
+    sent: turn?.cleaner_reply_sent || turn?.cleaner_reply_translated || turn?.cleaner_reply_original || turn?.cleaner_reply || turn?.cleaner_note,
+    sent_lang: turn?.cleaner_reply_sent_lang || turn?.cleaner_reply_translated_lang || turn?.cleaner_reply_original_lang,
+    legacy: turn?.cleaner_reply,
+  });
 }
 
 export default async function handler(req, res) {
@@ -278,6 +299,15 @@ export default async function handler(req, res) {
         event: String(e.event || ''),
         text: '', // UI can render based on event type
         lang: null,
+
+        // NEW fields present but null (so UI can treat uniformly)
+        text_sent: null,
+        text_sent_lang: null,
+        text_original: null,
+        text_original_lang: null,
+        text_translated: null,
+        text_translated_lang: null,
+
         at: toIso(e.created_at),
         meta: e.meta ?? null,
         id: e.id ?? null,
