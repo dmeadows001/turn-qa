@@ -1162,7 +1162,18 @@ export default function Review() {
           }}
           onClick={() => setHistoryOpen(false)}
         >
-          <div style={{ ...ui.card, maxWidth: 900, width: '100%' }} onClick={(e) => e.stopPropagation()}>
+          <div
+  style={{
+    ...ui.card,
+    maxWidth: 900,
+    width: '100%',
+    maxHeight: '85vh',
+    display: 'flex',
+    flexDirection: 'column',
+    overflow: 'hidden',
+  }}
+  onClick={(e) => e.stopPropagation()}
+>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', gap: 12 }}>
               <div>
                 <h2 style={{ margin: 0 }}>Turn History</h2>
@@ -1174,7 +1185,7 @@ export default function Review() {
               </button>
             </div>
 
-            <div style={{ marginTop: 12 }}>
+            <div style={{ marginTop: 12, overflowY: 'auto', paddingRight: 6 }}>
               {historyLoading ? (
                 <div style={ui.muted}>Loading history…</div>
               ) : historyErr ? (
