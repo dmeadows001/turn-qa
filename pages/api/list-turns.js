@@ -39,7 +39,9 @@ export default async function handler(req, res) {
     if (to) query = query.lte('created_at', to);
 
     // ✅ NEW: property filter (only if provided)
-    if (property_id) query = query.eq('property_id', String(property_id));
+    if (property_i// ✅ NEW: property filter (only if provided) — safer handling
+    const pid = Array.isArray(property_id) ? property_id[0] : property_id;
+    if (pid) query = query.eq('property_id', String(pid));
 
     const { data, error } = await query;
     if (error) throw error;
