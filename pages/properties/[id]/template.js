@@ -970,13 +970,15 @@ export default function TemplateBuilder() {
               style={ui.btnPrimary}
             >
               Invite cleaner
-            </button>
             <button
-              onClick={() => router.push(`/properties/${property.id}/start-turn`)}
+              onClick={() =>
+                router.push(`/turns/preview/capture?preview=1&property_id=${property.id}`)
+              }
               style={ui.btnSecondary}
             >
-              Start a test turn
+              Preview as cleaner (no data saved)
             </button>
+
             <button
               onClick={() => router.push('/dashboard')}
               style={ui.btnSecondary}
