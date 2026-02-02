@@ -961,31 +961,34 @@ export default function TemplateBuilder() {
           </div>
         </div>
 
-        {/* Actions / Next steps */}
-        <div style={ui.card}>
-          <h2 style={{ marginTop: 0, marginBottom: 8 }}>Next steps</h2>
-          <div style={{ ...ui.row }}>
-            <button
-              onClick={() => router.push(`/properties/${property.id}/invite`)}
-              style={ui.btnPrimary}
-            >
-              Invite cleaner
-            <button
-              onClick={() =>
-                router.push(`/turns/preview/capture?preview=1&property_id=${property.id}`)
-              }
-              style={ui.btnSecondary}
-            >
-              Preview as cleaner (no data saved)
-            </button>
+<div style={{ ...ui.row }}>
+  <button
+    type="button"
+    onClick={() => router.push(`/properties/${property.id}/invite`)}
+    style={ui.btnPrimary}
+  >
+    Invite cleaner
+  </button>
 
-            <button
-              onClick={() => router.push('/dashboard')}
-              style={ui.btnSecondary}
-            >
-              Back to dashboard
-            </button>
-          </div>
+  <button
+    type="button"
+    onClick={() =>
+      router.push(`/turns/preview/capture?preview=1&property_id=${property.id}`)
+    }
+    style={ui.btnSecondary}
+  >
+    Preview as cleaner (no data saved)
+  </button>
+
+  <button
+    type="button"
+    onClick={() => router.push('/dashboard')}
+    style={ui.btnSecondary}
+  >
+    Back to dashboard
+  </button>
+</div>
+      
           <div style={{ ...ui.subtle, marginTop: 10 }}>
             When a cleaner submits a turn, you’ll review it under <b>Manager → Turns</b>.
           </div>
