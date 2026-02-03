@@ -47,6 +47,12 @@ function ThemedButton({ children, onClick, disabled=false, loading=false, kind='
   );
 }
 
+// ✅ IMPORTANT: allow min_count = 0 (don’t treat it as falsy)
+function getMinCount(s) {
+  const n = Number(s?.min_count);
+  return Number.isFinite(n) ? n : 1;
+}
+
 export default function Capture() {
   const { query } = useRouter();
   const turnId = typeof query.id === 'string' ? query.id : '';
@@ -526,7 +532,7 @@ export default function Capture() {
             shot_id: s.shot_id,
             area_key: s.area_key,
             label: s.label,
-            min_count: s.min_count || 1,
+            min_count: (Number.isFinite(Number(s.min_count)) ? Number(s.min_count) : 1),
             notes: s.notes || '',
             rules_text: s.rules_text || '',
             // NEW: reference listing / staging photos for this shot (optional)
@@ -806,7 +812,7 @@ export default function Capture() {
       const requiredList = shotsArr.map(s => ({
         key: s.area_key || s.shot_id,
         title: s.label,
-        minPhotos: s.min_count || 1,
+        minPhotos: getMinCount(s),
       }));
 
       for (const { file, shot } of allFiles) {
@@ -919,7 +925,7 @@ export default function Capture() {
   async function submitAll() {
     if (submitting) return;
     // minimal: ensure each shot meets min_count
-    const unmet = (shots || []).filter(s => (s.min_count || 1) > (uploadsByShot[s.shot_id]?.length || 0));
+    const unmet = (shots || []).filter(s => getMinCount(s) > (uploadsByShot[s.shot_id]?.length || 0));
     if (unmet.length) {
       alert('Please add required photos before submitting:\n' + unmet.map(a => `• ${a.label}`).join('\n'));
       return;
@@ -1234,7 +1240,7 @@ export default function Capture() {
           {/* Shots */}
           {renderShots.map(s => {
             const files = uploadsByShot[s.shot_id] || [];
-            const required = s.min_count || 1;
+            const required = getMinCount(s);
             const missing = Math.max(0, required - files.length);
 
             // Normalize area key and label for AI summaries
