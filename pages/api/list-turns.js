@@ -11,7 +11,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { status, from, to, limit: limitParam } = req.query;
+    const { status, from, to, limit: limitParam, property_id } = req.query;
 
     const requestedLimit = Number(limitParam ?? 200);
     const limit = Number.isFinite(requestedLimit)
@@ -35,13 +35,17 @@ export default async function handler(req, res) {
       .limit(limit);
 
     if (status) query = query.eq('status', status);
-    if (from)   query = query.gte('created_at', from);
-    if (to)     query = query.lte('created_at', to);
+    if (from) query = query.gte('created_at', from);
+    if (to) query = query.lte('created_at', to);
+
+   // ✅ NEW: property filter (only if provided) — safer handling
+  const pid = Array.isArray(property_id) ? property_id[0] : property_id;
+  if (pid) query = query.eq('property_id', String(pid));
 
     const { data, error } = await query;
     if (error) throw error;
 
-    const rows = (data || []).map(r => ({
+    const rows = (data || []).map((r) => ({
       id: r.id,
       created_at: r.created_at,
       submitted_at: r.submitted_at,

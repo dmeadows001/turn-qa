@@ -798,6 +798,7 @@ export default function TemplateBuilder() {
                                           }}
                                         />
                                       )}
+
                                       <button
                                         type="button"
                                         data-role="delete-ref"
@@ -946,7 +947,11 @@ export default function TemplateBuilder() {
                         </td>
 
                         <td style={{ padding: '10px 8px', verticalAlign: 'top' }}>
-                          <button onClick={() => deleteShot(s.id)} style={ui.btnSecondary}>
+                          <button
+                            type="button"
+                            onClick={() => deleteShot(s.id)}
+                            style={ui.btnSecondary}
+                          >
                             Delete
                           </button>
                         </td>
@@ -961,29 +966,50 @@ export default function TemplateBuilder() {
           </div>
         </div>
 
-        {/* Actions / Next steps */}
+        {/* ✅ Next steps card (this is what fixes your JSX nesting issue) */}
         <div style={ui.card}>
-          <h2 style={{ marginTop: 0, marginBottom: 8 }}>Next steps</h2>
           <div style={{ ...ui.row }}>
-            <button
-              onClick={() => router.push(`/properties/${property.id}/invite`)}
-              style={ui.btnPrimary}
-            >
-              Invite cleaner
-            </button>
-            <button
-              onClick={() => router.push(`/properties/${property.id}/start-turn`)}
-              style={ui.btnSecondary}
-            >
-              Start a test turn
-            </button>
-            <button
-              onClick={() => router.push('/dashboard')}
-              style={ui.btnSecondary}
-            >
-              Back to dashboard
-            </button>
-          </div>
+  <button
+    type="button"
+    onClick={() => router.push(`/properties/${property.id}/invite`)}
+    style={ui.btnPrimary}
+  >
+    Invite cleaner
+  </button>
+
+  <button
+    type="button"
+    onClick={async () => {
+      try {
+        setMsg('');
+        const r = await fetch('/api/preview-turn', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ property_id: property.id }),
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(j?.error || 'Failed to create preview turn');
+
+        router.push(`/turns/${j.turn_id}/checklist`);
+      } catch (e) {
+        setMsg(e.message || 'Preview failed');
+      }
+    }}
+    style={ui.btnSecondary}
+  >
+    Preview as cleaner (no data saved)
+  </button>
+
+  <button
+    type="button"
+    onClick={() => router.push('/dashboard')}
+    style={ui.btnSecondary}
+  >
+    Back to dashboard
+  </button>
+</div>
+
+
           <div style={{ ...ui.subtle, marginTop: 10 }}>
             When a cleaner submits a turn, you’ll review it under <b>Manager → Turns</b>.
           </div>
