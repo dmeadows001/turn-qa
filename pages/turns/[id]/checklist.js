@@ -117,6 +117,7 @@ export default function TurnChecklist() {
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lightbox.open]);
 
   useEffect(() => {
@@ -127,7 +128,7 @@ export default function TurnChecklist() {
       setErr('');
 
       try {
-        // ✅ Attach Bearer token if manager is logged in
+        // Attach Bearer token if manager is logged in
         const headers = await authHeaders();
 
         const r = await fetch(`/api/turn-template?turnId=${encodeURIComponent(turnId)}`, {
@@ -152,6 +153,7 @@ export default function TurnChecklist() {
         setLoading(false);
       }
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [turnId]);
 
   const shots = Array.isArray(data?.shots) ? data.shots : [];
@@ -162,15 +164,36 @@ export default function TurnChecklist() {
     <ChromeDark title="Turn Checklist">
       <section style={ui.sectionGrid}>
         <div style={ui.card}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+          {/* Header */}
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              gap: 12,
+              alignItems: 'center',
+              flexWrap: 'wrap',
+            }}
+          >
             <div>
               <h2 style={{ margin: 0 }}>Turn Checklist</h2>
               <div style={{ ...ui.subtle, marginTop: 6 }}>
-                {propertyName ? <>Property: <b>{propertyName}</b></> : 'Property: —'}
-                {turnId ? <span> • Turn: <span style={{ opacity: 0.8 }}>{turnId}</span></span> : null}
+                {propertyName ? (
+                  <>
+                    Property: <b>{propertyName}</b>
+                  </>
+                ) : (
+                  'Property: —'
+                )}
+                {turnId ? (
+                  <span>
+                    {' '}
+                    • Turn: <span style={{ opacity: 0.8 }}>{turnId}</span>
+                  </span>
+                ) : null}
               </div>
             </div>
 
+            {/* ONLY button per your request */}
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
               <button
                 type="button"
@@ -183,10 +206,10 @@ export default function TurnChecklist() {
               >
                 ← Back to checklist builder
               </button>
-
             </div>
           </div>
 
+          {/* Body */}
           {loading ? (
             <div style={{ marginTop: 14, ...ui.subtle }}>Loading…</div>
           ) : err ? (
@@ -203,18 +226,26 @@ export default function TurnChecklist() {
                 <div style={{ marginTop: 16, display: 'grid', gap: 14 }}>
                   {shots.map((s) => {
                     const refs = Array.isArray(s.reference_paths) ? s.reference_paths : [];
+
                     return (
                       <div
                         key={s.shot_id}
-                       style={{
-                        border: '1px solid #1f2937',
-                        borderRadius: 14,
-                        background: 'rgba(15, 23, 42, 0.55)',  // capture-like
-                        padding: 14,
-                      }}
-
+                        style={{
+                          border: '1px solid #1f2937',
+                          borderRadius: 14,
+                          background: 'rgba(15, 23, 42, 0.55)', // capture-like
+                          padding: 14,
+                        }}
                       >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                        <div
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            gap: 12,
+                            alignItems: 'flex-start',
+                            flexWrap: 'wrap',
+                          }}
+                        >
                           <div>
                             <div style={{ fontSize: 16, fontWeight: 800, color: '#e5e7eb' }}>
                               {s.label || 'Untitled'}
@@ -233,66 +264,79 @@ export default function TurnChecklist() {
                           )}
                         </div>
 
-{refs.length > 0 && (
-  <div
-    style={{
-      marginTop: 10,
-      background: '#020617',           // darker “cell” behind thumbs (like cleaner)
-      border: '1px solid #1f2937',
-      borderRadius: 12,
-      padding: 12,
-    }}
-  >
-    <div style={{ fontSize: 12, color: '#9ca3af', fontWeight: 700, marginBottom: 8 }}>
-      Reference photo — how this area should look
-    </div>
+                        {/* Darker cell behind thumbnails (like cleaner capture page) */}
+                        {refs.length > 0 && (
+                          <div
+                            style={{
+                              marginTop: 10,
+                              background: '#020617',
+                              border: '1px solid #1f2937',
+                              borderRadius: 12,
+                              padding: 12,
+                            }}
+                          >
+                            <div style={{ fontSize: 12, color: '#9ca3af', fontWeight: 700, marginBottom: 8 }}>
+                              Reference photo — how this area should look
+                            </div>
 
-    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-      {refs.map((path, idx) => {
-        if (!thumbByPath[path]) ensureThumb(path);
-        const thumb = thumbByPath[path] || null;
+                            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                              {refs.map((path, idx) => {
+                                if (!thumbByPath[path]) ensureThumb(path);
+                                const thumb = thumbByPath[path] || null;
 
-        return (
-          <button
-            key={path}
-            type="button"
-            onClick={() => openLightbox(refs, idx)}
-            style={{ padding: 0, border: 'none', background: 'transparent', cursor: 'pointer' }}
-            title="Open reference"
-          >
-            {thumb ? (
-              <img
-                src={thumb}
-                alt="Reference"
-                style={{
-                  width: 92,
-                  height: 92,
-                  objectFit: 'cover',
-                  borderRadius: 10,
-                  border: '1px solid #334155',
-                  background: '#0b1220',
-                }}
-              />
-            ) : (
-              <div
-                style={{
-                  width: 92,
-                  height: 92,
-                  borderRadius: 10,
-                  border: '1px solid #334155',
-                  background: '#0f172a',
-                }}
-              />
-            )}
-          </button>
-        );
-      })}
-    </div>
-  </div>
-)}
+                                return (
+                                  <button
+                                    key={path}
+                                    type="button"
+                                    onClick={() => openLightbox(refs, idx)}
+                                    style={{
+                                      padding: 0,
+                                      border: 'none',
+                                      background: 'transparent',
+                                      cursor: 'pointer',
+                                    }}
+                                    title="Open reference"
+                                  >
+                                    {thumb ? (
+                                      <img
+                                        src={thumb}
+                                        alt="Reference"
+                                        style={{
+                                          width: 92,
+                                          height: 92,
+                                          objectFit: 'cover',
+                                          borderRadius: 10,
+                                          border: '1px solid #334155',
+                                          background: '#0b1220',
+                                        }}
+                                      />
+                                    ) : (
+                                      <div
+                                        style={{
+                                          width: 92,
+                                          height: 92,
+                                          borderRadius: 10,
+                                          border: '1px solid #334155',
+                                          background: '#0f172a',
+                                        }}
+                                      />
+                                    )}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </>
+          )}
+        </div>
 
-
-        {/* Lightbox overlay */}
+        {/* Lightbox overlay (must be OUTSIDE the map loop) */}
         {lightbox.open && lightbox.urls.length > 0 && (
           <div
             onClick={closeLightbox}
@@ -351,7 +395,16 @@ export default function TurnChecklist() {
               />
 
               {lightbox.urls.length > 1 && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 4, color: '#e5e7eb', fontSize: 13 }}>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 12,
+                    marginTop: 4,
+                    color: '#e5e7eb',
+                    fontSize: 13,
+                  }}
+                >
                   <button
                     type="button"
                     onClick={prevLightbox}
