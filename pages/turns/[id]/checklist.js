@@ -172,21 +172,18 @@ export default function TurnChecklist() {
             </div>
 
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-              <button type="button" onClick={() => router.push('/managers/turns')} style={ui.btnSecondary}>
-                ← Back to turns
+              <button
+                type="button"
+                onClick={() => {
+                  // go back to checklist builder (template builder) for this property
+                  if (propertyId) router.push(`/properties/${propertyId}/template`);
+                  else router.push('/managers/turns');
+                }}
+                style={ui.btnSecondary}
+              >
+                ← Back to checklist builder
               </button>
 
-              {turnId ? (
-                <button type="button" onClick={() => router.push(`/turns/${turnId}/review?manager=1`)} style={ui.btnSecondary}>
-                  Go to review
-                </button>
-              ) : null}
-
-              {propertyId ? (
-                <button type="button" onClick={() => router.push(`/properties/${propertyId}/invite`)} style={ui.btnPrimary}>
-                  Invite cleaner
-                </button>
-              ) : null}
             </div>
           </div>
 
@@ -209,12 +206,13 @@ export default function TurnChecklist() {
                     return (
                       <div
                         key={s.shot_id}
-                        style={{
-                          border: ui.card.border,
-                          borderRadius: 12,
-                          background: ui.card.background,
-                          padding: 12,
-                        }}
+                       style={{
+                        border: '1px solid #1f2937',
+                        borderRadius: 14,
+                        background: 'rgba(15, 23, 42, 0.55)',  // capture-like
+                        padding: 14,
+                      }}
+
                       >
                         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}>
                           <div>
@@ -235,56 +233,64 @@ export default function TurnChecklist() {
                           )}
                         </div>
 
-                        {refs.length > 0 && (
-                          <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                            {refs.map((path, idx) => {
-                              if (!thumbByPath[path]) ensureThumb(path);
-                              const thumb = thumbByPath[path] || null;
+{refs.length > 0 && (
+  <div
+    style={{
+      marginTop: 10,
+      background: '#020617',           // darker “cell” behind thumbs (like cleaner)
+      border: '1px solid #1f2937',
+      borderRadius: 12,
+      padding: 12,
+    }}
+  >
+    <div style={{ fontSize: 12, color: '#9ca3af', fontWeight: 700, marginBottom: 8 }}>
+      Reference photo — how this area should look
+    </div>
 
-                              return (
-                                <button
-                                  key={path}
-                                  type="button"
-                                  onClick={() => openLightbox(refs, idx)}
-                                  style={{ padding: 0, border: 'none', background: 'transparent', cursor: 'pointer' }}
-                                  title="Open reference"
-                                >
-                                  {thumb ? (
-                                    <img
-                                      src={thumb}
-                                      alt="Reference"
-                                      style={{
-                                        width: 96,
-                                        height: 96,
-                                        objectFit: 'cover',
-                                        borderRadius: 8,
-                                        border: '1px solid #334155',
-                                      }}
-                                    />
-                                  ) : (
-                                    <div
-                                      style={{
-                                        width: 96,
-                                        height: 96,
-                                        borderRadius: 8,
-                                        border: '1px solid #334155',
-                                        background: '#0f172a',
-                                      }}
-                                    />
-                                  )}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </>
-          )}
-        </div>
+    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+      {refs.map((path, idx) => {
+        if (!thumbByPath[path]) ensureThumb(path);
+        const thumb = thumbByPath[path] || null;
+
+        return (
+          <button
+            key={path}
+            type="button"
+            onClick={() => openLightbox(refs, idx)}
+            style={{ padding: 0, border: 'none', background: 'transparent', cursor: 'pointer' }}
+            title="Open reference"
+          >
+            {thumb ? (
+              <img
+                src={thumb}
+                alt="Reference"
+                style={{
+                  width: 92,
+                  height: 92,
+                  objectFit: 'cover',
+                  borderRadius: 10,
+                  border: '1px solid #334155',
+                  background: '#0b1220',
+                }}
+              />
+            ) : (
+              <div
+                style={{
+                  width: 92,
+                  height: 92,
+                  borderRadius: 10,
+                  border: '1px solid #334155',
+                  background: '#0f172a',
+                }}
+              />
+            )}
+          </button>
+        );
+      })}
+    </div>
+  </div>
+)}
+
 
         {/* Lightbox overlay */}
         {lightbox.open && lightbox.urls.length > 0 && (
