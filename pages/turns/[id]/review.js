@@ -790,17 +790,12 @@ export default function Review() {
         setCleanerReply('');
 
         // Summary note: STRICT structured fields.
-        // - Original (EN) should never come from legacy manager_note (often ES).
-        // - Translated (ES) can come from translated or sent.
-        // - Legacy is only a last resort (older turns before new columns existed).
         const summaryOriginal = String(t?.manager_note_original || '').trim();
         const summaryTranslated = String(t?.manager_note_translated || '').trim();
         const summarySent = String(t?.manager_note_sent || '').trim();
         const legacy = String(t?.manager_note || '').trim(); // legacy "sent" mirror
 
         setSummaryNote({
-          // Only allow legacy to populate original if you truly have no structured fields.
-          // (This covers old data where manager_note was actually EN.)
           original: summaryOriginal || (!summarySent && !summaryTranslated ? legacy : ''),
           translated: summaryTranslated || summarySent || '',
           sourceLang: String(t?.manager_note_original_lang || 'en'),
@@ -829,14 +824,9 @@ export default function Review() {
             const path = (it && it.path) || '';
             const keys = pathToKeys[path] || [];
             for (const k of keys) {
-              // IMPORTANT: keep full finding object so manager can access bilingual fields later
               map[k] = it;
-
               if (isManagerMode) sel.add(k);
 
-              // Prefill editable note object:
-              // - original: prefer EN original if present, else legacy note
-              // - translated: prefer ES translated if present
               const o = String(it.note_original || '').trim();
               const t2 = String(it.note_translated || '').trim();
               const oLang = lc(it.note_original_lang);
@@ -971,8 +961,6 @@ export default function Review() {
       const ok = window.confirm('Approve this turn?');
       if (!ok) return;
 
-      // Keep existing API contract: send a single string.
-      // Manager is English-speaking, so store the EN original here.
       const manager_note = String(summaryNote.original || '').trim();
 
       const r = await fetch('/api/update-turn-status', {
@@ -985,7 +973,6 @@ export default function Review() {
       setStatus('approved');
       alert('Turn approved ✅');
 
-      // Redirect manager back to dashboard
       window.location.href = '/managers/turns';
     } catch (e) {
       alert(e.message || 'Could not update status.');
@@ -1009,23 +996,19 @@ export default function Review() {
         const original = (obj.original || '').trim();
         const translated = (obj.translated || '').trim();
 
-        // Cleaner should receive Spanish when available; fallback to original
         const note_to_cleaner = (translated || original || '').trim();
 
         if (selected || original.length > 0 || translated.length > 0) {
           payloadNotes.push({
             photo_id: p.id || null,
             path: p.path || '',
-            // Legacy field: what the cleaner sees
             note: note_to_cleaner,
 
-            // Robust fields
             note_original: original || null,
             note_translated: translated || null,
             note_original_lang: original ? obj.sourceLang || 'en' : null,
             note_translated_lang: translated ? obj.targetLang || 'es' : null,
 
-            // Also include "sent" explicitly for robustness
             note_sent: note_to_cleaner || null,
             note_sent_lang: translated ? obj.targetLang || 'es' : original ? obj.sourceLang || 'en' : null,
           });
@@ -1042,7 +1025,6 @@ export default function Review() {
         return;
       }
 
-      // Send bilingual summary object (backend supports this now)
       const summaryPayload = summarySent
         ? {
             original: summaryOriginal || '',
@@ -1058,7 +1040,7 @@ export default function Review() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          notes: payloadNotes, // [{ path, note, note_original, note_translated, ... }]
+          notes: payloadNotes,
           summary: summaryPayload,
           send_sms: true,
         }),
@@ -1068,7 +1050,6 @@ export default function Review() {
 
       setStatus('needs_fix');
 
-      // Update local highlight immediately (by key)
       const newMap = {};
       const sel = new Set();
       const newNotes = {};
@@ -1079,7 +1060,6 @@ export default function Review() {
           .forEach((p) => {
             const k = keyFor(p);
 
-            // IMPORTANT: keep a finding-like object so PhotoCard can pick EN/ES correctly
             newMap[k] = {
               path: it.path || '',
               note: it.note || '',
@@ -1094,7 +1074,6 @@ export default function Review() {
 
             sel.add(k);
 
-            // Keep note object for history in UI
             newNotes[k] = {
               original: it.note_original || '',
               translated: it.note_translated || '',
@@ -1110,7 +1089,6 @@ export default function Review() {
 
       alert('Marked Needs Fix. Cleaner notified via SMS.');
 
-      // Redirect manager back to dashboard
       window.location.href = '/managers/turns';
     } catch (e) {
       alert(e.message || 'Could not send needs-fix.');
@@ -1128,6 +1106,9 @@ export default function Review() {
       </ChromeDark>
     );
   }
+
+  // NOTE: There is intentionally NO "Go to review" button in this file.
+  // This page *is* the review page.
 
   const backHref = isManagerMode ? '/managers/turns' : '/cleaner/turns';
 
@@ -1163,17 +1144,17 @@ export default function Review() {
           onClick={() => setHistoryOpen(false)}
         >
           <div
-  style={{
-    ...ui.card,
-    maxWidth: 900,
-    width: '100%',
-    maxHeight: '85vh',
-    display: 'flex',
-    flexDirection: 'column',
-    overflow: 'hidden',
-  }}
-  onClick={(e) => e.stopPropagation()}
->
+            style={{
+              ...ui.card,
+              maxWidth: 900,
+              width: '100%',
+              maxHeight: '85vh',
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', gap: 12 }}>
               <div>
                 <h2 style={{ margin: 0 }}>Turn History</h2>
@@ -1221,19 +1202,16 @@ export default function Review() {
                           </div>
                         </div>
 
-                        {/* Events: keep old behavior */}
                         {!isMsg && it.text ? (
                           <div style={{ marginTop: 8, whiteSpace: 'pre-wrap', color: '#cbd5e1' }}>{it.text}</div>
                         ) : null}
 
-                        {/* Messages: show Sent + Original + Translated */}
                         {isMsg ? (
                           <div style={{ marginTop: 8 }}>
                             {parts?.showSent ? block('Sent (what receiver saw)', parts.sent, langChip(parts.sentLang)) : null}
                             {parts?.showOriginal ? block('Original (what sender wrote)', parts.original, langChip(parts.originalLang)) : null}
                             {parts?.showTranslated ? block('Translated', parts.translated, langChip(parts.translatedLang)) : null}
 
-                            {/* Absolute fallback (should rarely be needed) */}
                             {!parts?.showSent && !parts?.showOriginal && !parts?.showTranslated && it.text ? (
                               <div style={{ marginTop: 8, whiteSpace: 'pre-wrap', color: '#cbd5e1' }}>{it.text}</div>
                             ) : null}
@@ -1250,7 +1228,6 @@ export default function Review() {
       )}
 
       <section style={ui.sectionGrid}>
-        {/* Header / Meta */}
         <div style={ui.card}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
             <a href={backHref} style={{ ...ui.btnSecondary, textDecoration: 'none' }}>
@@ -1284,7 +1261,6 @@ export default function Review() {
             </div>
           )}
 
-          {/* Manager actions */}
           {isManagerMode && (
             <div
               style={{
@@ -1301,7 +1277,6 @@ export default function Review() {
                 {loadErr && <span style={{ color: '#fca5a5' }}>({loadErr})</span>}
               </div>
 
-              {/* Show most recent cleaner message to the manager */}
               {lastCleanerNote && (
                 <div
                   style={{
@@ -1330,7 +1305,6 @@ export default function Review() {
                 </div>
               )}
 
-              {/* SUMMARY (Option B translator) */}
               <div style={{ marginTop: 10 }}>
                 <div
                   style={{
@@ -1428,7 +1402,6 @@ export default function Review() {
           <div style={{ ...ui.subtle, marginTop: 10 }}>Click any photo to open full-size in a new tab.</div>
         </div>
 
-        {/* Photos (grouped like cleaner: by shot label, then leftovers) */}
         <div style={ui.card}>
           {loading ? (
             <div>Loading photos…</div>
@@ -1475,7 +1448,9 @@ export default function Review() {
                 (acc[k] ||= []).push(p);
                 return acc;
               }, {});
-              Object.values(byArea).forEach((list) => list.sort((a, b) => new Date(b.created_at) - new Date(a.created_at)));
+              Object.values(byArea).forEach((list) =>
+                list.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+              );
               const areas = Object.keys(byArea)
                 .filter((k) => k !== '__UNCAT__')
                 .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
