@@ -3,6 +3,9 @@ import { useRouter } from 'next/router';
 import { useEffect, useRef, useState } from 'react';
 import ChromeDark from '../../../components/ChromeDark';
 import { ui } from '../../../lib/theme';
+import { supabaseBrowser } from '@/lib/supabaseBrowser';
+
+const supabase = supabaseBrowser();
 
 export default function TurnChecklist() {
   const router = useRouter();
@@ -19,38 +22,27 @@ export default function TurnChecklist() {
   // Lightbox for reference photos
   const [lightbox, setLightbox] = useState({ open: false, urls: [], index: 0 });
 
-  // ---- Optional manager auth header (does NOT break if missing) ----
-  function getSupabaseAccessToken() {
+  async function getAccessToken() {
     try {
-      const raw = window.localStorage.getItem('turnqa-auth');
-      if (!raw) return null;
-      const parsed = JSON.parse(raw);
-      const token =
-        parsed?.currentSession?.access_token ||
-        parsed?.access_token ||
-        parsed?.data?.session?.access_token ||
-        null;
-      return typeof token === 'string' && token.length > 20 ? token : null;
+      const { data } = await supabase.auth.getSession();
+      return data?.session?.access_token || null;
     } catch {
       return null;
     }
   }
 
-  function authHeaders() {
-    try {
-      const token = getSupabaseAccessToken();
-      return token ? { Authorization: `Bearer ${token}` } : {};
-    } catch {
-      return {};
-    }
+  async function authHeaders() {
+    const token = await getAccessToken();
+    return token ? { Authorization: `Bearer ${token}` } : {};
   }
 
   async function signPath(path) {
+    const headers = await authHeaders();
     const resp = await fetch('/api/sign-photo', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...authHeaders(),
+        ...headers,
       },
       body: JSON.stringify({ path, expires: 600 }),
     });
@@ -82,9 +74,7 @@ export default function TurnChecklist() {
         try {
           const u = await signPath(p);
           if (u) urls.push(u);
-        } catch {
-          // ignore single failure
-        }
+        } catch {}
       }
       if (!urls.length) return;
 
@@ -131,15 +121,24 @@ export default function TurnChecklist() {
 
   useEffect(() => {
     if (!turnId) return;
+
     (async () => {
       setLoading(true);
       setErr('');
+
       try {
-        const r = await fetch(`/api/turn-template?turnId=${encodeURIComponent(turnId)}`);
+        // ✅ Attach Bearer token if manager is logged in
+        const headers = await authHeaders();
+
+        const r = await fetch(`/api/turn-template?turnId=${encodeURIComponent(turnId)}`, {
+          headers,
+        });
+
         const j = await r.json().catch(() => ({}));
         if (!r.ok || !j?.ok) {
           throw new Error(j?.error || 'Failed to load turn template');
         }
+
         setData(j);
 
         // warm thumbnails
@@ -173,30 +172,18 @@ export default function TurnChecklist() {
             </div>
 
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-              <button
-                type="button"
-                onClick={() => router.push('/managers/turns')}
-                style={ui.btnSecondary}
-              >
+              <button type="button" onClick={() => router.push('/managers/turns')} style={ui.btnSecondary}>
                 ← Back to turns
               </button>
 
               {turnId ? (
-                <button
-                  type="button"
-                  onClick={() => router.push(`/turns/${turnId}/review?manager=1`)}
-                  style={ui.btnSecondary}
-                >
+                <button type="button" onClick={() => router.push(`/turns/${turnId}/review?manager=1`)} style={ui.btnSecondary}>
                   Go to review
                 </button>
               ) : null}
 
               {propertyId ? (
-                <button
-                  type="button"
-                  onClick={() => router.push(`/properties/${propertyId}/invite`)}
-                  style={ui.btnPrimary}
-                >
+                <button type="button" onClick={() => router.push(`/properties/${propertyId}/invite`)} style={ui.btnPrimary}>
                   Invite cleaner
                 </button>
               ) : null}
@@ -259,12 +246,7 @@ export default function TurnChecklist() {
                                   key={path}
                                   type="button"
                                   onClick={() => openLightbox(refs, idx)}
-                                  style={{
-                                    padding: 0,
-                                    border: 'none',
-                                    background: 'transparent',
-                                    cursor: 'pointer',
-                                  }}
+                                  style={{ padding: 0, border: 'none', background: 'transparent', cursor: 'pointer' }}
                                   title="Open reference"
                                 >
                                   {thumb ? (
@@ -363,16 +345,7 @@ export default function TurnChecklist() {
               />
 
               {lightbox.urls.length > 1 && (
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 12,
-                    marginTop: 4,
-                    color: '#e5e7eb',
-                    fontSize: 13,
-                  }}
-                >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 4, color: '#e5e7eb', fontSize: 13 }}>
                   <button
                     type="button"
                     onClick={prevLightbox}
