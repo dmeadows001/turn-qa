@@ -14,13 +14,18 @@ function getAdminClient() {
 
 export default async function handler(req, res) {
   try {
-    if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+    if (req.method !== 'POST') {
+      return res.status(405).json({ error: 'Method not allowed' });
+    }
 
     const { property_id } = req.body || {};
-    if (!property_id) return res.status(400).json({ error: 'Missing property_id' });
+    if (!property_id) {
+      return res.status(400).json({ error: 'Missing property_id' });
+    }
 
     const supabase = getAdminClient();
 
+    // Find the template for this property
     const { data: tpl, error: tplErr } = await supabase
       .from('property_templates')
       .select('id, name')
@@ -28,19 +33,23 @@ export default async function handler(req, res) {
       .order('created_at', { ascending: true })
       .limit(1)
       .maybeSingle();
-    if (tplErr) throw tplErr;
-    if (!tpl?.id) return res.status(400).json({ error: 'No template found for this property' });
 
+    if (tplErr) throw tplErr;
+    if (!tpl?.id) {
+      return res.status(400).json({ error: 'No template found for this property' });
+    }
+
+    // Create a new "in_progress" turn tied to that template
     const { data: turn, error: insErr } = await supabase
       .from('turns')
       .insert({
         property_id,
         template_id: tpl.id,
         status: 'in_progress',
-        is_preview: true,
       })
       .select('id')
       .single();
+
     if (insErr) throw insErr;
 
     return res.status(200).json({ ok: true, turn_id: turn.id });
