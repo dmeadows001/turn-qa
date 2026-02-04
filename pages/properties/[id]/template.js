@@ -969,37 +969,46 @@ export default function TemplateBuilder() {
         {/* ✅ Next steps card (this is what fixes your JSX nesting issue) */}
         <div style={ui.card}>
           <div style={{ ...ui.row }}>
-            <button
-              type="button"
-              onClick={() => router.push(`/properties/${property.id}/invite`)}
-              style={ui.btnPrimary}
-            >
-              Invite cleaner
-            </button>
+  <button
+    type="button"
+    onClick={() => router.push(`/properties/${property.id}/invite`)}
+    style={ui.btnPrimary}
+  >
+    Invite cleaner
+  </button>
 
-            <button
-              type="button"
-              onClick={async () => {
-                try {
-                  setMsg('');
-                  const r = await fetch('/api/preview-turn', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ property_id: property.id }),
-                  });
-                  const j = await r.json().catch(() => ({}));
-                  if (!r.ok) throw new Error(j?.error || 'Failed to create preview turn');
+  <button
+    type="button"
+    onClick={async () => {
+      try {
+        setMsg('');
+        const r = await fetch('/api/preview-turn', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ property_id: property.id }),
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(j?.error || 'Failed to create preview turn');
 
-                  router.push(`/turns/${j.turn_id}/checklist`);
-                } catch (e) {
-                  setMsg(e.message || 'Preview failed');
-                }
-              }}
-              style={ui.btnSecondary}
-            >
-              Back to dashboard
-            </button>
-          </div>
+        router.push(`/turns/${j.turn_id}/checklist`);
+      } catch (e) {
+        setMsg(e.message || 'Preview failed');
+      }
+    }}
+    style={ui.btnSecondary}
+  >
+    Preview as cleaner (no data saved)
+  </button>
+
+  <button
+    type="button"
+    onClick={() => router.push('/dashboard')}
+    style={ui.btnSecondary}
+  >
+    Back to dashboard
+  </button>
+</div>
+
 
           <div style={{ ...ui.subtle, marginTop: 10 }}>
             When a cleaner submits a turn, you’ll review it under <b>Manager → Turns</b>.
