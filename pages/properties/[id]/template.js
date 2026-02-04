@@ -979,17 +979,22 @@ export default function TemplateBuilder() {
 
             <button
               type="button"
-              onClick={() =>
-                router.push(`/turns/preview/capture?preview=1&property_id=${property.id}`)
-              }
-              style={ui.btnSecondary}
-            >
-              Preview as cleaner (no data saved)
-            </button>
+              onClick={async () => {
+                try {
+                  setMsg('');
+                  const r = await fetch('/api/preview-turn', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ property_id: property.id }),
+                  });
+                  const j = await r.json().catch(() => ({}));
+                  if (!r.ok) throw new Error(j?.error || 'Failed to create preview turn');
 
-            <button
-              type="button"
-              onClick={() => router.push('/dashboard')}
+                  router.push(`/turns/${j.turn_id}/checklist`);
+                } catch (e) {
+                  setMsg(e.message || 'Preview failed');
+                }
+              }}
               style={ui.btnSecondary}
             >
               Back to dashboard
