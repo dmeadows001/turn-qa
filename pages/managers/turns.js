@@ -163,7 +163,12 @@ function ManagerTurnsInner() {
         j = await r.json();
       } catch {}
 
+      if (r.status === 402) {
+        router.replace('/billing?reason=expired');
+        return;
+      }
       if (!r.ok) throw new Error(j.error || `list-turns failed (${r.status})`);
+
 
       setRows(Array.isArray(j.rows) ? j.rows : []);
     } catch (e) {
