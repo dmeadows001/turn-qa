@@ -1,5 +1,5 @@
 // pages/api/update-turn-status.js
-import { supabaseAdmin as _admin } from '@/lib/supabaseAdmin';
+import { requireActiveSubscription } from '@/lib/requireActiveSubscription';
 
 const supa = typeof _admin === 'function' ? _admin() : _admin;
 
@@ -57,6 +57,10 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method Not Allowed' });
   }
 
+ // 🔒 Billing enforcement: only active trial/subscription managers can update turn status
+  const gate = await requireActiveSubscription(req, res);
+  if (gate.handled) return;
+  
   try {
     const { turn_id, new_status, manager_note } = parseBody(req);
     if (!turn_id) return res.status(400).json({ error: 'turn_id is required' });
