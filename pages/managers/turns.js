@@ -73,6 +73,34 @@ function pillStyle() {
 
 function ManagerTurnsInner() {
   const router = useRouter();
+ 
+  const [billingChecked, setBillingChecked] = useState(false);
+
+  // 🔒 Redirect expired managers to /billing (friendly UI enforcement)
+  useEffect(() => {
+    if (!router.isReady) return;
+    (async () => {
+      try {
+        const r = await fetch('/api/billing/status');
+        if (r.status === 401) {
+          // not signed in — send to login (or managers home)
+          router.replace('/login');
+          return;
+        }
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(j.error || `billing/status failed (${r.status})`);
+        if (j.allowed === false) {
+          router.replace('/billing?reason=expired');
+          return;
+        }
+        setBillingChecked(true);
+      } catch (e) {
+        // If billing status can’t be checked, fail open for now (avoids locking out due to transient error)
+        console.warn('[managers/turns] billing check failed:', e?.message || e);
+        setBillingChecked(true);
+      }
+    })();
+  }, [router.isReady, router]);
 
   // property scope from dashboard: /managers/turns?property_id=...
   const scopedPropertyId = useMemo(() => {
@@ -95,6 +123,16 @@ function ManagerTurnsInner() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState('');
+
+  if (!billingChecked) {
+    return (
+      <ChromeDark title="Manager — Turns">
+        <section style={ui.sectionGrid}>
+          <div style={ui.card}>Checking subscription…</div>
+        </section>
+      </ChromeDark>
+    );
+  }
 
   // If the URL is scoped, force the UI filter to match it (and lock it)
   useEffect(() => {
