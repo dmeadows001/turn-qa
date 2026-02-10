@@ -1,5 +1,6 @@
 // pages/api/list-turns.js
 import { supabaseAdmin as _admin } from '@/lib/supabaseAdmin';
+import { requireActiveSubscription } from '@/lib/requireActiveSubscription';
 
 // Works whether supabaseAdmin exports an instance or a factory
 const supabase = typeof _admin === 'function' ? _admin() : _admin;
@@ -9,6 +10,10 @@ export default async function handler(req, res) {
     res.setHeader('Allow', ['GET']);
     return res.status(405).json({ error: 'Method not allowed' });
   }
+
+    // 🔒 Billing enforcement
+  const gate = await requireActiveSubscription(req, res);
+  if (gate.handled) return;
 
   try {
     const { status, from, to, limit: limitParam, property_id } = req.query;
