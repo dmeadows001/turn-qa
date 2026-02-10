@@ -21,7 +21,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     // Auth: must be signed in
-    const supabase = createServerSupabase();
+    const supabase = createServerSupabase(req, res);
     const { data: { user } } = await supabase.auth.getUser();
     if (!user?.email) {
       return res.status(401).json({ error: 'Please sign in to start checkout.' });
