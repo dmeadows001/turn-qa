@@ -7,14 +7,9 @@ export const config = { api: { bodyParser: false } };
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, { apiVersion: '2024-06-20' });
 
-// Small helper to get the customer's email from a Subscription object
-async function getCustomerEmailFromSubscription(sub: Stripe.Subscription): Promise<string | null> {
+function getCustomerIdFromSubscription(sub: Stripe.Subscription): string | null {
   const customerId = typeof sub.customer === 'string' ? sub.customer : sub.customer?.id;
-  if (!customerId) return null;
-
-  const cust = await stripe.customers.retrieve(customerId);
-  if (!('deleted' in cust) && cust.email) return cust.email;
-  return null;
+  return customerId ? String(customerId) : null;
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -47,13 +42,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const sub = event.data.object as Stripe.Subscription;
     const currentPeriodEnd = new Date(sub.current_period_end * 1000).toISOString();
 
-    const email = await getCustomerEmailFromSubscription(sub);
-    if (!email) return res.json({ ok: true });
++    const customerId = getCustomerIdFromSubscription(sub);
++    if (!customerId) return res.json({ ok: true });
 
     const { data: profile } = await supa
       .from('profiles')
       .select('id')
-      .eq('email', email)
+      .eq('stripe_customer_id', customerId)
       .maybeSingle();
 
     if (profile) {
@@ -72,13 +67,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (event.type === 'customer.subscription.deleted') {
     const sub = event.data.object as Stripe.Subscription;
 
-    const email = await getCustomerEmailFromSubscription(sub);
-    if (!email) return res.json({ ok: true });
+    const customerId = getCustomerIdFromSubscription(sub);
+    if (!customerId) return res.json({ ok: true });
 
     const { data: profile } = await supa
       .from('profiles')
       .select('id')
-      .eq('email', email)
+      .eq('stripe_customer_id', customerId)
       .maybeSingle();
 
     if (profile) {
