@@ -42,8 +42,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const sub = event.data.object as Stripe.Subscription;
     const currentPeriodEnd = new Date(sub.current_period_end * 1000).toISOString();
 
-+    const customerId = getCustomerIdFromSubscription(sub);
-+    if (!customerId) return res.json({ ok: true });
+    const customerId = getCustomerIdFromSubscription(sub);
+    if (!customerId) return res.json({ ok: true });
 
     const { data: profile } = await supa
       .from('profiles')
