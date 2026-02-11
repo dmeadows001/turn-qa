@@ -965,7 +965,7 @@ export default function Review() {
 
       const r = await fetch('/api/update-turn-status', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ turn_id: turnId, new_status: 'approved', manager_note }),
       });
       const j = await r.json().catch(() => ({}));
@@ -1038,7 +1038,7 @@ export default function Review() {
 
       const r = await fetch(`/api/turns/${turnId}/needs-fix`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({
           notes: payloadNotes,
           summary: summaryPayload,
