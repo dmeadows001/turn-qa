@@ -1,10 +1,10 @@
+// components/layout/Header.tsx
 import Link from 'next/link';
 import Image from 'next/image';
 import { useEffect, useState } from 'react';
 import { supabaseBrowser } from '@/lib/supabaseBrowser';
 
 type Profile = {
-  role?: 'manager' | 'cleaner' | string;
   first_name?: string | null;
   phone?: string | null;
   email?: string | null;
@@ -15,35 +15,63 @@ export default function Header() {
 
   useEffect(() => {
     const supabase = supabaseBrowser();
+    let mounted = true;
 
     async function load() {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.user) {
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+
+        if (!mounted) return;
+
+        if (!session?.user) {
+          setDisplayName(null);
+          return;
+        }
+
+        const userId = session.user.id;
+
+        // Pull basic profile fields (NO role column)
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('first_name, phone, email')
+          .eq('id', userId)
+          .maybeSingle();
+
+        // Infer role by membership (no profiles.role dependency)
+        const [{ data: mgr }, { data: cln }] = await Promise.all([
+          supabase.from('managers').select('id').eq('user_id', userId).maybeSingle(),
+          supabase.from('cleaners').select('id').eq('user_id', userId).maybeSingle(),
+        ]);
+
+        const role: 'manager' | 'cleaner' = cln?.id ? 'cleaner' : 'manager';
+
+        const nameForCleaner =
+          profile?.first_name ||
+          profile?.phone ||
+          (session.user.user_metadata as any)?.phone ||
+          session.user.email ||
+          'Cleaner';
+
+        const nameForManager = session.user.email || profile?.email || 'Manager';
+
+        setDisplayName(role === 'cleaner' ? nameForCleaner : nameForManager);
+      } catch (e) {
+        // Don’t block rendering if profile lookup fails
         setDisplayName(null);
-        return;
       }
-    }
-      const { data: profile } = await supabase
-      .from('profiles')
-      .select('first_name, phone, email')
-      .eq('id', session.user.id)
-      .single();
-
-      const role = (profile?.role || 'manager') as Profile['role'];
-
-      const nameForCleaner =
-        profile?.first_name || profile?.phone || session.user.user_metadata?.phone || session.user.email || 'Cleaner';
-
-      const nameForManager = session.user.email || profile?.email || 'Manager';
-
-      setDisplayName(role === 'cleaner' ? nameForCleaner : nameForManager);
     }
 
     load();
 
     // keep it fresh if auth state changes
     const { data: listener } = supabase.auth.onAuthStateChange(() => load());
-    return () => listener.subscription.unsubscribe();
+
+    return () => {
+      mounted = false;
+      listener.subscription.unsubscribe();
+    };
   }, []);
 
   async function signOut() {
@@ -73,11 +101,7 @@ export default function Header() {
           paddingBottom: 14,
         }}
       >
-        <Link
-          href="/"
-          aria-label="TurnQA home"
-          style={{ display: 'inline-flex', alignItems: 'center', gap: 12 }}
-        >
+        <Link href="/" aria-label="TurnQA home" style={{ display: 'inline-flex', alignItems: 'center', gap: 12 }}>
           <Image src="/logo-camera.svg" alt="TurnQA" width={36} height={36} priority />
           <span style={{ fontWeight: 700, letterSpacing: 0.2 }}>TurnQA</span>
         </Link>
