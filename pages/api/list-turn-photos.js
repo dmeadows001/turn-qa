@@ -144,6 +144,34 @@ if (managerId) {
   return { ok: false, error: 'Not authorized (turn)' };
 }
 
+async function requireManagerBillingActive(userId) {
+  const { data: prof, error } = await admin
+    .from('profiles')
+    .select('active_until, subscription_status')
+    .eq('id', userId)
+    .maybeSingle();
+
+  if (error) return { ok: false, error: error.message || 'Billing lookup failed' };
+  if (!prof) return { ok: false, error: 'Missing profile' };
+
+  const activeUntil = prof.active_until ? new Date(prof.active_until).getTime() : 0;
+  const now = Date.now();
+
+  const isActive = activeUntil && activeUntil > now;
+
+  if (!isActive) {
+    return {
+      ok: false,
+      error: 'Subscription required',
+      code: 'BILLING_REQUIRED',
+      active_until: prof.active_until || null,
+      subscription_status: prof.subscription_status || null,
+    };
+  }
+
+  return { ok: true, profile: prof };
+}
+
 
 export default async function handler(req, res) {
   try {
@@ -154,12 +182,14 @@ export default async function handler(req, res) {
     const token = getBearerToken(req);
     const cleanerSess = !token ? readCleanerSession(req) : null;
 
+    let userId = null;
     let managerId = null;
     let cleanerId = null;
 
     if (token) {
       const role = await resolveRoleFromBearer(token);
       if (!role.ok) return res.status(401).json({ error: role.error || 'Unauthorized' });
+      userId = role.userId;
       managerId = role.managerId;
       cleanerId = role.cleanerId;
 
@@ -177,6 +207,24 @@ export default async function handler(req, res) {
     if (!authz.ok) {
       return res.status(403).json({ error: authz.error || 'Not authorized' });
     }
+
+    // ✅ Billing gate: managers only (cleaners are never blocked)
+if (authz.mode === 'manager') {
+  if (!userId) {
+    return res.status(401).json({ error: 'Missing user context' });
+  }
+
+  const bill = await requireManagerBillingActive(userId);
+  if (!bill.ok) {
+    return res.status(402).json({
+      error: bill.error || 'Subscription required',
+      code: bill.code || 'BILLING_REQUIRED',
+      active_until: bill.active_until || null,
+      subscription_status: bill.subscription_status || null,
+    });
+  }
+}
+
 
     // Query strategy:
     // - If Bearer token is present, keep current behavior: read via RLS client
