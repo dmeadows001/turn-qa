@@ -22,13 +22,12 @@ export default function Header() {
         setDisplayName(null);
         return;
       }
-
+    }
       const { data: profile } = await supabase
       .from('profiles')
       .select('first_name, phone, email')
       .eq('id', session.user.id)
       .single();
-
 
       const role = (profile?.role || 'manager') as Profile['role'];
 
