@@ -32,6 +32,76 @@ try {
 const supa = typeof _admin === 'function' ? _admin() : _admin;
 const nowIso = () => new Date().toISOString();
 
+function getBearerToken(req) {
+  const h = req.headers.authorization || '';
+  const m = h.match(/^Bearer\s+(.+)$/i);
+  return m ? m[1].trim() : null;
+}
+
+async function requireManagerFromBearer(token) {
+  const { data: userData, error: userErr } = await supa.auth.getUser(token);
+  if (userErr || !userData?.user) return { ok: false, error: 'Invalid/expired token' };
+
+  const userId = userData.user.id;
+
+  const { data: mgrRow, error: mgrErr } = await supa
+    .from('managers')
+    .select('id')
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  if (mgrErr) return { ok: false, error: mgrErr.message || 'Manager lookup failed' };
+  if (!mgrRow?.id) return { ok: false, error: 'Not authorized (manager only)' };
+
+  return { ok: true, userId, managerId: mgrRow.id };
+}
+
+// Manager can own a turn either via turns.manager_id OR properties.manager_id
+async function authorizeManagerForTurn(turnId, managerId) {
+  const { data: t, error } = await supa
+    .from('turns')
+    .select('id, manager_id, property_id, properties!inner(manager_id)')
+    .eq('id', turnId)
+    .maybeSingle();
+
+  if (error) return { ok: false, error: error.message || 'Turn lookup failed' };
+  if (!t) return { ok: false, error: 'Turn not found' };
+
+  const propMgr = t?.properties?.manager_id || null;
+
+  if (t.manager_id === managerId || propMgr === managerId) {
+    return { ok: true, turn: t };
+  }
+
+  return { ok: false, error: 'Not authorized (turn)' };
+}
+
+async function requireManagerBillingActive(userId) {
+  const { data: prof, error } = await supa
+    .from('profiles')
+    .select('active_until, subscription_status')
+    .eq('id', userId)
+    .maybeSingle();
+
+  if (error) return { ok: false, error: error.message || 'Billing lookup failed' };
+  if (!prof) return { ok: false, error: 'Missing profile' };
+
+  const activeUntil = prof.active_until ? new Date(prof.active_until).getTime() : 0;
+  const now = Date.now();
+
+  if (!activeUntil || activeUntil <= now) {
+    return {
+      ok: false,
+      error: 'Subscription required',
+      code: 'BILLING_REQUIRED',
+      active_until: prof.active_until || null,
+      subscription_status: prof.subscription_status || null,
+    };
+  }
+
+  return { ok: true };
+}
+
 // simple id helper (Node 18+ has crypto.randomUUID)
 const mkId = () =>
   (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function')
@@ -189,6 +259,26 @@ export default async function handler(req, res) {
   try {
     const turnId = String(req.query.id || '').trim();
     if (!turnId) return res.status(400).json({ error: 'missing id' });
+
+    // ✅ Option A: manager-only + must be paid/trial active
+const token = getBearerToken(req);
+if (!token) return res.status(401).json({ error: 'Missing Authorization token' });
+
+const mgr = await requireManagerFromBearer(token);
+if (!mgr.ok) return res.status(403).json({ error: mgr.error || 'Forbidden' });
+
+const authz = await authorizeManagerForTurn(turnId, mgr.managerId);
+if (!authz.ok) return res.status(403).json({ error: authz.error || 'Not authorized' });
+
+const bill = await requireManagerBillingActive(mgr.userId);
+if (!bill.ok) {
+  return res.status(402).json({
+    error: bill.error || 'Subscription required',
+    code: bill.code || 'BILLING_REQUIRED',
+    active_until: bill.active_until || null,
+    subscription_status: bill.subscription_status || null,
+  });
+}
 
     // Support BOTH payload shapes the UI may send:
     //  - { notes: [{ path, note, photo_id? }], summary?, send_sms? }
