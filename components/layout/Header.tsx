@@ -24,10 +24,11 @@ export default function Header() {
       }
 
       const { data: profile } = await supabase
-        .from('profiles')
-        .select('role, first_name, phone, email')
-        .eq('id', session.user.id)
-        .single();
+      .from('profiles')
+      .select('first_name, phone, email')
+      .eq('id', session.user.id)
+      .single();
+
 
       const role = (profile?.role || 'manager') as Profile['role'];
 
