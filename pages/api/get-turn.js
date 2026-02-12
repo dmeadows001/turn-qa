@@ -25,13 +25,35 @@ function createRlsClient(token) {
 
 async function resolveRoleFromBearer(token) {
   const { data: userData, error: userErr } = await admin.auth.getUser(token);
-  if (userErr || !userData?.user) return { ok: false, error: 'Invalid/expired token' };
+  if (userErr || !userData?.user) {
+    return { ok: false, error: 'Invalid/expired token' };
+  }
 
   const userId = userData.user.id;
 
+  // Supabase phone login
+  const authPhone =
+    userData.user.phone ||
+    userData.user.user_metadata?.phone ||
+    null;
+
+  const mgrPromise = admin
+    .from('managers')
+    .select('id')
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  const clnPromise = authPhone
+    ? admin
+        .from('cleaners')
+        .select('id')
+        .eq('phone', authPhone)
+        .maybeSingle()
+    : Promise.resolve({ data: null });
+
   const [{ data: mgrRow }, { data: clnRow }] = await Promise.all([
-    admin.from('managers').select('id').eq('user_id', userId).maybeSingle(),
-    admin.from('cleaners').select('id').eq('id', userId).maybeSingle(),
+    mgrPromise,
+    clnPromise,
   ]);
 
   return {
