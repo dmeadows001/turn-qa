@@ -31,7 +31,7 @@ async function resolveRoleFromBearer(token) {
 
   const [{ data: mgrRow }, { data: clnRow }] = await Promise.all([
     admin.from('managers').select('id').eq('user_id', userId).maybeSingle(),
-    admin.from('cleaners').select('id').eq('user_id', userId).maybeSingle(),
+    admin.from('cleaners').select('id').eq('id', userId).maybeSingle(),
   ]);
 
   return {
