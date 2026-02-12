@@ -1,11 +1,10 @@
-// components/layout/Header.tsx
 import Link from 'next/link';
 import Image from 'next/image';
 import { useEffect, useState } from 'react';
 import { supabaseBrowser } from '@/lib/supabaseBrowser';
 
 type Profile = {
-  first_name?: string | null;
+  full_name?: string | null;
   phone?: string | null;
   email?: string | null;
 };
@@ -15,63 +14,39 @@ export default function Header() {
 
   useEffect(() => {
     const supabase = supabaseBrowser();
-    let mounted = true;
 
     async function load() {
-      try {
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
 
-        if (!mounted) return;
-
-        if (!session?.user) {
-          setDisplayName(null);
-          return;
-        }
-
-        const userId = session.user.id;
-
-        // Pull basic profile fields (NO role column)
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('first_name, phone, email')
-          .eq('id', userId)
-          .maybeSingle();
-
-        // Infer role by membership (no profiles.role dependency)
-        const [{ data: mgr }, { data: cln }] = await Promise.all([
-          supabase.from('managers').select('id').eq('user_id', userId).maybeSingle(),
-          supabase.from('cleaners').select('id').eq('user_id', userId).maybeSingle(),
-        ]);
-
-        const role: 'manager' | 'cleaner' = cln?.id ? 'cleaner' : 'manager';
-
-        const nameForCleaner =
-          profile?.first_name ||
-          profile?.phone ||
-          (session.user.user_metadata as any)?.phone ||
-          session.user.email ||
-          'Cleaner';
-
-        const nameForManager = session.user.email || profile?.email || 'Manager';
-
-        setDisplayName(role === 'cleaner' ? nameForCleaner : nameForManager);
-      } catch (e) {
-        // Don’t block rendering if profile lookup fails
+      if (!session?.user) {
         setDisplayName(null);
+        return;
       }
+
+      // ✅ profiles columns that actually exist in your schema
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('full_name, phone, email')
+        .eq('id', session.user.id)
+        .maybeSingle();
+
+      const name =
+        profile?.full_name ||
+        profile?.phone ||
+        (session.user.user_metadata?.phone as string | undefined) ||
+        session.user.email ||
+        'Account';
+
+      setDisplayName(name);
     }
 
     load();
 
     // keep it fresh if auth state changes
     const { data: listener } = supabase.auth.onAuthStateChange(() => load());
-
-    return () => {
-      mounted = false;
-      listener.subscription.unsubscribe();
-    };
+    return () => listener.subscription.unsubscribe();
   }, []);
 
   async function signOut() {
