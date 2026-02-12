@@ -36,7 +36,7 @@ export default async function handler(req, res) {
       // 2) Identify role (manager / cleaner) by user_id
       const [{ data: mgrRow }, { data: clnRow }] = await Promise.all([
         supabaseAdmin.from("managers").select("id").eq("user_id", userId).maybeSingle(),
-        supabaseAdmin.from("cleaners").select("id").eq("user_id", userId).maybeSingle(),
+        supabaseAdmin.from("cleaners").select("id").eq("id", userId).maybeSingle(),
       ]);
 
       managerId = mgrRow?.id || null;
