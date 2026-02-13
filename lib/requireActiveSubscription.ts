@@ -2,6 +2,15 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { createServerSupabase } from '@/lib/supabaseServer';
 
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`Timeout after ${ms}ms at ${label}`)), ms)
+    ),
+  ]);
+}
+
 type ProfileRow = {
   id: string;
   subscription_status: string | null;
@@ -11,16 +20,11 @@ type ProfileRow = {
 
 function isActiveProfile(p: ProfileRow | null) {
   if (!p) return false;
-
-  // Paid wins
   if (p.subscription_status === 'active') return true;
-
-  // Trial (or any active window) via active_until
   if (p.active_until) {
     const t = Date.parse(p.active_until);
     if (!Number.isNaN(t) && t > Date.now()) return true;
   }
-
   return false;
 }
 
@@ -29,47 +33,76 @@ export async function requireActiveSubscription(
   res: NextApiResponse,
   opts?: { allowIfMissingProfile?: boolean }
 ) {
-  const supabase = createServerSupabase(req, res);
+  const t0 = Date.now();
+  try {
+    console.log('[billing gate] start', { path: req.url });
 
-  const { data: { user }, error: uErr } = await supabase.auth.getUser();
-  if (uErr) {
-    return { ok: false as const, handled: true as const, error: uErr };
-  }
-  if (!user) {
-    res.status(401).json({ error: 'Not signed in' });
-    return { ok: false as const, handled: true as const };
-  }
+    const supabase = createServerSupabase(req, res);
 
-  const { data: profile, error: pErr } = await supabase
-    .from('profiles')
-    .select('id, subscription_status, active_until, trial_ends_at')
-    .eq('id', user.id)
-    .maybeSingle();
+    const userResp = await withTimeout(
+      supabase.auth.getUser(),
+      8000,
+      'supabase.auth.getUser()'
+    );
 
-  if (pErr) {
-    res.status(500).json({ error: pErr.message || 'Could not load profile' });
-    return { ok: false as const, handled: true as const };
-  }
+    const { data: { user }, error: uErr } = userResp;
 
-  if (!profile) {
-    if (opts?.allowIfMissingProfile) {
-      return { ok: true as const, handled: false as const, user, profile: null };
+    console.log('[billing gate] gotUser', { ms: Date.now() - t0, hasUser: !!user, uErr: uErr?.message });
+
+    if (uErr) {
+      res.status(500).json({ error: uErr.message || 'Auth error' });
+      return { ok: false as const, handled: true as const, error: uErr };
     }
-    // Usually means ensure-profile wasn't called yet
-    res.status(403).json({ error: 'Profile missing. Please refresh and try again.' });
+
+    if (!user) {
+      res.status(401).json({ error: 'Not signed in' });
+      return { ok: false as const, handled: true as const };
+    }
+
+    const profileResp = await withTimeout(
+      supabase
+        .from('profiles')
+        .select('id, subscription_status, active_until, trial_ends_at')
+        .eq('id', user.id)
+        .maybeSingle(),
+      8000,
+      'profiles select'
+    );
+
+    const { data: profile, error: pErr } = profileResp;
+
+    console.log('[billing gate] gotProfile', { ms: Date.now() - t0, hasProfile: !!profile, pErr: pErr?.message });
+
+    if (pErr) {
+      res.status(500).json({ error: pErr.message || 'Could not load profile' });
+      return { ok: false as const, handled: true as const };
+    }
+
+    if (!profile) {
+      if (opts?.allowIfMissingProfile) {
+        return { ok: true as const, handled: false as const, user, profile: null };
+      }
+      res.status(403).json({ error: 'Profile missing. Please refresh and try again.' });
+      return { ok: false as const, handled: true as const };
+    }
+
+    if (!isActiveProfile(profile as any)) {
+      res.status(402).json({
+        error: 'Subscription required',
+        subscription_status: profile.subscription_status,
+        active_until: profile.active_until,
+        trial_ends_at: profile.trial_ends_at,
+      });
+      return { ok: false as const, handled: true as const };
+    }
+
+    console.log('[billing gate] allowed', { ms: Date.now() - t0 });
+
+    return { ok: true as const, handled: false as const, user, profile };
+  } catch (e: any) {
+    console.error('[billing gate] FAIL', e?.message || e);
+    // critical: do NOT let it hang; respond
+    res.status(504).json({ error: e?.message || 'Billing gate timeout' });
     return { ok: false as const, handled: true as const };
   }
-
-  if (!isActiveProfile(profile as any)) {
-    // 402 makes it crystal clear: you need to pay to proceed
-    res.status(402).json({
-      error: 'Subscription required',
-      subscription_status: profile.subscription_status,
-      active_until: profile.active_until,
-      trial_ends_at: profile.trial_ends_at,
-    });
-    return { ok: false as const, handled: true as const };
-  }
-
-  return { ok: true as const, handled: false as const, user, profile };
 }
