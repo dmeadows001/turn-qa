@@ -622,8 +622,16 @@ export default async function handler(req, res) {
         (flagged > 0 ? `${flagged} item(s) marked.\n` : '') +
         `Resume here: ${link}`;
 
-      // Send using the cleaned phone
-      await sendSmsMinimal(cleaned, msg);
+      // Support both implementations:
+      // - sendSmsMinimal(to, body)
+      // - sendSmsMinimal({ to, body })
+      try {
+        await sendSmsMinimal({ to: cleaned, body: msg });
+      } catch (e1) {
+        // fallback for old signature
+        await sendSmsMinimal(cleaned, msg);
+      }
+
     }
 
     return res.json({
