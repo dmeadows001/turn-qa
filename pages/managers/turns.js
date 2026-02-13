@@ -82,8 +82,6 @@ function ManagerTurnsInner() {
     if (!router.isReady) return;
     (async () => {
       try {
-        const raw = localStorage.getItem('turnqa-auth');
-        const token = raw ? JSON.parse(raw)?.access_token : null;
         const sb = supabaseBrowser();
         const { data: { session } } = await sb.auth.getSession();
         const token = session?.access_token;
