@@ -81,7 +81,13 @@ function ManagerTurnsInner() {
     if (!router.isReady) return;
     (async () => {
       try {
-        const r = await fetch('/api/billing/status');
+        const raw = localStorage.getItem('turnqa-auth');
+        const token = raw ? JSON.parse(raw)?.access_token : null;
+
+        const r = await fetch('/api/billing/status', {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+
         if (r.status === 401) {
           // not signed in — send to login (or managers home)
           router.replace('/login');
