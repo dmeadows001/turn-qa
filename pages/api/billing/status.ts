@@ -1,5 +1,5 @@
-// pages/api/billing/status.ts
 import type { NextApiRequest, NextApiResponse } from 'next';
+import { createServerSupabase } from '@/lib/supabaseServer';
 import { supabaseAdmin as _admin } from '@/lib/supabaseAdmin';
 
 const admin = typeof _admin === 'function' ? _admin() : _admin;
@@ -13,7 +13,6 @@ function getBearerToken(req: NextApiRequest) {
 function isAllowed(profile: any) {
   if (!profile) return false;
   if (profile.subscription_status === 'active') return true;
-
   if (profile.active_until) {
     const t = Date.parse(profile.active_until);
     if (!Number.isNaN(t) && t > Date.now()) return true;
@@ -27,18 +26,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).json({ error: 'Method Not Allowed' });
   }
 
-  // ✅ Use Bearer auth (your app stores session in localStorage)
+  // ✅ Prefer Bearer token (works with localStorage sessions)
   const token = getBearerToken(req);
-  if (!token) return res.status(401).json({ error: 'Missing Authorization token' });
+  let userId: string | null = null;
 
-  const { data: userData, error: userErr } = await admin.auth.getUser(token);
-  const user = userData?.user || null;
-  if (userErr || !user) return res.status(401).json({ error: 'Not signed in' });
+  if (token) {
+    const { data, error } = await admin.auth.getUser(token);
+    if (error || !data?.user) return res.status(401).json({ error: 'Not signed in' });
+    userId = data.user.id;
+  } else {
+    // fallback: cookie-based session
+    const supabase = createServerSupabase(req, res);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return res.status(401).json({ error: 'Not signed in' });
+    userId = user.id;
+  }
 
   const { data: profile, error } = await admin
     .from('profiles')
     .select('subscription_status, active_until, trial_ends_at')
-    .eq('id', user.id)
+    .eq('id', userId)
     .maybeSingle();
 
   if (error) return res.status(500).json({ error: error.message });
