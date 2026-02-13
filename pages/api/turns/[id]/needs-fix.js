@@ -22,6 +22,7 @@ try {
           body,
         });
       } catch (e) {
+        // Keep original behavior: log + swallow
         console.error('[needs-fix sms] twilio error', e?.message || e);
       }
     };
@@ -250,6 +251,26 @@ async function updateByExactMatch(table, matchObj, payload) {
   return !error && (count ?? 0) > 0;
 }
 
+/**
+ * Minimal phone validation for Twilio "To" param.
+ * - Must be E.164-ish: + then 8-15 digits (Twilio accepts E.164)
+ */
+function normalizeE164(input) {
+  const s = String(input ?? '').trim();
+  if (!s) return '';
+  // allow spaces/dashes/parentheses and strip them, but keep leading +
+  const cleaned = s.startsWith('+')
+    ? '+' + s.slice(1).replace(/[^\d]/g, '')
+    : s.replace(/[^\d]/g, '');
+  return cleaned;
+}
+
+function isLikelyE164(input) {
+  const s = String(input ?? '').trim();
+  // must start with + and be 8-15 digits total after +
+  return /^\+\d{8,15}$/.test(s);
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', ['POST']);
@@ -261,24 +282,24 @@ export default async function handler(req, res) {
     if (!turnId) return res.status(400).json({ error: 'missing id' });
 
     // ✅ Option A: manager-only + must be paid/trial active
-const token = getBearerToken(req);
-if (!token) return res.status(401).json({ error: 'Missing Authorization token' });
+    const token = getBearerToken(req);
+    if (!token) return res.status(401).json({ error: 'Missing Authorization token' });
 
-const mgr = await requireManagerFromBearer(token);
-if (!mgr.ok) return res.status(403).json({ error: mgr.error || 'Forbidden' });
+    const mgr = await requireManagerFromBearer(token);
+    if (!mgr.ok) return res.status(403).json({ error: mgr.error || 'Forbidden' });
 
-const authz = await authorizeManagerForTurn(turnId, mgr.managerId);
-if (!authz.ok) return res.status(403).json({ error: authz.error || 'Not authorized' });
+    const authz = await authorizeManagerForTurn(turnId, mgr.managerId);
+    if (!authz.ok) return res.status(403).json({ error: authz.error || 'Not authorized' });
 
-const bill = await requireManagerBillingActive(mgr.userId);
-if (!bill.ok) {
-  return res.status(402).json({
-    error: bill.error || 'Subscription required',
-    code: bill.code || 'BILLING_REQUIRED',
-    active_until: bill.active_until || null,
-    subscription_status: bill.subscription_status || null,
-  });
-}
+    const bill = await requireManagerBillingActive(mgr.userId);
+    if (!bill.ok) {
+      return res.status(402).json({
+        error: bill.error || 'Subscription required',
+        code: bill.code || 'BILLING_REQUIRED',
+        active_until: bill.active_until || null,
+        subscription_status: bill.subscription_status || null,
+      });
+    }
 
     // Support BOTH payload shapes the UI may send:
     //  - { notes: [{ path, note, photo_id? }], summary?, send_sms? }
@@ -528,6 +549,8 @@ if (!bill.ok) {
     if (notify) {
       let cleanerPhone = null;
       let propertyName = null;
+      let cleanerId = null;
+      let propertyId = null;
 
       const { data: t, error: tErr } = await supa
         .from('turns')
@@ -537,38 +560,70 @@ if (!bill.ok) {
       if (tErr) throw tErr;
 
       propertyName = t?.properties?.name || null;
+      cleanerId = t?.cleaner_id || null;
+      propertyId = t?.property_id || null;
 
-      if (t?.cleaner_id) {
-        const { data: c } = await supa.from('cleaners').select('phone').eq('id', t.cleaner_id).maybeSingle();
+      if (cleanerId) {
+        const { data: c } = await supa.from('cleaners').select('phone').eq('id', cleanerId).maybeSingle();
         cleanerPhone = c?.phone || null;
       }
-      if (!cleanerPhone && t?.property_id) {
+      if (!cleanerPhone && propertyId) {
         const { data: pc } = await supa
           .from('property_cleaners')
           .select('cleaners(phone)')
-          .eq('property_id', t.property_id)
+          .eq('property_id', propertyId)
           .limit(1)
           .maybeSingle();
         cleanerPhone = pc?.cleaners?.phone || null;
       }
 
-      if (cleanerPhone) {
-        const base =
-          process.env.APP_BASE_URL ||
-          process.env.NEXT_PUBLIC_APP_BASE_URL ||
-          process.env.NEXT_PUBLIC_SITE_URL ||
-          'https://www.turnqa.com';
+      // ✅ NEW LOGS (and a hard fail) — BEFORE calling Twilio
+      const rawPhone = cleanerPhone;
+      const cleaned = normalizeE164(rawPhone);
 
-        const link = `${base.replace(/\/+$/, '')}/turns/${encodeURIComponent(turnId)}/capture?tab=needs-fix`;
+      console.log('[needs-fix] sms debug', {
+        turnId,
+        propertyId,
+        cleanerId,
+        propertyName,
+        rawPhone,
+        cleaned,
+        hasTwilioEnv: Boolean(
+          process.env.TWILIO_ACCOUNT_SID &&
+          process.env.TWILIO_AUTH_TOKEN &&
+          process.env.TWILIO_FROM_NUMBER
+        ),
+      });
 
-        const msg =
-          `TurnQA: Updates needed${propertyName ? ` at ${propertyName}` : ''}.\n` +
-          (summaryLegacy ? `Note: ${summaryLegacy}\n` : '') +
-          (flagged > 0 ? `${flagged} item(s) marked.\n` : '') +
-          `Resume here: ${link}`;
-
-        await sendSmsMinimal(cleanerPhone, msg);
+      // ✅ Hard fail with a clear message if missing/invalid (so you don't get Twilio 21211)
+      if (!cleaned || !isLikelyE164(cleaned)) {
+        return res.status(400).json({
+          error: 'Cleaner phone missing or invalid (must be E.164 like +14805551234)',
+          code: 'INVALID_CLEANER_PHONE',
+          rawPhone,
+          cleaned,
+          cleanerId,
+          propertyId,
+          turnId,
+        });
       }
+
+      const base =
+        process.env.APP_BASE_URL ||
+        process.env.NEXT_PUBLIC_APP_BASE_URL ||
+        process.env.NEXT_PUBLIC_SITE_URL ||
+        'https://www.turnqa.com';
+
+      const link = `${base.replace(/\/+$/, '')}/turns/${encodeURIComponent(turnId)}/capture?tab=needs-fix`;
+
+      const msg =
+        `TurnQA: Updates needed${propertyName ? ` at ${propertyName}` : ''}.\n` +
+        (summaryLegacy ? `Note: ${summaryLegacy}\n` : '') +
+        (flagged > 0 ? `${flagged} item(s) marked.\n` : '') +
+        `Resume here: ${link}`;
+
+      // Send using the cleaned phone
+      await sendSmsMinimal(cleaned, msg);
     }
 
     return res.json({
