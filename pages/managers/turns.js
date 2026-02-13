@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/router';
 import ChromeDark from '../../components/ChromeDark';
 import { ui } from '../../lib/theme';
+import { supabaseBrowser } from '@/lib/supabaseBrowser';
 
 // ---- Error boundary so a render-time bug won't 500 the page ----
 import React from 'react';
@@ -83,6 +84,9 @@ function ManagerTurnsInner() {
       try {
         const raw = localStorage.getItem('turnqa-auth');
         const token = raw ? JSON.parse(raw)?.access_token : null;
+        const sb = supabaseBrowser();
+        const { data: { session } } = await sb.auth.getSession();
+        const token = session?.access_token;
 
         const r = await fetch('/api/billing/status', {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
