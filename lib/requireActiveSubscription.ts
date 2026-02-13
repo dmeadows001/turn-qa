@@ -2,9 +2,11 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { createServerSupabase } from '@/lib/supabaseServer';
 
-function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+type Thenable<T> = { then: (onfulfilled?: (value: T) => any, onrejected?: (reason: any) => any) => any };
+
+function withTimeout<T>(p: Thenable<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
-    p,
+    Promise.resolve(p as any) as Promise<T>, // wraps thenables/builders into a real Promise
     new Promise<T>((_, reject) =>
       setTimeout(() => reject(new Error(`Timeout after ${ms}ms at ${label}`)), ms)
     ),
