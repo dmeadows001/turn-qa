@@ -153,7 +153,14 @@ function ManagerTurnsInner() {
       const pid = scopedPropertyId || propertyId;
       if (pid) qs.set('property_id', pid);
 
-      const r = await fetch(`/api/list-turns?${qs.toString()}`);
+      const sb = supabaseBrowser();
+      const { data: { session } } = await sb.auth.getSession();
+      const token = session?.access_token;
+
+      const r = await fetch(`/api/list-turns?${qs.toString()}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+
 
       // If this API throws a 500, surface the JSON error text in the UI:
       let j = {};
