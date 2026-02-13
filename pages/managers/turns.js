@@ -132,16 +132,6 @@ function ManagerTurnsInner() {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState('');
 
-  if (!billingChecked) {
-    return (
-      <ChromeDark title="Manager — Turns">
-        <section style={ui.sectionGrid}>
-          <div style={ui.card}>Checking subscription…</div>
-        </section>
-      </ChromeDark>
-    );
-  }
-
   // If the URL is scoped, force the UI filter to match it (and lock it)
   useEffect(() => {
     if (scopedPropertyId) setPropertyId(scopedPropertyId);
@@ -221,7 +211,15 @@ function ManagerTurnsInner() {
     // remove property_id from query but keep the rest of the page
     router.push('/managers/turns');
   }
-
+  if (!billingChecked) {
+    return (
+      <ChromeDark title="Manager — Turns">
+        <section style={ui.sectionGrid}>
+          <div style={ui.card}>Checking subscription…</div>
+        </section>
+      </ChromeDark>
+    );
+  }
   return (
     <ChromeDark title="Manager — Turns">
       <section style={ui.sectionGrid}>
