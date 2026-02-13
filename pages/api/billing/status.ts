@@ -1,12 +1,11 @@
 // pages/api/billing/status.ts
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { createServerSupabase } from '@/lib/supabaseServer';
 import { supabaseAdmin as _admin } from '@/lib/supabaseAdmin';
 
 const admin = typeof _admin === 'function' ? _admin() : _admin;
 
 function getBearerToken(req: NextApiRequest) {
-  const h = (req.headers.authorization || '').trim();
+  const h = req.headers.authorization || '';
   const m = h.match(/^Bearer\s+(.+)$/i);
   return m ? m[1].trim() : null;
 }
@@ -28,28 +27,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).json({ error: 'Method Not Allowed' });
   }
 
-  // 1) Prefer Authorization: Bearer <jwt> (works with your localStorage-based session)
+  // ✅ Use Bearer auth (your app stores session in localStorage)
   const token = getBearerToken(req);
+  if (!token) return res.status(401).json({ error: 'Missing Authorization token' });
 
-  let userId: string | null = null;
+  const { data: userData, error: userErr } = await admin.auth.getUser(token);
+  const user = userData?.user || null;
+  if (userErr || !user) return res.status(401).json({ error: 'Not signed in' });
 
-  if (token) {
-    const { data, error } = await admin.auth.getUser(token);
-    if (error || !data?.user) return res.status(401).json({ error: 'Not signed in' });
-    userId = data.user.id;
-  } else {
-    // 2) Fallback: cookie-based auth (works if SB cookies exist)
-    const supabase = createServerSupabase(req, res);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return res.status(401).json({ error: 'Not signed in' });
-    userId = user.id;
-  }
-
-  // Read profile via service role so this works regardless of RLS
   const { data: profile, error } = await admin
     .from('profiles')
     .select('subscription_status, active_until, trial_ends_at')
-    .eq('id', userId)
+    .eq('id', user.id)
     .maybeSingle();
 
   if (error) return res.status(500).json({ error: error.message });
