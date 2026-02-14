@@ -17,18 +17,20 @@ export default function Billing() {
     setNotSignedIn(false);
 
     try {
-      // ✅ Get current session token (same pattern as managers/turns.js)
+      // ✅ Get access token from client session and send it to the API
       const sb = supabaseBrowser();
-      const {
-        data: { session },
-      } = await sb.auth.getSession();
+      const { data: { session } } = await sb.auth.getSession();
+      const token = session?.access_token;
 
-      const token = session?.access_token || null;
+      if (!token) {
+        setNotSignedIn(true);
+        throw new Error('Please sign in to start checkout.');
+      }
 
       const res = await fetch('/api/billing/checkout', {
         method: 'POST',
         headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          Authorization: `Bearer ${token}`,
         },
       });
 
@@ -58,13 +60,11 @@ export default function Billing() {
         style={{
           minHeight: 'calc(100vh - 56px)',
           background:
-            'var(--bg), radial-gradient(1000px 600px at 80% -10%, rgba(124,92,255,.16), transparent 60%), radial-gradient(800px 500px at 0% 100%, rgba(0,229,255,.08), transparent 60%), linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0) 40%)',
+            'var(--bg), radial-gradient(1000px 600px at 80% -10%, rgba(124,92,255,.16), transparent 60%), radial-gradient(800px 500px at 0% 100%, rgba(0,229,255,.08), transparent 60%), linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0) 40%)'
         }}
       >
         <Card className="auth-card">
-          <h1 className="h1 accent" style={{ marginBottom: 12 }}>
-            Your plan
-          </h1>
+          <h1 className="h1 accent" style={{ marginBottom: 12 }}>Your plan</h1>
           <p className="muted" style={{ marginBottom: 16 }}>
             Your trial may have ended. Start a subscription to keep using TurnQA. Cancel anytime.
           </p>
