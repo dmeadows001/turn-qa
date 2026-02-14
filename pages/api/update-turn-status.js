@@ -1,5 +1,6 @@
 // pages/api/update-turn-status.js
 import { requireActiveSubscription } from '@/lib/requireActiveSubscription';
+import { supabaseAdmin as _admin } from '@/lib/supabaseAdmin';
 
 const supa = typeof _admin === 'function' ? _admin() : _admin;
 
