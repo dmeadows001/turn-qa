@@ -4,10 +4,10 @@ import Stripe from 'stripe';
 import { createServerSupabase } from '@/lib/supabaseServer';
 import { supabaseAdmin as _admin } from '@/lib/supabaseAdmin';
 
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, { apiVersion: '2024-06-20' });
+
 // Works whether supabaseAdmin exports an instance or a factory
 const supaAdmin = typeof _admin === 'function' ? _admin() : _admin;
-
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, { apiVersion: '2024-06-20' });
 
 function siteBase() {
   return (
@@ -20,34 +20,42 @@ function siteBase() {
 }
 
 function getBearerToken(req: NextApiRequest) {
-  const h = req.headers.authorization || '';
+  const h = (req.headers.authorization || '').trim();
   const m = h.match(/^Bearer\s+(.+)$/i);
   return m ? m[1].trim() : null;
 }
 
-/**
- * Accepts EITHER:
- *  1) cookie-based auth (createServerSupabase bound to req/res cookies)
- *  2) Authorization: Bearer <access_token>
- */
-async function getUserFromRequest(req: NextApiRequest, res: NextApiResponse) {
-  // 1) Cookie-based session
-  try {
-    const supaCookie = createServerSupabase(req, res);
-    const { data, error } = await supaCookie.auth.getUser();
-    if (!error && data?.user) return { user: data.user, authSource: 'cookie' as const };
-  } catch {
-    // ignore
+// Accepts either STRIPE_PRICE_ID = price_... OR prod_...
+async function resolvePriceId(idFromEnv: string) {
+  const raw = (idFromEnv || '').trim();
+  if (!raw) throw new Error('Missing STRIPE_PRICE_ID');
+
+  // Normal case
+  if (raw.startsWith('price_')) return raw;
+
+  // If user accidentally configured a Product ID, convert to its default price
+  if (raw.startsWith('prod_')) {
+    const product = await stripe.products.retrieve(raw);
+    const dp: any = product.default_price;
+
+    const priceId =
+      typeof dp === 'string'
+        ? dp
+        : (dp && typeof dp === 'object' && typeof dp.id === 'string')
+          ? dp.id
+          : null;
+
+    if (!priceId || !String(priceId).startsWith('price_')) {
+      throw new Error(
+        `STRIPE_PRICE_ID is a Product (${raw}) but it has no usable default_price. In Stripe, set a default price for the product or use a price_... id.`
+      );
+    }
+    return priceId;
   }
 
-  // 2) Bearer token
-  const token = getBearerToken(req);
-  if (token) {
-    const { data, error } = await supaAdmin.auth.getUser(token);
-    if (!error && data?.user) return { user: data.user, authSource: 'bearer' as const };
-  }
-
-  return { user: null, authSource: 'none' as const };
+  throw new Error(
+    `STRIPE_PRICE_ID must start with price_ (recommended) or prod_ (product with default_price). Got: ${raw}`
+  );
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -56,62 +64,84 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  if (!process.env.STRIPE_PRICE_ID) return res.status(500).json({ error: 'Missing STRIPE_PRICE_ID' });
   if (!process.env.STRIPE_SECRET_KEY) return res.status(500).json({ error: 'Missing STRIPE_SECRET_KEY' });
+  if (!process.env.STRIPE_PRICE_ID) return res.status(500).json({ error: 'Missing STRIPE_PRICE_ID' });
 
   try {
-    const { user, authSource } = await getUserFromRequest(req, res);
+    // 1) Identify user (cookie session OR Bearer token)
+    const supabase = createServerSupabase(req, res);
 
-    if (!user?.id || !user?.email) {
-      return res.status(401).json({
-        error: 'Please sign in to start checkout.',
-        authSource,
-      });
+    let userId: string | null = null;
+    let email: string | null = null;
+
+    const cookieResp = await supabase.auth.getUser();
+    if (cookieResp?.data?.user?.id) {
+      userId = cookieResp.data.user.id;
+      email = cookieResp.data.user.email ?? null;
     }
 
-    // Get existing stripe_customer_id (if any)
+    // If cookie session isn't present, try Authorization: Bearer <jwt>
+    if (!userId) {
+      const token = getBearerToken(req);
+      if (token) {
+        const { data, error } = await supaAdmin.auth.getUser(token);
+        if (!error && data?.user?.id) {
+          userId = data.user.id;
+          email = data.user.email ?? null;
+        }
+      }
+    }
+
+    if (!userId || !email) {
+      return res.status(401).json({ error: 'Please sign in to start checkout.' });
+    }
+
+    // 2) Ensure we have a Stripe customer id
     const { data: profile, error: pErr } = await supaAdmin
       .from('profiles')
       .select('stripe_customer_id')
-      .eq('id', user.id)
+      .eq('id', userId)
       .maybeSingle();
 
-    if (pErr) return res.status(500).json({ error: pErr.message });
+    if (pErr) return res.status(500).json({ error: pErr.message || 'Could not load profile' });
 
     let customerId = profile?.stripe_customer_id || null;
 
-    // Create Stripe customer if missing
     if (!customerId) {
       const cust = await stripe.customers.create({
-        email: user.email,
-        metadata: { supabase_user_id: user.id },
+        email,
+        metadata: { supabase_user_id: userId },
       });
       customerId = cust.id;
 
       const { error: uErr } = await supaAdmin
         .from('profiles')
         .update({ stripe_customer_id: customerId })
-        .eq('id', user.id);
+        .eq('id', userId);
 
-      if (uErr) return res.status(500).json({ error: uErr.message });
+      if (uErr) return res.status(500).json({ error: uErr.message || 'Could not update profile' });
     }
 
-    const base = siteBase();
+    // 3) Resolve price id safely (supports prod_ via default_price)
+    const priceId = await resolvePriceId(process.env.STRIPE_PRICE_ID!);
 
+    // 4) Create Checkout session
+    const base = siteBase();
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
       customer: customerId,
-      line_items: [{ price: process.env.STRIPE_PRICE_ID!, quantity: 1 }],
+      line_items: [{ price: priceId, quantity: 1 }],
       allow_promotion_codes: true,
       success_url: `${base}/managers/turns?billing=success`,
       cancel_url: `${base}/billing?canceled=1`,
     });
 
     if (!session?.url) return res.status(500).json({ error: 'Stripe did not return a checkout URL.' });
-
     return res.status(200).json({ url: session.url });
   } catch (err: any) {
-    console.error('checkout error', err);
-    return res.status(500).json({ error: err?.message || 'Checkout session error' });
+    // Make Stripe errors readable
+    const msg = err?.message || 'Checkout session error';
+    console.error('[billing/checkout] error', msg, err);
+    return res.status(500).json({ error: msg });
   }
 }
