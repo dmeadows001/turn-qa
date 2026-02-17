@@ -5,23 +5,19 @@ import { supabaseAdmin as _admin } from '@/lib/supabaseAdmin';
 
 export const config = {
   api: {
-    bodyParser: false, // Stripe needs raw body for signature verification
+    bodyParser: false, // Stripe needs the raw body to verify signatures
   },
 };
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2024-06-20',
-});
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, { apiVersion: '2024-06-20' });
 
-// supabaseAdmin is a factory function in this repo
+// IMPORTANT: supabaseAdmin is a factory function in this repo
 const supa = typeof _admin === 'function' ? _admin() : _admin;
 
 // ---- helpers ----
 async function readRawBody(req: NextApiRequest): Promise<Buffer> {
   const chunks: Buffer[] = [];
-  for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
+  for await (const chunk of req) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   return Buffer.concat(chunks);
 }
 
@@ -34,10 +30,7 @@ function pickPlanFromSubscription(sub: Stripe.Subscription) {
   const item = sub.items?.data?.[0];
   const priceId = item?.price?.id || null;
   const productId =
-    typeof item?.price?.product === 'string'
-      ? item.price.product
-      : item?.price?.product?.id || null;
-
+    typeof item?.price?.product === 'string' ? item.price.product : item?.price?.product?.id || null;
   return { priceId, productId };
 }
 
@@ -54,24 +47,17 @@ async function findUserIdByCustomerId(customerId: string): Promise<string | null
 
 async function applySubscriptionToProfile(sub: Stripe.Subscription) {
   const customerId = String(sub.customer || '');
-  if (!customerId) {
-    console.warn('[stripe webhook] subscription missing customer');
-    return;
-  }
+  if (!customerId) return;
 
   const userId = await findUserIdByCustomerId(customerId);
-  if (!userId) {
-    console.warn('[stripe webhook] no profile found for customer', customerId);
-    return;
-  }
+  if (!userId) return;
 
   const status = sub.status || null;
   const activeUntil = toIsoFromUnixSeconds(sub.current_period_end);
   const trialEndsAt = toIsoFromUnixSeconds(sub.trial_end);
-
   const { priceId, productId } = pickPlanFromSubscription(sub);
 
-  const patch = {
+  const patch: Record<string, any> = {
     subscription_status: status,
     active_until: activeUntil,
     trial_ends_at: trialEndsAt,
@@ -81,7 +67,7 @@ async function applySubscriptionToProfile(sub: Stripe.Subscription) {
 
     stripe_price_id: priceId,
     stripe_product_id: productId,
-    plan: priceId, // stable key; map priceId -> tier later
+    plan: priceId, // store priceId as your plan key
   };
 
   const { error } = await supa.from('profiles').update(patch).eq('id', userId);
@@ -99,23 +85,23 @@ async function applySubscriptionToProfile(sub: Stripe.Subscription) {
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  // Handy for curl/browser sanity checks — Stripe will still POST with signature
+  // ✅ Allow quick “is this deployed?” checks
   if (req.method === 'GET' || req.method === 'HEAD') {
-    return res.status(200).send('ok');
+    return res.status(200).json({ ok: true });
   }
 
+  // Stripe will POST webhooks
   if (req.method !== 'POST') {
     res.setHeader('Allow', ['POST', 'GET', 'HEAD']);
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
   if (!process.env.STRIPE_SECRET_KEY) return res.status(500).json({ error: 'Missing STRIPE_SECRET_KEY' });
-  if (!process.env.STRIPE_WEBHOOK_SECRET) return res.status(500).json({ error: 'Missing STRIPE_WEBHOOK_SECRET' });
+  if (!process.env.STRIPE_WEBHOOK_SECRET)
+    return res.status(500).json({ error: 'Missing STRIPE_WEBHOOK_SECRET' });
 
   const sig = req.headers['stripe-signature'];
-  if (!sig || typeof sig !== 'string') {
-    return res.status(400).json({ error: 'Missing stripe-signature' });
-  }
+  if (!sig || typeof sig !== 'string') return res.status(400).json({ error: 'Missing stripe-signature' });
 
   let event: Stripe.Event;
 
@@ -130,8 +116,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     switch (event.type) {
       case 'checkout.session.completed': {
-        // Not required for your DB sync (subscription events handle truth),
-        // but useful for visibility.
+        // Optional: log only
         const session = event.data.object as Stripe.Checkout.Session;
         console.log('[stripe webhook] checkout.session.completed', {
           id: session.id,
@@ -149,16 +134,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         break;
       }
 
-      case 'invoice.payment_failed': {
-        const inv = event.data.object as Stripe.Invoice;
-        console.log('[stripe webhook] invoice.payment_failed', {
-          invoice: inv.id,
-          customer: inv.customer,
-        });
-        break;
-      }
-
       default:
+        // Acknowledge all events
         break;
     }
 
