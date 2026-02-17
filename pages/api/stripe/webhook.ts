@@ -4,20 +4,24 @@ import Stripe from 'stripe';
 import { supabaseAdmin as _admin } from '@/lib/supabaseAdmin';
 
 export const config = {
-  api: { bodyParser: false }, // Stripe requires raw body for signature verification
+  api: {
+    bodyParser: false, // Stripe needs raw body for signature verification
+  },
 };
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2024-06-20',
 });
 
-// Works whether supabaseAdmin exports an instance or a factory
+// supabaseAdmin is a factory function in this repo
 const supa = typeof _admin === 'function' ? _admin() : _admin;
 
 // ---- helpers ----
 async function readRawBody(req: NextApiRequest): Promise<Buffer> {
   const chunks: Buffer[] = [];
-  for await (const chunk of req) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  for await (const chunk of req) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
   return Buffer.concat(chunks);
 }
 
@@ -33,6 +37,7 @@ function pickPlanFromSubscription(sub: Stripe.Subscription) {
     typeof item?.price?.product === 'string'
       ? item.price.product
       : item?.price?.product?.id || null;
+
   return { priceId, productId };
 }
 
@@ -66,11 +71,7 @@ async function applySubscriptionToProfile(sub: Stripe.Subscription) {
 
   const { priceId, productId } = pickPlanFromSubscription(sub);
 
-  // Your profiles table columns (confirmed):
-  // id, email, full_name, phone, subscription_status, trial_ends_at, active_until,
-  // stripe_customer_id, plus you added:
-  // plan, stripe_price_id, stripe_product_id, stripe_subscription_id
-  const patch: Record<string, any> = {
+  const patch = {
     subscription_status: status,
     active_until: activeUntil,
     trial_ends_at: trialEndsAt,
@@ -80,7 +81,7 @@ async function applySubscriptionToProfile(sub: Stripe.Subscription) {
 
     stripe_price_id: priceId,
     stripe_product_id: productId,
-    plan: priceId, // stable plan key; map priceId -> tier name later if you want
+    plan: priceId, // stable key; map priceId -> tier later
   };
 
   const { error } = await supa.from('profiles').update(patch).eq('id', userId);
@@ -98,8 +99,13 @@ async function applySubscriptionToProfile(sub: Stripe.Subscription) {
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // Handy for curl/browser sanity checks — Stripe will still POST with signature
+  if (req.method === 'GET' || req.method === 'HEAD') {
+    return res.status(200).send('ok');
+  }
+
   if (req.method !== 'POST') {
-    res.setHeader('Allow', ['POST']);
+    res.setHeader('Allow', ['POST', 'GET', 'HEAD']);
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
@@ -107,7 +113,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!process.env.STRIPE_WEBHOOK_SECRET) return res.status(500).json({ error: 'Missing STRIPE_WEBHOOK_SECRET' });
 
   const sig = req.headers['stripe-signature'];
-  if (!sig || typeof sig !== 'string') return res.status(400).json({ error: 'Missing stripe-signature' });
+  if (!sig || typeof sig !== 'string') {
+    return res.status(400).json({ error: 'Missing stripe-signature' });
+  }
 
   let event: Stripe.Event;
 
@@ -122,6 +130,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     switch (event.type) {
       case 'checkout.session.completed': {
+        // Not required for your DB sync (subscription events handle truth),
+        // but useful for visibility.
         const session = event.data.object as Stripe.Checkout.Session;
         console.log('[stripe webhook] checkout.session.completed', {
           id: session.id,
@@ -143,7 +153,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const inv = event.data.object as Stripe.Invoice;
         console.log('[stripe webhook] invoice.payment_failed', {
           invoice: inv.id,
-          customerId: String(inv.customer || ''),
+          customer: inv.customer,
         });
         break;
       }
