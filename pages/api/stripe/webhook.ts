@@ -1,91 +1,160 @@
 // pages/api/stripe/webhook.ts
 import type { NextApiRequest, NextApiResponse } from 'next';
 import Stripe from 'stripe';
-import { supabaseAdmin } from '@/lib/supabaseAdmin';
+import { supabaseAdmin as _admin } from '@/lib/supabaseAdmin';
 
-export const config = { api: { bodyParser: false } };
+export const config = {
+  api: { bodyParser: false }, // Stripe requires raw body for signature verification
+};
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, { apiVersion: '2024-06-20' });
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+  apiVersion: '2024-06-20',
+});
 
-function getCustomerIdFromSubscription(sub: Stripe.Subscription): string | null {
-  const customerId = typeof sub.customer === 'string' ? sub.customer : sub.customer?.id;
-  return customerId ? String(customerId) : null;
+// Works whether supabaseAdmin exports an instance or a factory
+const supa = typeof _admin === 'function' ? _admin() : _admin;
+
+// ---- helpers ----
+async function readRawBody(req: NextApiRequest): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  return Buffer.concat(chunks);
+}
+
+function toIsoFromUnixSeconds(sec: number | null | undefined) {
+  if (!sec) return null;
+  return new Date(sec * 1000).toISOString();
+}
+
+function pickPlanFromSubscription(sub: Stripe.Subscription) {
+  const item = sub.items?.data?.[0];
+  const priceId = item?.price?.id || null;
+  const productId =
+    typeof item?.price?.product === 'string'
+      ? item.price.product
+      : item?.price?.product?.id || null;
+  return { priceId, productId };
+}
+
+async function findUserIdByCustomerId(customerId: string): Promise<string | null> {
+  const { data, error } = await supa
+    .from('profiles')
+    .select('id')
+    .eq('stripe_customer_id', customerId)
+    .maybeSingle();
+
+  if (error) throw error;
+  return data?.id || null;
+}
+
+async function applySubscriptionToProfile(sub: Stripe.Subscription) {
+  const customerId = String(sub.customer || '');
+  if (!customerId) {
+    console.warn('[stripe webhook] subscription missing customer');
+    return;
+  }
+
+  const userId = await findUserIdByCustomerId(customerId);
+  if (!userId) {
+    console.warn('[stripe webhook] no profile found for customer', customerId);
+    return;
+  }
+
+  const status = sub.status || null;
+  const activeUntil = toIsoFromUnixSeconds(sub.current_period_end);
+  const trialEndsAt = toIsoFromUnixSeconds(sub.trial_end);
+
+  const { priceId, productId } = pickPlanFromSubscription(sub);
+
+  // Your profiles table columns (confirmed):
+  // id, email, full_name, phone, subscription_status, trial_ends_at, active_until,
+  // stripe_customer_id, plus you added:
+  // plan, stripe_price_id, stripe_product_id, stripe_subscription_id
+  const patch: Record<string, any> = {
+    subscription_status: status,
+    active_until: activeUntil,
+    trial_ends_at: trialEndsAt,
+
+    stripe_customer_id: customerId,
+    stripe_subscription_id: sub.id,
+
+    stripe_price_id: priceId,
+    stripe_product_id: productId,
+    plan: priceId, // stable plan key; map priceId -> tier name later if you want
+  };
+
+  const { error } = await supa.from('profiles').update(patch).eq('id', userId);
+  if (error) throw error;
+
+  console.log('[stripe webhook] profile updated', {
+    userId,
+    customerId,
+    subId: sub.id,
+    status,
+    priceId,
+    activeUntil,
+    trialEndsAt,
+  });
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const sig = req.headers['stripe-signature'] as string;
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', ['POST']);
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
 
-  // Read raw body for Stripe signature verification
-  const buf = await new Promise<Buffer>((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    req.on('data', c => chunks.push(c as Buffer));
-    req.on('end', () => resolve(Buffer.concat(chunks)));
-    req.on('error', reject);
-  });
+  if (!process.env.STRIPE_SECRET_KEY) return res.status(500).json({ error: 'Missing STRIPE_SECRET_KEY' });
+  if (!process.env.STRIPE_WEBHOOK_SECRET) return res.status(500).json({ error: 'Missing STRIPE_WEBHOOK_SECRET' });
+
+  const sig = req.headers['stripe-signature'];
+  if (!sig || typeof sig !== 'string') return res.status(400).json({ error: 'Missing stripe-signature' });
 
   let event: Stripe.Event;
+
   try {
-    event = stripe.webhooks.constructEvent(buf, sig, process.env.STRIPE_WEBHOOK_SECRET!);
+    const raw = await readRawBody(req);
+    event = stripe.webhooks.constructEvent(raw, sig, process.env.STRIPE_WEBHOOK_SECRET);
   } catch (err: any) {
-    return res.status(400).send(`Webhook Error: ${err.message}`);
+    console.error('[stripe webhook] signature verify failed', err?.message || err);
+    return res.status(400).json({ error: `Webhook Error: ${err?.message || 'bad signature'}` });
   }
 
-  // Use an admin client instance
-  const supa = supabaseAdmin();
+  try {
+    switch (event.type) {
+      case 'checkout.session.completed': {
+        const session = event.data.object as Stripe.Checkout.Session;
+        console.log('[stripe webhook] checkout.session.completed', {
+          id: session.id,
+          customer: session.customer,
+          subscription: session.subscription,
+        });
+        break;
+      }
 
-  // Handle events
-  if (event.type === 'checkout.session.completed') {
-    return res.json({ ok: true });
-  }
+      case 'customer.subscription.created':
+      case 'customer.subscription.updated':
+      case 'customer.subscription.deleted': {
+        const sub = event.data.object as Stripe.Subscription;
+        await applySubscriptionToProfile(sub);
+        break;
+      }
 
-  if (event.type === 'customer.subscription.updated' || event.type === 'customer.subscription.created') {
-    const sub = event.data.object as Stripe.Subscription;
-    const currentPeriodEnd = new Date(sub.current_period_end * 1000).toISOString();
+      case 'invoice.payment_failed': {
+        const inv = event.data.object as Stripe.Invoice;
+        console.log('[stripe webhook] invoice.payment_failed', {
+          invoice: inv.id,
+          customerId: String(inv.customer || ''),
+        });
+        break;
+      }
 
-    const customerId = getCustomerIdFromSubscription(sub);
-    if (!customerId) return res.json({ ok: true });
-
-    const { data: profile } = await supa
-      .from('profiles')
-      .select('id')
-      .eq('stripe_customer_id', customerId)
-      .maybeSingle();
-
-    if (profile) {
-      await supa
-        .from('profiles')
-        .update({
-          subscription_status: sub.status === 'active' ? 'active' : (sub.status as any),
-          active_until: currentPeriodEnd
-        })
-        .eq('id', profile.id);
+      default:
+        break;
     }
 
-    return res.json({ ok: true });
+    return res.status(200).json({ received: true });
+  } catch (err: any) {
+    console.error('[stripe webhook] handler failed', err?.message || err);
+    return res.status(500).json({ error: err?.message || 'Webhook handler failed' });
   }
-
-  if (event.type === 'customer.subscription.deleted') {
-    const sub = event.data.object as Stripe.Subscription;
-
-    const customerId = getCustomerIdFromSubscription(sub);
-    if (!customerId) return res.json({ ok: true });
-
-    const { data: profile } = await supa
-      .from('profiles')
-      .select('id')
-      .eq('stripe_customer_id', customerId)
-      .maybeSingle();
-
-    if (profile) {
-      await supa
-        .from('profiles')
-        .update({ subscription_status: 'canceled' })
-        .eq('id', profile.id);
-    }
-
-    return res.json({ ok: true });
-  }
-
-  // Unhandled event types
-  return res.json({ ok: true });
 }
