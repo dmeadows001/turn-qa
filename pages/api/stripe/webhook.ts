@@ -4,9 +4,7 @@ import Stripe from 'stripe';
 import { supabaseAdmin as _admin } from '@/lib/supabaseAdmin';
 
 export const config = {
-  api: {
-    bodyParser: false, // Stripe needs the raw body to verify signatures
-  },
+  api: { bodyParser: false }, // Stripe requires raw body for signature verification
 };
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, { apiVersion: '2024-06-20' });
@@ -14,7 +12,7 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, { apiVersion: '2024-06
 // IMPORTANT: supabaseAdmin is a factory function in this repo
 const supa = typeof _admin === 'function' ? _admin() : _admin;
 
-// ---- helpers ----
+// ---- raw body helper ----
 async function readRawBody(req: NextApiRequest): Promise<Buffer> {
   const chunks: Buffer[] = [];
   for await (const chunk of req) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
@@ -22,15 +20,39 @@ async function readRawBody(req: NextApiRequest): Promise<Buffer> {
 }
 
 function toIsoFromUnixSeconds(sec: number | null | undefined) {
-  if (!sec) return null;
+  if (!sec || typeof sec !== 'number') return null;
   return new Date(sec * 1000).toISOString();
 }
 
+function getCustomerId(sub: Stripe.Subscription): string | null {
+  const c = sub.customer as any;
+  if (!c) return null;
+  return typeof c === 'string' ? c : (c.id ? String(c.id) : null);
+}
+
+// Stripe sometimes has current_period_end at sub.current_period_end,
+// and sometimes only inside items.data[0].current_period_end depending on event shape.
+function getCurrentPeriodEndSeconds(sub: Stripe.Subscription): number | null {
+  const root = (sub as any).current_period_end;
+  if (typeof root === 'number') return root;
+
+  const item0 = sub.items?.data?.[0] as any;
+  const nested = item0?.current_period_end;
+  if (typeof nested === 'number') return nested;
+
+  return null;
+}
+
 function pickPlanFromSubscription(sub: Stripe.Subscription) {
-  const item = sub.items?.data?.[0];
+  const item = sub.items?.data?.[0] as any;
   const priceId = item?.price?.id || null;
+
+  const productRaw = item?.price?.product;
   const productId =
-    typeof item?.price?.product === 'string' ? item.price.product : item?.price?.product?.id || null;
+    typeof productRaw === 'string'
+      ? productRaw
+      : (productRaw?.id ? productRaw.id : null);
+
   return { priceId, productId };
 }
 
@@ -46,28 +68,55 @@ async function findUserIdByCustomerId(customerId: string): Promise<string | null
 }
 
 async function applySubscriptionToProfile(sub: Stripe.Subscription) {
-  const customerId = String(sub.customer || '');
-  if (!customerId) return;
+  const customerId = getCustomerId(sub);
+  if (!customerId) {
+    console.warn('[stripe webhook] subscription missing customer');
+    return;
+  }
 
   const userId = await findUserIdByCustomerId(customerId);
-  if (!userId) return;
+  if (!userId) {
+    console.warn('[stripe webhook] no profile found for customer', customerId);
+    return;
+  }
 
   const status = sub.status || null;
-  const activeUntil = toIsoFromUnixSeconds(sub.current_period_end);
-  const trialEndsAt = toIsoFromUnixSeconds(sub.trial_end);
+
+  const periodEndSec = getCurrentPeriodEndSeconds(sub);
+  const activeUntil = toIsoFromUnixSeconds(periodEndSec);
+
+  const trialEndsAt = toIsoFromUnixSeconds((sub as any).trial_end);
+
   const { priceId, productId } = pickPlanFromSubscription(sub);
+
+  // Key rule:
+  // - If Stripe says cancel_at_period_end=true, keep active_until as the current_period_end.
+  // - If Stripe says canceled immediately (cancel_at_period_end=false, status=canceled),
+  //   active_until may be null/ended; we'll set it to ended_at if period end isn't available.
+  let finalActiveUntil = activeUntil;
+
+  const cancelAtPeriodEnd = Boolean((sub as any).cancel_at_period_end);
+  const endedAtIso = toIsoFromUnixSeconds((sub as any).ended_at);
+
+  if (!finalActiveUntil) {
+    if (cancelAtPeriodEnd) {
+      // should normally have a period end; but if missing, fall back to ended_at if present
+      finalActiveUntil = endedAtIso;
+    } else if (status === 'canceled') {
+      // immediate cancel = no future access
+      finalActiveUntil = endedAtIso; // can be null, that’s okay
+    }
+  }
 
   const patch: Record<string, any> = {
     subscription_status: status,
-    active_until: activeUntil,
+    active_until: finalActiveUntil,
     trial_ends_at: trialEndsAt,
-
     stripe_customer_id: customerId,
     stripe_subscription_id: sub.id,
-
     stripe_price_id: priceId,
     stripe_product_id: productId,
-    plan: priceId, // store priceId as your plan key
+    plan: priceId, // simplest stable plan key
   };
 
   const { error } = await supa.from('profiles').update(patch).eq('id', userId);
@@ -78,27 +127,22 @@ async function applySubscriptionToProfile(sub: Stripe.Subscription) {
     customerId,
     subId: sub.id,
     status,
-    priceId,
-    activeUntil,
+    cancelAtPeriodEnd,
+    activeUntil: finalActiveUntil,
     trialEndsAt,
+    priceId,
+    productId,
   });
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  // ✅ Allow quick “is this deployed?” checks
-  if (req.method === 'GET' || req.method === 'HEAD') {
-    return res.status(200).json({ ok: true });
-  }
-
-  // Stripe will POST webhooks
   if (req.method !== 'POST') {
-    res.setHeader('Allow', ['POST', 'GET', 'HEAD']);
+    res.setHeader('Allow', ['POST']);
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
   if (!process.env.STRIPE_SECRET_KEY) return res.status(500).json({ error: 'Missing STRIPE_SECRET_KEY' });
-  if (!process.env.STRIPE_WEBHOOK_SECRET)
-    return res.status(500).json({ error: 'Missing STRIPE_WEBHOOK_SECRET' });
+  if (!process.env.STRIPE_WEBHOOK_SECRET) return res.status(500).json({ error: 'Missing STRIPE_WEBHOOK_SECRET' });
 
   const sig = req.headers['stripe-signature'];
   if (!sig || typeof sig !== 'string') return res.status(400).json({ error: 'Missing stripe-signature' });
@@ -115,8 +159,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     switch (event.type) {
+      case 'customer.subscription.created':
+      case 'customer.subscription.updated':
+      case 'customer.subscription.deleted': {
+        const sub = event.data.object as Stripe.Subscription;
+        await applySubscriptionToProfile(sub);
+        break;
+      }
+
       case 'checkout.session.completed': {
-        // Optional: log only
+        // Optional logging only
         const session = event.data.object as Stripe.Checkout.Session;
         console.log('[stripe webhook] checkout.session.completed', {
           id: session.id,
@@ -126,16 +178,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         break;
       }
 
-      case 'customer.subscription.created':
-      case 'customer.subscription.updated':
-      case 'customer.subscription.deleted': {
-        const sub = event.data.object as Stripe.Subscription;
-        await applySubscriptionToProfile(sub);
-        break;
-      }
-
       default:
-        // Acknowledge all events
         break;
     }
 
@@ -145,5 +188,3 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: err?.message || 'Webhook handler failed' });
   }
 }
-
-
