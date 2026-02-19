@@ -27,6 +27,24 @@ export default function Billing() {
         throw new Error('Please sign in to start checkout.');
       }
 
+      // ✅ Step 1: ensure profile exists (server can’t rely on cookies)
+      const ensure = await fetch('/api/ensure-profile', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (!ensure.ok) {
+        const body = await ensure.json().catch(() => ({}));
+        if (ensure.status === 401) {
+          setNotSignedIn(true);
+          throw new Error(body?.error || 'Please sign in to continue.');
+        }
+        throw new Error(body?.error || `ensure-profile failed (${ensure.status})`);
+      }
+
+      // ✅ Step 2: create checkout session
       const res = await fetch('/api/billing/checkout', {
         method: 'POST',
         headers: {
