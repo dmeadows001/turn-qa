@@ -1,3 +1,4 @@
+// pages/api/billing/status.ts
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { createServerSupabase } from '@/lib/supabaseServer';
 import { supabaseAdmin as _admin } from '@/lib/supabaseAdmin';
@@ -10,13 +11,41 @@ function getBearerToken(req: NextApiRequest) {
   return m ? m[1].trim() : null;
 }
 
+function isFutureIso(iso: string | null | undefined) {
+  if (!iso) return false;
+  const t = Date.parse(iso);
+  return !Number.isNaN(t) && t > Date.now();
+}
+
 function isAllowed(profile: any) {
   if (!profile) return false;
-  if (profile.subscription_status === 'active') return true;
-  if (profile.active_until) {
-    const t = Date.parse(profile.active_until);
-    if (!Number.isNaN(t) && t > Date.now()) return true;
+
+  const status = String(profile.subscription_status || '').toLowerCase();
+
+  // 🔒 Hard-deny states (your desired behavior)
+  // If Stripe says canceled / incomplete / unpaid etc → not allowed, even if active_until is in the future.
+  const hardDeny = new Set([
+    'canceled',
+    'cancelled',
+    'incomplete',
+    'incomplete_expired',
+    'unpaid',
+    'past_due',
+  ]);
+  if (hardDeny.has(status)) return false;
+
+  // ✅ Active always allowed
+  if (status === 'active') return true;
+
+  // ✅ Trial allowed only while trial_ends_at is still in the future
+  if (status === 'trial' || status === 'trialing') {
+    return isFutureIso(profile.trial_ends_at) || isFutureIso(profile.active_until);
   }
+
+  // ✅ Fallback: if you have a legacy “active_until” window, respect it
+  // (but only if status is NOT one of the hard-deny statuses above)
+  if (isFutureIso(profile.active_until)) return true;
+
   return false;
 }
 
