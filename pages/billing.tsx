@@ -4,7 +4,6 @@ import { PrimaryButton } from '@/components/ui/Button';
 import { useState } from 'react';
 import Link from 'next/link';
 import Header from '@/components/layout/Header';
-import { supabaseBrowser } from '@/lib/supabaseBrowser';
 
 export default function Billing() {
   const [loading, setLoading] = useState(false);
@@ -17,22 +16,10 @@ export default function Billing() {
     setNotSignedIn(false);
 
     try {
-      // ✅ Get access token from client session and send it to the API
-      const sb = supabaseBrowser();
-      const { data: { session } } = await sb.auth.getSession();
-      const token = session?.access_token;
-
-      if (!token) {
-        setNotSignedIn(true);
-        throw new Error('Please sign in to start checkout.');
-      }
-
-      // ✅ Step 1: ensure profile exists (server can’t rely on cookies)
+      // Step 1: ensure profile exists (cookie-based)
       const ensure = await fetch('/api/ensure-profile', {
         method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
+        credentials: 'include',
       });
 
       if (!ensure.ok) {
@@ -44,16 +31,15 @@ export default function Billing() {
         throw new Error(body?.error || `ensure-profile failed (${ensure.status})`);
       }
 
-      // ✅ Step 2: create checkout session
+      // Step 2: create checkout session (cookie-based)
       const res = await fetch('/api/billing/checkout', {
         method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
+        credentials: 'include',
       });
 
+      const body = await res.json().catch(() => ({}));
+
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
         if (res.status === 401) {
           setNotSignedIn(true);
           throw new Error(body?.error || 'Please sign in to start checkout.');
@@ -61,9 +47,12 @@ export default function Billing() {
         throw new Error(body?.error || `Request failed (${res.status})`);
       }
 
-      const { url } = await res.json();
+      const url = body?.url as string | undefined;
       if (!url) throw new Error('No checkout URL returned.');
-      window.location.href = url;
+
+      // Hard navigation
+      window.location.assign(url);
+      return;
     } catch (e: any) {
       setErr(e.message || 'Something went wrong.');
       setLoading(false);
@@ -78,7 +67,7 @@ export default function Billing() {
         style={{
           minHeight: 'calc(100vh - 56px)',
           background:
-            'var(--bg), radial-gradient(1000px 600px at 80% -10%, rgba(124,92,255,.16), transparent 60%), radial-gradient(800px 500px at 0% 100%, rgba(0,229,255,.08), transparent 60%), linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0) 40%)'
+            'var(--bg), radial-gradient(1000px 600px at 80% -10%, rgba(124,92,255,.16), transparent 60%), radial-gradient(800px 500px at 0% 100%, rgba(0,229,255,.08), transparent 60%), linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0) 40%)',
         }}
       >
         <Card className="auth-card">
