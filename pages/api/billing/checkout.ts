@@ -30,10 +30,8 @@ async function resolvePriceId(idFromEnv: string) {
   const raw = (idFromEnv || '').trim();
   if (!raw) throw new Error('Missing STRIPE_PRICE_ID');
 
-  // Normal case
   if (raw.startsWith('price_')) return raw;
 
-  // If user accidentally configured a Product ID, convert to its default price
   if (raw.startsWith('prod_')) {
     const product = await stripe.products.retrieve(raw);
     const dp: any = product.default_price;
@@ -68,7 +66,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!process.env.STRIPE_PRICE_ID) return res.status(500).json({ error: 'Missing STRIPE_PRICE_ID' });
 
   try {
-    // 1) Identify user (cookie session OR Bearer token)
     const supabase = createServerSupabase(req, res);
 
     let userId: string | null = null;
@@ -80,7 +77,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       email = cookieResp.data.user.email ?? null;
     }
 
-    // If cookie session isn't present, try Authorization: Bearer <jwt>
     if (!userId) {
       const token = getBearerToken(req);
       if (token) {
@@ -92,7 +88,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    if (!userId || !email) {
+    if (!userId) {
       return res.status(401).json({ error: 'Please sign in to start checkout.' });
     }
 
@@ -109,7 +105,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (!customerId) {
       const cust = await stripe.customers.create({
-        email,
+        ...(email ? { email } : {}),
         metadata: { supabase_user_id: userId },
       });
       customerId = cust.id;
@@ -122,10 +118,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (uErr) return res.status(500).json({ error: uErr.message || 'Could not update profile' });
     }
 
-    // 3) Resolve price id safely (supports prod_ via default_price)
     const priceId = await resolvePriceId(process.env.STRIPE_PRICE_ID!);
 
-    // 4) Create Checkout session
     const base = siteBase();
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
@@ -139,7 +133,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!session?.url) return res.status(500).json({ error: 'Stripe did not return a checkout URL.' });
     return res.status(200).json({ url: session.url });
   } catch (err: any) {
-    // Make Stripe errors readable
     const msg = err?.message || 'Checkout session error';
     console.error('[billing/checkout] error', msg, err);
     return res.status(500).json({ error: msg });
