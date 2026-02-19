@@ -80,43 +80,45 @@ async function applySubscriptionToProfile(sub: Stripe.Subscription) {
     return;
   }
 
-  const status = sub.status || null;
+  const status = (sub.status || null) as any;
+
+  const cancelAtPeriodEnd = Boolean((sub as any).cancel_at_period_end);
 
   const periodEndSec = getCurrentPeriodEndSeconds(sub);
-  const activeUntil = toIsoFromUnixSeconds(periodEndSec);
+  const periodEndIso = toIsoFromUnixSeconds(periodEndSec);
+
+  const endedAtIso = toIsoFromUnixSeconds((sub as any).ended_at);
+  const canceledAtIso = toIsoFromUnixSeconds((sub as any).canceled_at);
 
   const trialEndsAt = toIsoFromUnixSeconds((sub as any).trial_end);
 
   const { priceId, productId } = pickPlanFromSubscription(sub);
 
-  // Key rule:
-  // - If Stripe says cancel_at_period_end=true, keep active_until as the current_period_end.
-  // - If Stripe says canceled immediately (cancel_at_period_end=false, status=canceled),
-  //   active_until may be null/ended; we'll set it to ended_at if period end isn't available.
-  let finalActiveUntil = activeUntil;
+  // ✅ Correct access window rules:
+  // - If cancel_at_period_end=true, access continues until current_period_end.
+  // - If status=canceled AND cancel_at_period_end=false (immediate cancel), access ends now (ended_at/canceled_at).
+  // - Otherwise, use current_period_end when available.
+  let finalActiveUntil: string | null = null;
 
-  const cancelAtPeriodEnd = Boolean((sub as any).cancel_at_period_end);
-  const endedAtIso = toIsoFromUnixSeconds((sub as any).ended_at);
+  const isImmediateCancel = status === 'canceled' && cancelAtPeriodEnd === false;
 
-  if (!finalActiveUntil) {
-    if (cancelAtPeriodEnd) {
-      // should normally have a period end; but if missing, fall back to ended_at if present
-      finalActiveUntil = endedAtIso;
-    } else if (status === 'canceled') {
-      // immediate cancel = no future access
-      finalActiveUntil = endedAtIso; // can be null, that’s okay
-    }
+  if (isImmediateCancel) {
+    finalActiveUntil = endedAtIso || canceledAtIso || null;
+  } else {
+    finalActiveUntil = periodEndIso || endedAtIso || canceledAtIso || null;
   }
 
   const patch: Record<string, any> = {
     subscription_status: status,
     active_until: finalActiveUntil,
     trial_ends_at: trialEndsAt,
+
     stripe_customer_id: customerId,
     stripe_subscription_id: sub.id,
+
     stripe_price_id: priceId,
     stripe_product_id: productId,
-    plan: priceId, // simplest stable plan key
+    plan: priceId, // stable plan key
   };
 
   const { error } = await supa.from('profiles').update(patch).eq('id', userId);
@@ -128,6 +130,7 @@ async function applySubscriptionToProfile(sub: Stripe.Subscription) {
     subId: sub.id,
     status,
     cancelAtPeriodEnd,
+    isImmediateCancel,
     activeUntil: finalActiveUntil,
     trialEndsAt,
     priceId,
@@ -168,7 +171,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
 
       case 'checkout.session.completed': {
-        // Optional logging only
         const session = event.data.object as Stripe.Checkout.Session;
         console.log('[stripe webhook] checkout.session.completed', {
           id: session.id,
