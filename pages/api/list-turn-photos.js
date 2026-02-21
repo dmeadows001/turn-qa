@@ -25,8 +25,7 @@ function cleanPath(p) {
 function safePath(p) {
   const s = cleanPath(p);
   if (!s) return '';
-  // block traversal
-  if (s.includes('..')) return '';
+  if (s.includes('..')) return ''; // block traversal
   return s;
 }
 
@@ -55,19 +54,37 @@ async function findOneFileUnderPrefix(prefix) {
 
   const file =
     data.find((f) => /\.(jpe?g|png|webp|heic|heif|gif)$/i.test(f.name)) || data[0];
+
   return file ? `${folder}/${file.name}` : null;
 }
 
+// ✅ Match get-turn.js behavior: cleaner is resolved by phone, not by auth user id
 async function resolveRoleFromBearer(token) {
   const { data: userData, error: userErr } = await admin.auth.getUser(token);
   if (userErr || !userData?.user) return { ok: false, error: 'Invalid/expired token' };
 
   const userId = userData.user.id;
 
-  const [{ data: mgrRow }, { data: clnRow }] = await Promise.all([
-    admin.from('managers').select('id').eq('user_id', userId).maybeSingle(),
-    admin.from('cleaners').select('id').eq('id', userId).maybeSingle(),
-  ]);
+  const authPhone =
+    userData.user.phone ||
+    userData.user.user_metadata?.phone ||
+    null;
+
+  const mgrPromise = admin
+    .from('managers')
+    .select('id')
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  const clnPromise = authPhone
+    ? admin
+        .from('cleaners')
+        .select('id')
+        .eq('phone', authPhone)
+        .maybeSingle()
+    : Promise.resolve({ data: null });
+
+  const [{ data: mgrRow }, { data: clnRow }] = await Promise.all([mgrPromise, clnPromise]);
 
   return {
     ok: true,
@@ -78,40 +95,30 @@ async function resolveRoleFromBearer(token) {
 }
 
 async function authorizeForTurn({ turnId, managerId, cleanerId }) {
-  // Fetch turn + property owner
   const { data: turn, error: tErr } = await admin
     .from('turns')
-    .select('id, property_id, manager_id, cleaner_id, properties!inner(manager_id)')
+    .select('id, property_id, manager_id, cleaner_id')
     .eq('id', turnId)
     .maybeSingle();
 
   if (tErr || !turn) return { ok: false, error: 'Turn not found' };
 
-  const propertyManagerId = turn?.properties?.manager_id || null;
-
-// Manager owns the turn (either direct on turn OR via property)
-if (managerId) {
-  // direct (new design)
-  if (turn.manager_id === managerId) {
+  // Manager owns the turn (direct)
+  if (managerId && turn.manager_id === managerId) {
     return { ok: true, turn, mode: 'manager' };
   }
 
-  // fallback (property ownership)
-  const { data: prop } = await admin
-    .from('properties')
-    .select('manager_id')
-    .eq('id', turn.property_id)
-    .maybeSingle();
+  // Manager owns the property (fallback)
+  if (managerId && turn.property_id) {
+    const { data: prop } = await admin
+      .from('properties')
+      .select('manager_id')
+      .eq('id', turn.property_id)
+      .maybeSingle();
 
-  if (prop?.manager_id === managerId) {
-    return { ok: true, turn, mode: 'manager' };
-  }
-}
-
-
-  // ✅ Manager owns the property (works even if turn.manager_id is null/mismatched)
-  if (managerId && propertyManagerId === managerId) {
-    return { ok: true, turn, mode: 'manager' };
+    if (prop?.manager_id === managerId) {
+      return { ok: true, turn, mode: 'manager' };
+    }
   }
 
   // Cleaner assigned directly on the turn
@@ -156,7 +163,6 @@ async function requireManagerBillingActive(userId) {
 
   const activeUntil = prof.active_until ? new Date(prof.active_until).getTime() : 0;
   const now = Date.now();
-
   const isActive = activeUntil && activeUntil > now;
 
   if (!isActive) {
@@ -172,9 +178,13 @@ async function requireManagerBillingActive(userId) {
   return { ok: true, profile: prof };
 }
 
-
 export default async function handler(req, res) {
   try {
+    if (req.method !== 'GET') {
+      res.setHeader('Allow', ['GET']);
+      return res.status(405).json({ error: 'Method not allowed' });
+    }
+
     const turnId = String(req.query.id || req.query.turn_id || '').trim();
     if (!turnId) return res.status(400).json({ error: 'missing turn id' });
 
@@ -208,32 +218,27 @@ export default async function handler(req, res) {
       return res.status(403).json({ error: authz.error || 'Not authorized' });
     }
 
-    // ✅ Billing gate: managers only (cleaners are never blocked)
-if (authz.mode === 'manager') {
-  if (!userId) {
-    return res.status(401).json({ error: 'Missing user context' });
-  }
+    // ✅ Billing gate: managers only
+    if (authz.mode === 'manager') {
+      if (!userId) return res.status(401).json({ error: 'Missing user context' });
 
-  const bill = await requireManagerBillingActive(userId);
-  if (!bill.ok) {
-    return res.status(402).json({
-      error: bill.error || 'Subscription required',
-      code: bill.code || 'BILLING_REQUIRED',
-      active_until: bill.active_until || null,
-      subscription_status: bill.subscription_status || null,
-    });
-  }
-}
-
+      const bill = await requireManagerBillingActive(userId);
+      if (!bill.ok) {
+        return res.status(402).json({
+          error: bill.error || 'Subscription required',
+          code: bill.code || 'BILLING_REQUIRED',
+          active_until: bill.active_until || null,
+          subscription_status: bill.subscription_status || null,
+        });
+      }
+    }
 
     // Query strategy:
-    // - If Bearer token is present, keep current behavior: read via RLS client
-    // - If cleaner cookie session, use admin client AFTER explicit authorization (above)
+    // - If Bearer token is present, read via RLS client
+    // - If cleaner cookie session, use admin AFTER explicit authorization (above)
     const useRls = !!token;
-    const rls = useRls ? createRlsClient(token) : null;
-    const db = useRls ? rls : admin;
+    const db = useRls ? createRlsClient(token) : admin;
 
-    // 1) Select all photos for this turn
     const { data: tpRows, error: tpErr } = await db
       .from('turn_photos')
       .select(
@@ -256,7 +261,7 @@ if (authz.mode === 'manager') {
 
     if (tpErr) throw tpErr;
 
-    // 2) Lookup missing area_key via template_shots (best effort)
+    // Lookup missing area_key via template_shots (best effort)
     const missingShotIds = Array.from(
       new Set(
         (tpRows || [])
@@ -280,14 +285,13 @@ if (authz.mode === 'manager') {
       }
     }
 
-    // 3) Resolve folder→file, sign, collect updates
     const out = [];
     const updates = [];
 
     for (const r of tpRows || []) {
       const areaKey = r.area_key || tsMap[String(r.shot_id)] || '';
 
-      const rawPath = r.path || r.storage_path || r.photo_path || r.url || r.file || '';
+      const rawPath = r.path || r.storage_path || '';
       let objPath = safePath(rawPath);
       if (!objPath) objPath = safePath(`turns/${turnId}/${r.shot_id || ''}`.replace(/\/+$/, ''));
 
@@ -324,21 +328,11 @@ if (authz.mode === 'manager') {
         is_fix: r.is_fix ?? undefined,
         needs_fix: r.needs_fix ?? undefined,
         cleaner_note: r.cleaner_note ?? undefined,
-        manager_note: (r.manager_note ?? r.manager_notes) ?? undefined,
-        orig_path: r.orig_path ?? r.original_path ?? undefined,
-        orig_url: r.orig_url ?? r.original_url ?? undefined,
-        orig_shotid: r.orig_shotid ?? r.orig_shot_id ?? undefined,
+        manager_note: r.manager_notes ?? undefined,
       });
     }
 
-    // 4) Do NOT dedupe — return everything, oldest -> newest
-    const finalOut = out.slice().sort((a, b) => {
-      const ta = new Date(a.created_at || 0).getTime();
-      const tb = new Date(b.created_at || 0).getTime();
-      return ta - tb;
-    });
-
-    // 5) Best-effort backfill updates via admin (only after authorization)
+    // Best-effort backfill path updates via admin (only after authorization)
     if (updates.length) {
       try {
         await Promise.all(
@@ -346,20 +340,24 @@ if (authz.mode === 'manager') {
             admin
               .from('turn_photos')
               .update({
-                // keep existing behavior:
                 path: u.path,
-                // best effort for canonical column too (won’t error if missing? Supabase errors if missing column)
-                // If your schema *doesn't* have storage_path, remove this line.
+                // If your schema doesn't have storage_path, remove this line.
                 storage_path: u.path,
               })
               .eq('id', u.id)
           )
         );
       } catch (e) {
-        // If your DB doesn't have storage_path, this would warn here; harmless.
         console.warn('[list-turn-photos] backfill update failed', e?.message || e);
       }
     }
+
+    // Do NOT dedupe — return everything, oldest -> newest
+    const finalOut = out.slice().sort((a, b) => {
+      const ta = new Date(a.created_at || 0).getTime();
+      const tb = new Date(b.created_at || 0).getTime();
+      return ta - tb;
+    });
 
     return res.json({ photos: finalOut });
   } catch (e) {
