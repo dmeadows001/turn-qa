@@ -3,53 +3,35 @@ import { useRouter } from 'next/router';
 import { useEffect, useMemo, useRef, useState, useCallback, memo } from 'react';
 import ChromeDark from '../../../components/ChromeDark';
 import { ui } from '../../../lib/theme';
+import { supabaseBrowser } from '@/lib/supabaseBrowser';
 
-// ---- Optional manager auth header (does NOT break cleaners) ----
-function getSupabaseAccessToken() {
+// ✅ Always get the real Supabase session token (works with sb-... localStorage keys)
+async function authHeadersAsync() {
   try {
-    if (typeof window === 'undefined') return null;
-    const raw = window.localStorage.getItem('turnqa-auth');
-    if (!raw) return null;
-
-    const parsed = JSON.parse(raw);
-
-    // Common Supabase shapes across versions
-    const token =
-      parsed?.currentSession?.access_token ||
-      parsed?.access_token ||
-      parsed?.data?.session?.access_token ||
-      null;
-
-    return typeof token === 'string' && token.length > 20 ? token : null;
+    const sb = supabaseBrowser();
+    const { data: { session } } = await sb.auth.getSession();
+    const token = session?.access_token;
+    return token ? { Authorization: `Bearer ${token}` } : {};
   } catch {
-    return null;
+    return {};
   }
 }
 
-function authHeaders() {
-  const token = getSupabaseAccessToken();
-  return token ? { Authorization: `Bearer ${token}` } : {};
-}
-
 async function fetchTurn(turnId) {
-  const r = await fetch(`/api/get-turn?id=${turnId}`, {
-    headers: { ...authHeaders() },
-  });
+  const headers = await authHeadersAsync();
+  const r = await fetch(`/api/get-turn?id=${turnId}`, { headers });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j.error || 'get-turn failed');
   return j.turn;
 }
 
 async function fetchPhotos(turnId) {
-  const r = await fetch(`/api/list-turn-photos?id=${turnId}`, {
-    headers: { ...authHeaders() },
-  });
+  const headers = await authHeadersAsync();
+  const r = await fetch(`/api/list-turn-photos?id=${turnId}`, { headers });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j.error || 'list-turn-photos failed');
 
   const raw = Array.isArray(j.photos) ? j.photos : [];
-
-  // Keep *all* rows (no dedupe) and normalize flags/notes
   return raw
     .slice()
     .sort((a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0))
@@ -59,7 +41,6 @@ async function fetchPhotos(turnId) {
       id: p.id,
       area_key: p.area_key || '',
       created_at: p.created_at,
-      // use signedUrl for display, but keep path for keys/findings
       url: p.signedUrl || p.url || '',
       path: p.path || '',
       is_fix: !!(p.is_fix ?? p.isFix ?? p.fix),
@@ -72,9 +53,8 @@ async function fetchPhotos(turnId) {
 // Load existing findings for this turn: { findings: [{ path, note, ...bilingual fields... }] }
 async function fetchFindings(turnId) {
   try {
-    const r = await fetch(`/api/turns/${turnId}/findings`, {
-      headers: { ...authHeaders() },
-    });
+    const headers = await authHeadersAsync();
+    const r = await fetch(`/api/turns/${turnId}/findings`, { headers });
     if (!r.ok) return [];
     const j = await r.json().catch(() => ({}));
     return Array.isArray(j.findings) ? j.findings : [];
@@ -85,9 +65,8 @@ async function fetchFindings(turnId) {
 
 async function fetchTemplate(turnId) {
   try {
-    const r = await fetch(`/api/turn-template?turnId=${turnId}`, {
-      headers: { ...authHeaders() },
-    });
+    const headers = await authHeadersAsync();
+    const r = await fetch(`/api/turn-template?turnId=${turnId}`, { headers });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.error || 'turn-template failed');
 
@@ -106,12 +85,11 @@ async function fetchTemplate(turnId) {
 
 // NEW: turn history
 async function fetchTurnHistory(turnId) {
-  const r = await fetch(`/api/turn-history?id=${turnId}`, {
-    headers: { ...authHeaders() },
-  });
+  const headers = await authHeadersAsync();
+  const r = await fetch(`/api/turn-history?id=${turnId}`, { headers });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j.error || 'turn-history failed');
-  return j; // { ok, mode, items }
+  return j;
 }
 
 function buildSections(photos, templateShots) {
