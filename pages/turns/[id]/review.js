@@ -941,11 +941,13 @@ export default function Review() {
 
       const manager_note = String(summaryNote.original || '').trim();
 
+      const headers = await authHeadersAsync();
+
       const r = await fetch('/api/update-turn-status', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        headers: { 'Content-Type': 'application/json', ...headers },
         body: JSON.stringify({ turn_id: turnId, new_status: 'approved', manager_note }),
-      });
+    });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error || 'update failed');
       setStatus('approved');
@@ -1014,9 +1016,11 @@ export default function Review() {
           }
         : null;
 
+      const headers = await authHeadersAsync();
+
       const r = await fetch(`/api/turns/${turnId}/needs-fix`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        headers: { 'Content-Type': 'application/json', ...headers },
         body: JSON.stringify({
           notes: payloadNotes,
           summary: summaryPayload,
