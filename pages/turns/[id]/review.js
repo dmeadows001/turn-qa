@@ -21,7 +21,13 @@ async function fetchTurn(turnId) {
   const headers = await authHeadersAsync();
   const r = await fetch(`/api/get-turn?id=${turnId}`, { headers });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j.error || 'get-turn failed');
+
+  if (!r.ok) {
+    const err = new Error(j.error || 'get-turn failed');
+    err.code = j.code || null;
+    throw err;
+  }
+
   return j.turn;
 }
 
@@ -29,7 +35,11 @@ async function fetchPhotos(turnId) {
   const headers = await authHeadersAsync();
   const r = await fetch(`/api/list-turn-photos?id=${turnId}`, { headers });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j.error || 'list-turn-photos failed');
+  if (!r.ok) {
+  const err = new Error(j.error || 'list-turn-photos failed');
+  err.code = j.code || null;
+  throw err;
+}
 
   const raw = Array.isArray(j.photos) ? j.photos : [];
   return raw
@@ -828,8 +838,13 @@ export default function Review() {
         } else {
           setFindingsByKey({});
         }
-      } catch (e) {
-        setLoadErr(e.message || 'load failed');
+            } catch (e) {
+        if (e?.code === 'BILLING_REQUIRED' && isManagerMode) {
+          router.replace('/billing');
+          return;
+        }
+
+        setLoadErr(e?.message || 'load failed');
       } finally {
         setLoading(false);
       }
