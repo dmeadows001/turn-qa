@@ -184,7 +184,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   await applySubscriptionToProfile(currentSub);
   break;
-}
       }
 
       case 'checkout.session.completed': {
