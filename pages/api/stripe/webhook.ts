@@ -176,9 +176,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       case 'customer.subscription.created':
       case 'customer.subscription.updated':
       case 'customer.subscription.deleted': {
-        const sub = event.data.object as Stripe.Subscription;
-        await applySubscriptionToProfile(sub);
-        break;
+        const eventSub = event.data.object as Stripe.Subscription;
+
+  // Retrieve the latest subscription state from Stripe.
+  // This prevents older webhook events from overwriting newer data.
+  const currentSub = await stripe.subscriptions.retrieve(eventSub.id);
+
+  await applySubscriptionToProfile(currentSub);
+  break;
+}
       }
 
       case 'checkout.session.completed': {
