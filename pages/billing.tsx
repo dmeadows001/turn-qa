@@ -1,4 +1,4 @@
-// pages/billing.tsx
+
 import Card from '@/components/ui/Card';
 import { PrimaryButton } from '@/components/ui/Button';
 import { useEffect, useState } from 'react';
