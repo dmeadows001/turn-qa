@@ -80,7 +80,18 @@ async function applySubscriptionToProfile(sub: Stripe.Subscription) {
     return;
   }
 
-  const status = (sub.status || null) as any;
+  const stripeStatus = sub.status;
+
+  const status =
+    stripeStatus === 'trialing' ? 'trial' :
+    stripeStatus === 'active' ? 'active' :
+    stripeStatus === 'past_due' ? 'past_due' :
+    stripeStatus === 'canceled' ? 'canceled' :
+    stripeStatus === 'unpaid' ? 'past_due' :
+    stripeStatus === 'incomplete' ? 'past_due' :
+    stripeStatus === 'incomplete_expired' ? 'canceled' :
+    stripeStatus === 'paused' ? 'past_due' :
+    'past_due';
 
   const cancelAtPeriodEnd = Boolean((sub as any).cancel_at_period_end);
 
