@@ -4,7 +4,7 @@ import { PrimaryButton } from '@/components/ui/Button';
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import Header from '@/components/layout/Header';
-import { createClient } from '@supabase/supabase-js';
+import { supabaseBrowser } from '@/lib/supabaseBrowser';
 
 type BillingStatus = {
   ok: boolean;
@@ -22,16 +22,13 @@ export default function Billing() {
   const [billing, setBilling] = useState<BillingStatus | null>(null);
 
   async function getAccessToken(): Promise<string | null> {
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    const supabase = supabaseBrowser();
+    const { data, error } = await supabase.auth.getSession();
 
-    if (!url || !key) return null;
-
-    const supabase = createClient(url, key);
-    const { data } = await supabase.auth.getSession();
+    if (error) throw error;
 
     return data.session?.access_token || null;
-  }
+    }
 
   async function authHeaders(): Promise<Record<string, string>> {
     const token = await getAccessToken();
