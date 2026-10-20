@@ -42,10 +42,16 @@ export default function Header() {
       setDisplayName(name);
     }
 
-    load();
+        load();
 
-    // keep it fresh if auth state changes
-    const { data: listener } = supabase.auth.onAuthStateChange(() => load());
+    // Schedule profile loading after Supabase finishes
+    // processing the authentication event.
+    const { data: listener } = supabase.auth.onAuthStateChange(() => {
+      setTimeout(() => {
+        load();
+      }, 0);
+    });
+
     return () => listener.subscription.unsubscribe();
   }, []);
 
