@@ -22,8 +22,12 @@ export default function Billing() {
   const [billing, setBilling] = useState<BillingStatus | null>(null);
 
   async function getAccessToken(): Promise<string | null> {
-    const supabase = supabaseBrowser();
-    const { data, error } = await supabase.auth.getSession();
+  console.log('[TurnQA Billing] Starting session check');
+
+  const supabase = supabaseBrowser();
+  const { data, error } = await supabase.auth.getSession();
+
+  console.log('[TurnQA Billing] Session check completed');
 
     if (error) throw error;
 
