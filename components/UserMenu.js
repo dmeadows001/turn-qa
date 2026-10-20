@@ -48,8 +48,8 @@ export default function UserMenu() {
 
   // Signed in: show only a Sign out button (no email/PII)
   return (
-    <button onClick={signOut} style={{ ...ui.btnSecondary, padding: '6px 10px' }}>
-      Sign out
-    </button>
+    <button onClick={signOut} style={{ ...ui.btnSecondary }}>
+  Sign out
+</button>
   );
 }
