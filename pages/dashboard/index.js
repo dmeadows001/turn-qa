@@ -216,7 +216,7 @@ export default function Dashboard() {
   }
 
   return (
-    <ChromeDark title="Dashboard">
+    <ChromeDark title="Dashboard" showBilling={true}>
       {/* Getting Started Modal */}
       {showGettingStarted && (
         <div
