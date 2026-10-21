@@ -2,6 +2,9 @@
 import { useRouter } from 'next/router';
 import { useEffect, useState } from 'react';
 import ChromeDark from '../../../components/ChromeDark';
+import { supabaseBrowser } from '../../../lib/supabaseBrowser';
+
+const supabase = supabaseBrowser();
 
 export default function InviteCleaner() {
   const router = useRouter();
@@ -12,9 +15,82 @@ export default function InviteCleaner() {
   const [phone, setPhone] = useState('');
   const [sending, setSending] = useState(false);
   const [msg, setMsg] = useState('');
+    // Verify subscription before allowing access to Invite Cleaner.
+  const [subscriptionAccess, setSubscriptionAccess] = useState('checking');
+  const [subscriptionError, setSubscriptionError] = useState('');
+  const [subscriptionRetry, setSubscriptionRetry] = useState(0);
 
   useEffect(() => {
-    if (!propertyId) return;
+    if (!router.isReady) return;
+
+    let cancelled = false;
+
+    setSubscriptionAccess('checking');
+    setSubscriptionError('');
+    (async () => {
+      try {
+        const { data, error } = await supabase.auth.getSession();
+
+        if (cancelled) return;
+        if (error) throw error;
+
+        const token = data?.session?.access_token;
+
+        if (!token) {
+          router.replace('/login');
+          return;
+        }
+
+        const response = await fetch('/api/billing/status', {
+          method: 'GET',
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+          credentials: 'include',
+          cache: 'no-store',
+        });
+
+        if (cancelled) return;
+
+        if (response.status === 401) {
+          router.replace('/login');
+          return;
+        }
+
+        const result = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+          throw new Error(
+            result.error || `Subscription check failed (${response.status})`
+          );
+        }
+
+        if (result.allowed !== true) {
+          router.replace('/billing?reason=expired');
+          return;
+        }
+
+        setSubscriptionAccess('allowed');
+      } catch (error) {
+        if (cancelled) return;
+
+        console.error('[invite subscription check]', error);
+
+        setSubscriptionError(
+          error?.message || 'Unable to verify subscription.'
+        );
+
+        setSubscriptionAccess('error');
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [router.isReady, subscriptionRetry, router]);
+
+  useEffect(() => {
+    if (!propertyId || subscriptionAccess !== 'allowed') return;
     (async () => {
       try {
         setMsg('Loading…');
@@ -26,14 +102,19 @@ export default function InviteCleaner() {
         setMsg('Could not load property');
       }
     })();
-  }, [propertyId]);
+  }, [propertyId, subscriptionAccess]);
 
-  async function sendInvite() {
+    async function sendInvite() {
     try {
       setMsg('');
+
+      // Do not send invitations unless subscription access is verified.
+      if (subscriptionAccess !== 'allowed') {
+        throw new Error('An active subscription is required to invite cleaners.');
+      }
+
       if (!phone.trim()) throw new Error('Enter a phone number.');
       setSending(true);
-
       const r = await fetch('/api/invite/cleaner', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -54,7 +135,51 @@ export default function InviteCleaner() {
       setSending(false);
     }
   }
-
+  // Never display Invite Cleaner before subscription verification.
+  if (subscriptionAccess !== 'allowed') {
+    return (
+      <ChromeDark title="Invite Cleaner">
+        <div style={{ maxWidth: 520, margin: '0 auto' }}>
+          <div
+            style={{
+              border: '1px solid #1f2937',
+              background: '#0b1220',
+              borderRadius: 16,
+              padding: 18,
+            }}
+          >
+            {subscriptionAccess === 'error' ? (
+              <>
+                <h2>Subscription check unavailable</h2>
+                <p>
+                  {subscriptionError ||
+                    'We could not verify your subscription. Please try again.'}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setSubscriptionRetry((n) => n + 1)}
+                  style={{
+                    padding: '10px 14px',
+                    borderRadius: 10,
+                    border: '1px solid #22c55e',
+                    background: '#052e1c',
+                    color: '#bbf7d0',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Retry
+                </button>
+              </>
+            ) : (
+              <div style={{ color: '#cbd5e1' }}>
+                Checking your subscription…
+              </div>
+            )}
+          </div>
+        </div>
+      </ChromeDark>
+    );
+  }
   return (
     <ChromeDark title={`Invite Cleaner — ${propertyName || ''}`}>
       <div style={{ maxWidth: 520, margin: '0 auto' }}>
