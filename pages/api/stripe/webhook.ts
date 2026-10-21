@@ -107,21 +107,47 @@ async function applySubscriptionToProfile(sub: Stripe.Subscription) {
 
   const existingSubId = existingProfile?.stripe_subscription_id;
 
-  if (existingSubId && existingSubId !== sub.id) {
+    if (existingSubId && existingSubId !== sub.id) {
     const existingSub = await stripe.subscriptions.retrieve(existingSubId);
 
-    if (
+    const existingIsActive =
       existingSub.status === 'active' ||
-      existingSub.status === 'trialing'
-    ) {
+      existingSub.status === 'trialing';
+
+    const incomingIsActive =
+      sub.status === 'active' ||
+      sub.status === 'trialing';
+
+    // Never replace an active subscription with a different one.
+    if (existingIsActive) {
       console.log(
-        '[stripe webhook] ignoring different subscription because current subscription is active',
+        '[stripe webhook] keeping existing active subscription',
+        { existingSubId, incomingSubId: sub.id }
+      );
+      return;
+    }
+
+    // Never replace the recorded subscription with an older
+    // canceled or inactive subscription.
+    if (!incomingIsActive && sub.created <= existingSub.created) {
+      console.log(
+        '[stripe webhook] ignoring older inactive subscription',
+        { existingSubId, incomingSubId: sub.id }
+      );
+      return;
+    }
+
+    // Do not replace an existing subscription with another
+    // inactive subscription. A newly active subscription can
+    // take ownership of an expired subscription's profile.
+    if (!incomingIsActive) {
+      console.log(
+        '[stripe webhook] ignoring different inactive subscription',
         { existingSubId, incomingSubId: sub.id }
       );
       return;
     }
   }
-
   const stripeStatus = sub.status;
   const status =
     stripeStatus === 'trialing' ? 'trial' :
