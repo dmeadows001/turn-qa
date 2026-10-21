@@ -115,6 +115,80 @@ function GettingStartedModal({ storageKey, title, children, open, setOpen }) {
 export default function TemplateBuilder() {
   const router = useRouter();
   const { id: propertyId } = router.query;
+    // Verify subscription before loading property or checklist data.
+  const [subscriptionAccess, setSubscriptionAccess] = useState('checking');
+  const [subscriptionError, setSubscriptionError] = useState('');
+  const [subscriptionRetry, setSubscriptionRetry] = useState(0);
+
+  useEffect(() => {
+    if (!router.isReady) return;
+
+    let cancelled = false;
+
+    setSubscriptionAccess('checking');
+    setSubscriptionError('');
+
+    (async () => {
+      try {
+        const { data, error } = await supabase.auth.getSession();
+
+        if (cancelled) return;
+        if (error) throw error;
+
+        const token = data?.session?.access_token;
+
+        if (!token) {
+          router.replace('/login');
+          return;
+        }
+
+        const response = await fetch('/api/billing/status', {
+          method: 'GET',
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+          credentials: 'include',
+          cache: 'no-store',
+        });
+
+        if (cancelled) return;
+
+        if (response.status === 401) {
+          router.replace('/login');
+          return;
+        }
+
+        const result = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+          throw new Error(
+            result.error || `Subscription check failed (${response.status})`
+          );
+        }
+
+        if (result.allowed !== true) {
+          router.replace('/billing?reason=expired');
+          return;
+        }
+
+        setSubscriptionAccess('allowed');
+      } catch (error) {
+        if (cancelled) return;
+
+        console.error('[template subscription check]', error);
+
+        setSubscriptionError(
+          error?.message || 'Unable to verify subscription.'
+        );
+
+        setSubscriptionAccess('error');
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [router.isReady, subscriptionRetry, router]);
 
   const [loading, setLoading]   = useState(true);
   const [msg, setMsg]           = useState('');
@@ -217,8 +291,8 @@ export default function TemplateBuilder() {
       });
   }
 
-  useEffect(() => {
-    if (!propertyId) return;
+   useEffect(() => {
+    if (!propertyId || subscriptionAccess !== 'allowed') return;
     (async () => {
       try {
         setLoading(true);
@@ -282,7 +356,7 @@ export default function TemplateBuilder() {
         setLoading(false);
       }
     })();
-  }, [propertyId]);
+    }, [propertyId, subscriptionAccess]);
 
   // persist order (UPDATE only → RLS-friendly)
   async function persistSortOrder(nextShots) {
@@ -552,6 +626,37 @@ export default function TemplateBuilder() {
   }
 
   // -------------- Render --------------
+
+  // Never display the checklist before subscription verification.
+  if (subscriptionAccess !== 'allowed') {
+    return (
+      <ChromeDark title="Property">
+        <section style={ui.sectionGrid}>
+          <div style={ui.card}>
+            {subscriptionAccess === 'error' ? (
+              <>
+                <h2>Subscription check unavailable</h2>
+                <p>
+                  {subscriptionError ||
+                    'We could not verify your subscription. Please try again.'}
+                </p>
+                <button
+                  type="button"
+                  style={ui.btnPrimary}
+                  onClick={() => setSubscriptionRetry((n) => n + 1)}
+                >
+                  Retry
+                </button>
+              </>
+            ) : (
+              <div>Checking your subscription…</div>
+            )}
+          </div>
+        </section>
+      </ChromeDark>
+    );
+  }
+
   if (loading) {
     return (
       <ChromeDark title="Property">
