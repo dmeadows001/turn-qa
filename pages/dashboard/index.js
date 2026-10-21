@@ -1,4 +1,5 @@
-// pages/dashboard/index.js
+
+ // pages/dashboard/index.js
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
@@ -13,6 +14,10 @@ export default function Dashboard() {
   const supabase = supabaseBrowser();
 
   const [session, setSession] = useState(null);
+  const [sessionReady, setSessionReady] = useState(false);
+  const [access, setAccess] = useState('checking');
+  const [accessError, setAccessError] = useState('');
+  const [accessRetry, setAccessRetry] = useState(0);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [propName, setPropName] = useState('');
@@ -20,7 +25,7 @@ export default function Dashboard() {
   const [msg, setMsg] = useState('');
   const [managerId, setManagerId] = useState(null);
 
-  // ✅ Phase 2: view toggle
+  // Phase 2: view toggle
   const [showArchived, setShowArchived] = useState(false);
 
   // Getting started modal
@@ -47,21 +52,91 @@ export default function Dashboard() {
   }
 
   function openGettingStarted() {
-    setDontShowAgain(false); // default unchecked when opened manually
+    setDontShowAgain(false);
     setShowGettingStarted(true);
   }
 
-  // keep session in sync
+  // Keep authentication synchronized.
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => setSession(data.session || null));
-    const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => setSession(s));
-    return () => sub.subscription.unsubscribe();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    let mounted = true;
 
-  // bootstrap manager row (idempotent)
+    supabase.auth.getSession().then(({ data, error }) => {
+      if (!mounted) return;
+      if (error) console.warn('[dashboard auth]', error.message);
+      setSession(data?.session || null);
+      setSessionReady(true);
+    }).catch((error) => {
+      if (!mounted) return;
+      console.warn('[dashboard auth]', error);
+      setSession(null);
+      setSessionReady(true);
+    });
+
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      if (!mounted) return;
+      setSession(nextSession);
+      setSessionReady(true);
+    });
+
+    return () => {
+      mounted = false;
+      sub.subscription.unsubscribe();
+    };
+  }, [supabase]);
+
+  // Check subscription BEFORE querying manager or property data.
   useEffect(() => {
-    if (!session) return;
+    if (!sessionReady) return;
+    let cancelled = false;
+
+    setAccess('checking');
+    setAccessError('');
+
+    if (!session?.access_token) {
+      router.replace('/login');
+      return () => { cancelled = true; };
+    }
+
+    (async () => {
+      try {
+        const response = await fetch('/api/billing/status', {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${session.access_token}` },
+          credentials: 'include',
+          cache: 'no-store',
+        });
+
+        if (cancelled) return;
+        if (response.status === 401) {
+          router.replace('/login');
+          return;
+        }
+
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(result.error || `Subscription check failed (${response.status})`);
+        }
+
+        if (result.allowed !== true) {
+          router.replace('/billing?reason=expired');
+          return;
+        }
+
+        setAccess('allowed');
+      } catch (error) {
+        if (cancelled) return;
+        console.error('[dashboard subscription check]', error);
+        setAccessError(error?.message || 'Unable to verify your subscription.');
+        setAccess('error');
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [sessionReady, session?.access_token, accessRetry, router]);
+
+  // Bootstrap manager row (idempotent).
+  useEffect(() => {
+    if (!session || access !== 'allowed') return;
     (async () => {
       try {
         setLoading(true);
@@ -106,11 +181,11 @@ export default function Dashboard() {
         setLoading(false);
       }
     })();
-  }, [session, supabase]);
+  }, [session, supabase, access]);
 
-  // ✅ Phase 2: load properties whenever showArchived changes
+  // Load properties whenever showArchived changes.
   useEffect(() => {
-    if (!session) return;
+    if (!session || access !== 'allowed') return;
     (async () => {
       try {
         setLoading(true);
@@ -131,12 +206,13 @@ export default function Dashboard() {
         setLoading(false);
       }
     })();
-  }, [session, supabase, showArchived]);
+  }, [session, supabase, showArchived, access]);
 
-  // ✅ createProperty handler
+  // Create property.
   async function createProperty(e) {
     e?.preventDefault?.();
     try {
+      if (access !== 'allowed') return;
       if (!propName.trim()) return setMsg('Enter a property name.');
       if (!managerId) return setMsg('Your account is initializing. Try again in a moment.');
       setCreating(true);
@@ -153,7 +229,6 @@ export default function Dashboard() {
 
       setPropName('');
 
-      // If user is viewing archived right now, don't inject into that list
       if (!showArchived) {
         setPropsList(prev => [{ id: data.id, name, created_at: new Date().toISOString() }, ...prev]);
       }
@@ -168,6 +243,7 @@ export default function Dashboard() {
 
   async function archiveProperty(propertyId, propertyName) {
     try {
+      if (access !== 'allowed') return;
       const ok = window.confirm(
         `Archive "${propertyName}"?\n\nThis will remove it from your dashboard, but keep history in the database.`
       );
@@ -182,7 +258,6 @@ export default function Dashboard() {
 
       if (error) throw error;
 
-      // Remove from UI instantly
       setPropsList(prev => prev.filter(p => p.id !== propertyId));
     } catch (e) {
       console.error('[archiveProperty]', e);
@@ -190,9 +265,10 @@ export default function Dashboard() {
     }
   }
 
-  // ✅ Phase 2: restore
+  // Restore archived property.
   async function restoreProperty(propertyId, propertyName) {
     try {
+      if (access !== 'allowed') return;
       const ok = window.confirm(
         `Restore "${propertyName}"?\n\nThis will move it back to your active properties.`
       );
@@ -207,12 +283,40 @@ export default function Dashboard() {
 
       if (error) throw error;
 
-      // Remove from archived UI instantly
       setPropsList(prev => prev.filter(p => p.id !== propertyId));
     } catch (e) {
       console.error('[restoreProperty]', e);
       setMsg(e.message || 'Could not restore property');
     }
+  }
+
+  if (access !== 'allowed') {
+    return (
+      <ChromeDark title="Dashboard" showBilling={true}>
+        <section style={ui.sectionGrid}>
+          <div style={ui.card}>
+            {access === 'error' ? (
+              <>
+                <h2 style={{ marginTop: 0 }}>Subscription check unavailable</h2>
+                <p style={ui.muted}>
+                  We couldn't verify your subscription. Your properties haven't been loaded.
+                </p>
+                <p style={{ color: '#fca5a5' }}>{accessError}</p>
+                <button
+                  type="button"
+                  style={ui.btnPrimary}
+                  onClick={() => setAccessRetry(value => value + 1)}
+                >
+                  Retry
+                </button>
+              </>
+            ) : (
+              <div style={ui.muted}>Checking your subscription…</div>
+            )}
+          </div>
+        </section>
+      </ChromeDark>
+    );
   }
 
   return (
@@ -231,7 +335,6 @@ export default function Dashboard() {
             padding: 16,
           }}
           onClick={() => {
-            // click outside closes (does NOT persist unless checkbox checked via Dismiss)
             setShowGettingStarted(false);
           }}
         >
@@ -339,7 +442,6 @@ export default function Dashboard() {
           <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12 }}>
             <h2 style={{ marginTop: 0, marginBottom: 8 }}>Your properties</h2>
 
-            {/* ✅ Phase 2 toggle */}
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
               <span style={{ fontSize: 12, color: '#94a3b8' }}>View:</span>
               <button
@@ -410,9 +512,9 @@ export default function Dashboard() {
                         <Link href={`/properties/${p.id}/invite`} style={ui.btnSecondary}>
                           Invite cleaner
                         </Link>
-                      <Link href={`/managers/turns?property_id=${encodeURIComponent(p.id)}`} style={ui.btnSecondary}>
-                        Review turns
-                      </Link>
+                        <Link href={`/managers/turns?property_id=${encodeURIComponent(p.id)}`} style={ui.btnSecondary}>
+                          Review turns
+                        </Link>
 
                         <button
                           type="button"
@@ -454,7 +556,7 @@ export default function Dashboard() {
   );
 }
 
-// ⛔ Prevent static optimization (force SSR for this page)
+// Prevent static optimization (force SSR for this page).
 export async function getServerSideProps() {
   return { props: {} };
 }
