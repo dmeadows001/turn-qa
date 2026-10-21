@@ -1,5 +1,6 @@
 // pages/api/invite/cleaner.js
 import { supabaseAdmin as _admin } from '@/lib/supabaseAdmin';
+import { requireActiveSubscription } from '@/lib/requireActiveSubscription';
 
 // Handle both export styles (function returning a client vs direct client)
 const supa = typeof _admin === 'function' ? _admin() : _admin;
@@ -66,7 +67,17 @@ async function sendInviteSMS({ to, body }) {
 
 // --- handler ---
 export default async function handler(req, res) {
-  if (req.method !== 'POST') { res.setHeader('Allow', ['POST']); return res.status(405).json({ error: 'Method Not Allowed' }); }
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', ['POST']);
+    return res.status(405).json({ error: 'Method Not Allowed' });
+  }
+
+  // Require a signed-in manager with an active subscription.
+  const access = await requireActiveSubscription(req, res);
+
+  if (!access.ok) {
+    return;
+  }
 
   try {
     const { property_id, phone: rawPhone, name: rawName } = req.body || {};
