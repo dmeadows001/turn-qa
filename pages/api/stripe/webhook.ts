@@ -89,10 +89,37 @@ async function applySubscriptionToProfile(sub: Stripe.Subscription) {
     return;
   }
 
-  const userId = await findUserIdByCustomerId(customerId);
+    const userId = await findUserIdByCustomerId(customerId);
   if (!userId) {
     console.warn('[stripe webhook] no profile found for customer', customerId);
     return;
+  }
+
+  // Prevent events from an old subscription from overwriting
+  // a newer subscription that is already active.
+  const { data: existingProfile, error: profileError } = await supa
+    .from('profiles')
+    .select('stripe_subscription_id')
+    .eq('id', userId)
+    .single();
+
+  if (profileError) throw profileError;
+
+  const existingSubId = existingProfile?.stripe_subscription_id;
+
+  if (existingSubId && existingSubId !== sub.id) {
+    const existingSub = await stripe.subscriptions.retrieve(existingSubId);
+
+    if (
+      existingSub.status === 'active' ||
+      existingSub.status === 'trialing'
+    ) {
+      console.log(
+        '[stripe webhook] ignoring different subscription because current subscription is active',
+        { existingSubId, incomingSubId: sub.id }
+      );
+      return;
+    }
   }
 
   const stripeStatus = sub.status;
