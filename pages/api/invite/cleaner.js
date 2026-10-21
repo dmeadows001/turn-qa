@@ -87,14 +87,35 @@ export default async function handler(req, res) {
     if (!property_id) return res.status(400).json({ error: 'property_id required' });
     if (!phone)       return res.status(400).json({ error: 'valid phone required' });
 
-    // 1) Ensure the property exists (nice error if not)
+    // 1) Verify the authenticated manager owns this property.
+    const { data: manager, error: mErr } = await supa
+      .from('managers')
+      .select('id')
+      .eq('user_id', access.user.id)
+      .maybeSingle();
+
+    if (mErr) throw mErr;
+
+    if (!manager) {
+      return res.status(403).json({
+        error: 'Manager account not found',
+      });
+    }
+
     const { data: prop, error: pErr } = await supa
       .from('properties')
-      .select('id, name')
+      .select('id, name, manager_id')
       .eq('id', property_id)
+      .eq('manager_id', manager.id)
       .maybeSingle();
+
     if (pErr) throw pErr;
-    if (!prop) return res.status(404).json({ error: 'property not found' });
+
+    if (!prop) {
+      return res.status(404).json({
+        error: 'Property not found or access denied',
+      });
+    }
 
     // 2) Find or create the cleaner by phone
     let { data: cleaner, error: cErr } = await supa
