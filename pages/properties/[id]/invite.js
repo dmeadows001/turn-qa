@@ -114,10 +114,27 @@ export default function InviteCleaner() {
       }
 
       if (!phone.trim()) throw new Error('Enter a phone number.');
+
+      // Get the current manager's authentication token.
+      const { data, error } = await supabase.auth.getSession();
+
+      if (error) throw error;
+
+      const token = data?.session?.access_token;
+
+      if (!token) {
+        router.replace('/login');
+        throw new Error('Your session has expired. Please sign in again.');
+      }
+
       setSending(true);
+
       const r = await fetch('/api/invite/cleaner', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({
           property_id: propertyId,
           phone,
