@@ -323,12 +323,12 @@ export default function Billing() {
     title = 'Your trial is active';
     description =
       'Your TurnQA trial is still active. You can start your subscription whenever you are ready.';
-  } else if (isCanceled) {
-    title = 'Your subscription has ended';
+   } else if (isCanceled) {
+    title = 'Welcome back to TurnQA!';
     description =
-      'Your previous TurnQA subscription has ended. Your existing turnover information remains saved. Manage your billing account or contact support before starting another subscription.';
-    buttonText = 'Manage billing';
-    action = openPortal;
+      'Your previous subscription has ended, but your properties, checklists, photos, and turnover history remain saved. Reactivate TurnQA Pro to regain access to everything.';
+    buttonText = 'Reactivate TurnQA Pro';
+    action = startCheckout;
   } else if (hasExpiredTrial) {
     title = 'Your trial has ended';
     description =
