@@ -143,17 +143,65 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    const priceId = await resolvePriceId(process.env.STRIPE_PRICE_ID!);
+        const priceId = await resolvePriceId(process.env.STRIPE_PRICE_ID!);
+
+    // Reuse an unfinished subscription Checkout session for this customer.
+    // This helps prevent multiple open checkout links for the same plan.
+    const existingSessions = await stripe.checkout.sessions.list({
+      customer: customerId,
+      limit: 100,
+    });
+
+        let openSession: Stripe.Checkout.Session | undefined;
+
+    for (const session of existingSessions.data) {
+      if (
+        session.mode !== 'subscription' ||
+        session.status !== 'open' ||
+        !session.url
+      ) {
+        continue;
+      }
+
+      const items = await stripe.checkout.sessions.listLineItems(
+        session.id,
+        { limit: 10 }
+      );
+
+      const matchesPlan =
+        items.data.length === 1 &&
+        items.data[0].price?.id === priceId &&
+        items.data[0].quantity === 1;
+
+      if (matchesPlan) {
+        openSession = session;
+        break;
+      }
+    }
+
+    if (openSession?.url) {
+      console.log('[billing/checkout] reusing open checkout session', {
+        customerId,
+        sessionId: openSession.id,
+      });
+
+      return res.status(200).json({ url: openSession.url });
+    }
 
     const base = siteBase();
-    const session = await stripe.checkout.sessions.create({
-      mode: 'subscription',
-      customer: customerId,
-      line_items: [{ price: priceId, quantity: 1 }],
-      allow_promotion_codes: true,
-      success_url: `${base}/managers/turns?billing=success`,
-      cancel_url: `${base}/billing?canceled=1`,
-    });
+       const session = await stripe.checkout.sessions.create(
+      {
+        mode: 'subscription',
+        customer: customerId,
+        line_items: [{ price: priceId, quantity: 1 }],
+        allow_promotion_codes: true,
+        success_url: `${base}/managers/turns?billing=success`,
+        cancel_url: `${base}/billing?canceled=1`,
+      },
+      {
+       idempotencyKey: `turnqa-checkout-${customerId}-${priceId}-${profile?.stripe_subscription_id || 'new'}-${Math.floor(Date.now() / (30 * 60 * 1000))}`,
+      }
+    );
 
     if (!session?.url) return res.status(500).json({ error: 'Stripe did not return a checkout URL.' });
     return res.status(200).json({ url: session.url });
