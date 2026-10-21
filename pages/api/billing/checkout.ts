@@ -95,7 +95,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // 2) Ensure we have a Stripe customer id
     const { data: profile, error: pErr } = await supaAdmin
       .from('profiles')
-      .select('stripe_customer_id')
+      .select('stripe_customer_id, stripe_subscription_id')
       .eq('id', userId)
       .maybeSingle();
 
