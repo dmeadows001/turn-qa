@@ -118,6 +118,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (uErr) return res.status(500).json({ error: uErr.message || 'Could not update profile' });
     }
 
+        // Prevent customers from purchasing another subscription
+    // when they already have an active or trialing subscription.
+    const existingSubscriptions = await stripe.subscriptions.list({
+      customer: customerId,
+      status: 'all',
+      limit: 100,
+    });
+
+    const blockingSubscription = existingSubscriptions.data.find(
+      (sub) =>
+        sub.status === 'active' ||
+        sub.status === 'trialing' ||
+        sub.status === 'past_due' ||
+        sub.status === 'unpaid' ||
+        sub.status === 'incomplete' ||
+        sub.status === 'paused'
+    );
+
+    if (blockingSubscription) {
+      return res.status(409).json({
+        error:
+          'An existing subscription requires attention. Please manage your current subscription before starting another.',
+      });
+    }
+
     const priceId = await resolvePriceId(process.env.STRIPE_PRICE_ID!);
 
     const base = siteBase();
