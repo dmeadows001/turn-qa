@@ -12,7 +12,73 @@ type BillingStatus = {
   subscription_status: string | null;
   active_until: string | null;
   trial_ends_at: string | null;
+  plan_name?: string | null;
+  price_amount?: number | null;
+  currency?: string | null;
+  billing_interval?: string | null;
+  cancel_at_period_end?: boolean;
+  cancel_at?: string | null;
+  current_period_end?: string | null;
+  next_billing_date?: string | null;
 };
+
+function formatDate(value?: string | null) {
+  if (!value) return null;
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+
+  return date.toLocaleDateString('en-US', {
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+    timeZone: 'UTC',
+  });
+}
+
+function formatPrice(
+  amount?: number | null,
+  currency?: string | null
+) {
+  if (amount == null || !currency) return null;
+
+  try {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency,
+    }).format(amount);
+  } catch {
+    return `${amount.toFixed(2)} ${currency}`;
+  }
+}
+
+function Detail({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
+  return (
+    <div style={{ minWidth: 0 }}>
+      <div
+        className="muted"
+        style={{ fontSize: 12, marginBottom: 6 }}
+      >
+        {label}
+      </div>
+      <div
+        style={{
+          fontSize: 14,
+          fontWeight: 600,
+          overflowWrap: 'anywhere',
+        }}
+      >
+        {value}
+      </div>
+    </div>
+  );
+}
 
 export default function Billing() {
   const [loading, setLoading] = useState(false);
@@ -22,17 +88,13 @@ export default function Billing() {
   const [billing, setBilling] = useState<BillingStatus | null>(null);
 
   async function getAccessToken(): Promise<string | null> {
-  console.log('[TurnQA Billing] Starting session check');
-
-  const supabase = supabaseBrowser();
-  const { data, error } = await supabase.auth.getSession();
-
-  console.log('[TurnQA Billing] Session check completed');
+    const supabase = supabaseBrowser();
+    const { data, error } = await supabase.auth.getSession();
 
     if (error) throw error;
 
     return data.session?.access_token || null;
-    }
+  }
 
   async function authHeaders(): Promise<Record<string, string>> {
     const token = await getAccessToken();
@@ -104,7 +166,9 @@ export default function Billing() {
 
         if (ensure.status === 401) {
           setNotSignedIn(true);
-          throw new Error(body?.error || 'Please sign in to continue.');
+          throw new Error(
+            body?.error || 'Please sign in to continue.'
+          );
         }
 
         throw new Error(
@@ -123,10 +187,14 @@ export default function Billing() {
       if (!res.ok) {
         if (res.status === 401) {
           setNotSignedIn(true);
-          throw new Error(body?.error || 'Please sign in to start checkout.');
+          throw new Error(
+            body?.error || 'Please sign in to start checkout.'
+          );
         }
 
-        throw new Error(body?.error || `Request failed (${res.status})`);
+        throw new Error(
+          body?.error || `Request failed (${res.status})`
+        );
       }
 
       if (!body?.url) {
@@ -159,11 +227,14 @@ export default function Billing() {
       if (!res.ok) {
         if (res.status === 401) {
           setNotSignedIn(true);
-          throw new Error(body?.error || 'Please sign in to manage billing.');
+          throw new Error(
+            body?.error || 'Please sign in to manage billing.'
+          );
         }
 
         throw new Error(
-          body?.error || `Unable to open billing portal (${res.status})`
+          body?.error ||
+            `Unable to open billing portal (${res.status})`
         );
       }
 
@@ -178,7 +249,9 @@ export default function Billing() {
     }
   }
 
-  const status = String(billing?.subscription_status || '').toLowerCase();
+  const status = String(
+    billing?.subscription_status || ''
+  ).toLowerCase();
 
   const isPastDue = [
     'past_due',
@@ -188,15 +261,36 @@ export default function Billing() {
   ].includes(status);
 
   const isActive = status === 'active';
-
   const isTrial = status === 'trial' || status === 'trialing';
-
   const hasExpiredTrial = isTrial && !billing?.allowed;
 
-  const isCanceled =
-    status === 'canceled' ||
-    status === 'cancelled' ||
-    status === 'incomplete_expired';
+  const isCanceled = [
+    'canceled',
+    'cancelled',
+    'incomplete_expired',
+  ].includes(status);
+
+  const isCancelScheduled =
+    (isActive || isTrial) &&
+    !!billing?.allowed &&
+    (!!billing?.cancel_at_period_end || !!billing?.cancel_at);
+
+  const cancellationDate = formatDate(
+    billing?.cancel_at || billing?.current_period_end
+  );
+
+  const renewalDate = formatDate(billing?.next_billing_date);
+  const trialEndDate = formatDate(billing?.trial_ends_at);
+
+  const price = formatPrice(
+    billing?.price_amount,
+    billing?.currency
+  );
+
+  const interval = billing?.billing_interval;
+  const priceLabel = price
+    ? `${price}${interval ? ` / ${interval}` : ''}`
+    : null;
 
   const hasBillingError = !checking && !!err && !billing;
 
@@ -212,10 +306,17 @@ export default function Billing() {
       "We couldn't process your latest TurnQA subscription payment. Update your payment method to restore access. Your properties, photos, and turnover history remain saved.";
     buttonText = 'Update payment method';
     action = openPortal;
+  } else if (isCancelScheduled) {
+    title = 'Cancellation scheduled';
+    description = cancellationDate
+      ? `Your subscription remains active until ${cancellationDate}. You can continue using TurnQA until then. Your saved turnover information will remain preserved.`
+      : 'Your subscription is scheduled to end. You can continue using TurnQA while your subscription remains active.';
+    buttonText = 'Manage subscription';
+    action = openPortal;
   } else if (isActive) {
     title = 'Your subscription is active';
     description =
-      'Your TurnQA subscription is active. You can manage payment methods, invoices, and subscription settings securely through Stripe.';
+      'Your TurnQA subscription is active. Review your plan below or manage payment methods, invoices, and subscription settings securely through Stripe.';
     buttonText = 'Manage billing';
     action = openPortal;
   } else if (isTrial && !hasExpiredTrial) {
@@ -234,6 +335,30 @@ export default function Billing() {
       'Your TurnQA trial has ended. Start a subscription to continue managing your turnovers.';
   }
 
+  const showPlanDetails =
+    !!billing?.plan_name ||
+    !!priceLabel ||
+    isActive ||
+    isTrial ||
+    isCanceled ||
+    isPastDue;
+
+  let displayStatus = 'No active subscription';
+
+  if (isPastDue) {
+    displayStatus = 'Payment attention required';
+  } else if (isCancelScheduled) {
+    displayStatus = 'Active — cancellation scheduled';
+  } else if (isActive) {
+    displayStatus = 'Active — renewing';
+  } else if (isTrial && !hasExpiredTrial) {
+    displayStatus = 'Trial active';
+  } else if (isCanceled) {
+    displayStatus = 'Ended';
+  } else if (hasExpiredTrial) {
+    displayStatus = 'Trial expired';
+  }
+
   return (
     <>
       <Header />
@@ -246,75 +371,42 @@ export default function Billing() {
             'var(--bg), radial-gradient(1000px 600px at 80% -10%, rgba(124,92,255,.16), transparent 60%), radial-gradient(800px 500px at 0% 100%, rgba(0,229,255,.08), transparent 60%), linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0) 40%)',
         }}
       >
-        <Card className="auth-card">
-          {checking ? (
-            <>
-              <h1 className="h1 accent" style={{ marginBottom: 12 }}>
-                Your plan
-              </h1>
-              <p className="muted">Checking your subscription...</p>
-            </>
-          ) : notSignedIn ? (
-            <>
-              <h1 className="h1 accent" style={{ marginBottom: 12 }}>
-                Sign in required
-              </h1>
-              <p className="muted" style={{ marginBottom: 16 }}>
-                Please sign in to view or manage your TurnQA subscription.
-              </p>
-              <Link href="/login" style={{ textDecoration: 'underline' }}>
-                Sign in
-              </Link>
-            </>
-          ) : hasBillingError ? (
-            <>
-              <h1 className="h1 accent" style={{ marginBottom: 12 }}>
-                Unable to load billing
-              </h1>
-              <p className="muted">
-                We couldn't check your subscription right now. Please
-                refresh this page and try again.
-              </p>
-              <p style={{ marginTop: 12, color: '#fca5a5', fontSize: 14 }}>
-                {err}
-              </p>
-            </>
-          ) : (
-            <>
-              <h1 className="h1 accent" style={{ marginBottom: 12 }}>
-                {title}
-              </h1>
-
-              <p className="muted" style={{ marginBottom: 16 }}>
-                {description}
-              </p>
-
-              <PrimaryButton onClick={action} disabled={loading}>
-                {loading ? 'Redirecting...' : buttonText}
-              </PrimaryButton>
-
-              {isActive && (
-                <p className="hint" style={{ marginTop: 14, fontSize: 14 }}>
-                  <Link
-                    href="/managers/turns"
-                    style={{ textDecoration: 'underline' }}
-                  >
-                    Return to turnovers
-                  </Link>
+        <div style={{ width: '100%', maxWidth: 560 }}>
+          <Card className="auth-card">
+            {checking ? (
+              <>
+                <h1 className="h1 accent" style={{ marginBottom: 12 }}>
+                  Your plan
+                </h1>
+                <p className="muted">
+                  Checking your subscription...
                 </p>
-              )}
-
-              {notSignedIn && (
-                <p className="hint" style={{ marginTop: 12, fontSize: 14 }}>
-                  You're not signed in.{' '}
-                  <Link href="/login" style={{ textDecoration: 'underline' }}>
-                    Sign in
-                  </Link>{' '}
-                  and try again.
+              </>
+            ) : notSignedIn ? (
+              <>
+                <h1 className="h1 accent" style={{ marginBottom: 12 }}>
+                  Sign in required
+                </h1>
+                <p className="muted" style={{ marginBottom: 16 }}>
+                  Please sign in to view or manage your
+                  TurnQA subscription.
                 </p>
-              )}
-
-              {err && (
+                <Link
+                  href="/login"
+                  style={{ textDecoration: 'underline' }}
+                >
+                  Sign in
+                </Link>
+              </>
+            ) : hasBillingError ? (
+              <>
+                <h1 className="h1 accent" style={{ marginBottom: 12 }}>
+                  Unable to load billing
+                </h1>
+                <p className="muted">
+                  We couldn't check your subscription right now.
+                  Please refresh this page and try again.
+                </p>
                 <p
                   style={{
                     marginTop: 12,
@@ -324,10 +416,190 @@ export default function Billing() {
                 >
                   {err}
                 </p>
-              )}
-            </>
-          )}
-        </Card>
+              </>
+            ) : (
+              <>
+                <h1 className="h1 accent" style={{ marginBottom: 12 }}>
+                  {title}
+                </h1>
+
+                <p
+                  className="muted"
+                  style={{ marginBottom: 18, lineHeight: 1.6 }}
+                >
+                  {description}
+                </p>
+
+                {showPlanDetails && (
+                  <section
+                    style={{
+                      padding: 18,
+                      marginBottom: 20,
+                      border: '1px solid rgba(255,255,255,.12)',
+                      borderRadius: 14,
+                      background: 'rgba(255,255,255,.025)',
+                    }}
+                  >
+                    <div
+                      className="muted"
+                      style={{
+                        fontSize: 12,
+                        marginBottom: 6,
+                      }}
+                    >
+                      CURRENT PLAN
+                    </div>
+
+                    <div
+                      style={{
+                        fontSize: 21,
+                        fontWeight: 700,
+                        marginBottom: 6,
+                      }}
+                    >
+                      {billing?.plan_name || 'TurnQA Pro'}
+                    </div>
+
+                    {priceLabel && (
+                      <div
+                        style={{
+                          fontSize: 18,
+                          fontWeight: 600,
+                          marginBottom: 18,
+                        }}
+                      >
+                        {priceLabel}
+                      </div>
+                    )}
+
+                    <div
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns:
+                          'repeat(auto-fit, minmax(170px, 1fr))',
+                        gap: 18,
+                        borderTop: '1px solid rgba(255,255,255,.1)',
+                        paddingTop: 16,
+                      }}
+                    >
+                      <Detail
+                        label="Subscription status"
+                        value={displayStatus}
+                      />
+
+                      {isCancelScheduled && (
+                        <>
+                          <Detail
+                            label="Access until"
+                            value={
+                              cancellationDate || 'Date unavailable'
+                            }
+                          />
+                          <Detail
+                            label="Next renewal"
+                            value="None — cancellation scheduled"
+                          />
+                        </>
+                      )}
+
+                      {isActive && !isCancelScheduled && (
+                        <Detail
+                          label="Next renewal"
+                          value={
+                            renewalDate || 'Date unavailable'
+                          }
+                        />
+                      )}
+
+                      {isTrial && !isCancelScheduled && (
+                        <Detail
+                          label="Trial ends"
+                          value={
+                            trialEndDate || 'Date unavailable'
+                          }
+                        />
+                      )}
+
+                      {isCanceled && (
+                        <Detail
+                          label="TurnQA access"
+                          value={
+                            billing?.allowed
+                              ? 'Available'
+                              : 'Subscription required'
+                          }
+                        />
+                      )}
+
+                      {isPastDue && (
+                        <Detail
+                          label="Action needed"
+                          value="Update payment method"
+                        />
+                      )}
+                    </div>
+                  </section>
+                )}
+
+                <PrimaryButton
+                  onClick={action}
+                  disabled={loading}
+                >
+                  {loading ? 'Redirecting...' : buttonText}
+                </PrimaryButton>
+
+                {(isActive ||
+                  (isTrial && billing?.allowed)) && (
+                  <p
+                    className="hint"
+                    style={{
+                      marginTop: 14,
+                      fontSize: 14,
+                    }}
+                  >
+                    <Link
+                      href="/managers/turns"
+                      style={{ textDecoration: 'underline' }}
+                    >
+                      Return to turnovers
+                    </Link>
+                  </p>
+                )}
+
+                {notSignedIn && (
+                  <p
+                    className="hint"
+                    style={{
+                      marginTop: 12,
+                      fontSize: 14,
+                    }}
+                  >
+                    You're not signed in.{' '}
+                    <Link
+                      href="/login"
+                      style={{ textDecoration: 'underline' }}
+                    >
+                      Sign in
+                    </Link>{' '}
+                    and try again.
+                  </p>
+                )}
+
+                {err && (
+                  <p
+                    style={{
+                      marginTop: 12,
+                      color: '#fca5a5',
+                      fontSize: 14,
+                    }}
+                  >
+                    {err}
+                  </p>
+                )}
+              </>
+            )}
+          </Card>
+        </div>
       </main>
     </>
   );
