@@ -145,7 +145,11 @@ export default function InviteCleaner() {
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error || 'Invite failed');
 
-      setMsg(`Invite sent to ${phone}. Onboarding link: ${j.invite_url}`);
+      setMsg(
+  j.sms?.ok
+    ? `SMS invitation successfully sent to ${phone}.`
+    : `Cleaner linked to property, but SMS could not be sent: ${j.sms?.reason || 'Unknown error'}`
+);
     } catch (e) {
       setMsg(`Invite failed: ${e.message || e}`);
     } finally {
