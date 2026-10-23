@@ -1,6 +1,7 @@
 // pages/api/cleaner/start-turn.js
 import { createClient } from '@supabase/supabase-js';
 import { readCleanerSession } from '@/lib/session';
+import { isActiveProfile } from '@/lib/requireActiveSubscription';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -38,8 +39,45 @@ export default async function handler(req, res) {
       .eq('id', property_id)
       .maybeSingle();
 
-    if (pErr) throw pErr;
-    const manager_id = propRow?.manager_id || null;
+if (pErr) throw pErr;
+
+const manager_id = propRow?.manager_id || null;
+
+if (!manager_id) {
+  return res.status(403).json({
+    error: 'Property has no assigned manager',
+  });
+}
+
+// Find the manager's Supabase user account.
+const { data: manager, error: mErr } = await supabase
+  .from('managers')
+  .select('user_id')
+  .eq('id', manager_id)
+  .maybeSingle();
+
+if (mErr) throw mErr;
+
+if (!manager?.user_id) {
+  return res.status(403).json({
+    error: 'Manager account not found',
+  });
+}
+
+// Check the subscription belonging to this manager.
+const { data: profile, error: sErr } = await supabase
+  .from('profiles')
+  .select('id, subscription_status, active_until, trial_ends_at')
+  .eq('id', manager.user_id)
+  .maybeSingle();
+
+if (sErr) throw sErr;
+
+if (!isActiveProfile(profile)) {
+  return res.status(402).json({
+    error: 'The property manager subscription is inactive',
+  });
+}
 
     // ✅ IDPOTENT: return existing in-progress turn if it exists
     const { data: existing, error: eErr } = await supabase
