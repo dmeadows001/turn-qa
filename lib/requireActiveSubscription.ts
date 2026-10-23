@@ -43,7 +43,7 @@ function isFutureIso(iso: string | null | undefined): boolean {
 }
 
 // Match the access rules used by /api/billing/status.
-function isActiveProfile(profile: ProfileRow | null): boolean {
+export function isActiveProfile(profile: ProfileRow | null): boolean {
   if (!profile) return false;
 
   const status = String(
