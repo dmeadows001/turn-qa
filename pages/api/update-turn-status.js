@@ -59,9 +59,8 @@ export default async function handler(req, res) {
   }
 
  // 🔒 Billing enforcement: only active trial/subscription managers can update turn status
-  const gate = await requireActiveSubscription(req, res);
-  if (gate.handled) return;
-  
+    const access = await requireActiveSubscription(req, res);
+    if (!access.ok) return;
   try {
     const { turn_id, new_status, manager_note } = parseBody(req);
     if (!turn_id) return res.status(400).json({ error: 'turn_id is required' });
@@ -78,7 +77,42 @@ export default async function handler(req, res) {
       .eq('id', turn_id)
       .maybeSingle();
     if (tErr) throw tErr;
-    if (!turn) return res.status(404).json({ error: 'turn not found' });
+if (!turn) {
+  return res.status(404).json({ error: 'turn not found' });
+}
+
+// Verify the signed-in manager account.
+const { data: manager, error: mErr } = await supa
+  .from('managers')
+  .select('id')
+  .eq('user_id', access.user.id)
+  .maybeSingle();
+
+if (mErr) throw mErr;
+
+if (!manager) {
+  return res.status(403).json({
+    error: 'Manager account not found',
+  });
+}
+
+// Verify that this turnover belongs to the manager's property.
+const { data: property, error: pErr } = await supa
+  .from('properties')
+  .select('id')
+  .eq('id', turn.property_id)
+  .eq('manager_id', manager.id)
+  .maybeSingle();
+
+if (pErr) throw pErr;
+
+if (!property) {
+  return res.status(404).json({
+    error: 'Turnover not found or access denied',
+  });
+}
+
+// Update status + timestamps + optional note
 
     // Update status + timestamps + optional note
     const patch = { status: new_status };
