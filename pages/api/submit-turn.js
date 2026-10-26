@@ -1,6 +1,7 @@
 // pages/api/submit-turn.js
 import { supabaseAdmin as _admin } from '@/lib/supabaseAdmin';
 import { notifyManagerForTurn } from '@/lib/notify';
+import { readCleanerSession } from '@/lib/session';
 
 // Support both export styles (function returning client vs direct client)
 const supa = typeof _admin === 'function' ? _admin() : _admin;
@@ -101,10 +102,19 @@ export default async function handler(req, res) {
     const { turnId, photos } = parseBody(req.body);
     if (!turnId) return res.status(400).json({ error: 'turnId is required' });
 
+    // Require an authenticated cleaner session.
+const session = readCleanerSession(req);
+
+if (!session?.cleaner_id) {
+  return res.status(401).json({
+    error: 'Cleaner authentication required',
+  });
+}
+
     // --- Guard: require AI Scan to have been RUN at least once ---
     const { data: turnRow, error: turnErr } = await supa
       .from('turns')
-      .select('id, status, scan_ok, scan_checked_at')
+      .select('id, cleaner_id, status, scan_ok, scan_checked_at')
       .eq('id', turnId)
       .single();
 
@@ -114,6 +124,14 @@ export default async function handler(req, res) {
     if (!turnRow) {
       return res.status(404).json({ error: 'Turn not found' });
     }
+
+    // Only the cleaner who owns this turn may submit it.
+if (turnRow.cleaner_id !== session.cleaner_id) {
+  return res.status(403).json({
+    error: 'You are not authorized to submit this turnover',
+  });
+}
+    
     if (!turnRow.scan_checked_at) {
       // Only enforce that a scan has been *performed* (even if it found issues).
       return res.status(409).json({
