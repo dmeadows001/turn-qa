@@ -140,8 +140,17 @@ export default function CleanerTurns() {
                       <td style={{ padding:'10px 8px' }}>{t.submitted_at ? niceDate(t.submitted_at) : '—'}</td>
                       <td style={{ padding:'10px 8px', color:'#cbd5e1' }}>{payoutText(t)}</td>
                       <td style={{ padding:'10px 8px' }}>
-                        {/* Read-only view for cleaners (manager tools hidden by your review page guard) */}
-                        <a href={`/turns/${t.id}/review`} style={ui.btnSecondary}>Open</a>
+                        {/* Resume unfinished turns; review submitted or completed turns */}
+                          <a
+                            href={
+                              t.status === 'in_progress'
+                                ? `/turns/${t.id}/capture?from=capture`
+                                : `/turns/${t.id}/review`
+                            }
+                            style={ui.btnSecondary}
+                          >
+                            {t.status === 'in_progress' ? 'Resume Turn' : 'View Turn'}
+                          </a>
                       </td>
                     </tr>
                   ))}
