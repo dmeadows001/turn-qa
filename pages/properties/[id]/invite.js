@@ -202,8 +202,18 @@ export default function InviteCleaner() {
     );
   }
   return (
-    <ChromeDark title={`Invite Cleaner — ${propertyName || ''}`}>
+    <ChromeDark title="Invite Cleaner">
       <div style={{ maxWidth: 520, margin: '0 auto' }}>
+                  <div
+            style={{
+              color: '#94a3b8',
+              fontSize: 14,
+              marginBottom: 12,
+              textAlign: 'center',
+            }}
+          >
+            Property: {propertyName || 'Loading…'}
+          </div>
         <div style={{ border:'1px solid #1f2937', background:'#0b1220', borderRadius:16, padding:18 }}>
           <div style={{ color:'#cbd5e1', marginBottom:8 }}>
             We’ll text them a secure link to verify consent and access the photo capture page.
