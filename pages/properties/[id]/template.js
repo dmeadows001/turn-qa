@@ -791,284 +791,288 @@ export default function TemplateBuilder() {
             </div>
           )}
 
-          {/* Existing items */}
-          <div style={{ marginTop: 18, overflowX: 'auto' }}>
-            {shots.length === 0 ? (
-              <div style={ui.muted}>
-                No items yet — add your first checklist item above.
-              </div>
-            ) : (
-              <table
-                style={{
-                  width: '100%',
-                  minWidth: 900,
-                  borderCollapse: 'collapse',
-                }}
-              >
-                <thead>
-                  <tr
+        {/* Existing items */}
+        <div style={{ marginTop: 18, minWidth: 0 }}>
+          {shots.length === 0 ? (
+            <div style={ui.muted}>
+              No items yet — add your first checklist item above.
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              {shots.map((s, idx) => {
+                const refCount = Array.isArray(s.reference_paths)
+                  ? s.reference_paths.length
+                  : 0;
+                const isDragging = draggingId === s.id;
+        
+                return (
+                  <div
+                    key={s.id}
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={() => handleRowDrop(s.id)}
                     style={{
-                      textAlign: 'left',
-                      borderBottom: '1px solid #1f2937',
+                      background: isDragging ? '#020617' : '#0b1220',
+                      border: '1px solid #334155',
+                      borderRadius: 12,
+                      padding: 14,
+                      minWidth: 0,
+                      opacity: isDragging ? 0.85 : 1,
                     }}
                   >
-                    <th style={{ padding: '10px 8px', width: 60 }}></th>
-                    <th style={{ padding: '10px 8px' }}>Label</th>
-                    <th style={{ padding: '10px 8px' }}>Area</th>
-                    <th style={{ padding: '10px 8px', width: 120 }}>Required</th>
-                    <th style={{ padding: '10px 8px', width: 260 }}>
-                      Reference photos
-                    </th>
-                    <th style={{ padding: '10px 8px', width: 120 }}></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {shots.map((s, idx) => {
-                    const refCount = Array.isArray(s.reference_paths)
-                      ? s.reference_paths.length
-                      : 0;
-                    const isDragging = draggingId === s.id;
-
-                    const rows = [];
-
-                    // Reference thumbnails row (above main row)
-                    if (refCount > 0) {
-                      rows.push(
-                        <tr key={`${s.id}-refs`}>
-                          <td colSpan={6} style={{ padding: '10px 8px 4px' }}>
-                            <div
-                              style={{
-                                borderRadius: 10,
-                                border: '1px solid #1f2937',
-                                background: '#020617',
-                                padding: '8px 10px',
-                              }}
-                            >
+                    <div
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        flexWrap: 'wrap',
+                        gap: 10,
+                        marginBottom: 14,
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <span
+                          draggable
+                          onDragStart={() => handleDragStart(s.id)}
+                          onDragEnd={handleDragEnd}
+                          title="Drag to reorder"
+                          style={{
+                            cursor: 'grab',
+                            color: '#94a3b8',
+                            fontSize: 22,
+                            touchAction: 'none',
+                          }}
+                        >
+                          ⋮⋮
+                        </span>
+                        <strong style={{ color: '#e2e8f0' }}>
+                          Checklist item {idx + 1}
+                        </strong>
+                      </div>
+        
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <button
+                          type="button"
+                          onClick={() => moveShot(s.id, -1)}
+                          disabled={idx === 0}
+                          style={{
+                            ...ui.btnSecondary,
+                            padding: '7px 12px',
+                            opacity: idx === 0 ? 0.4 : 1,
+                          }}
+                          title="Move up"
+                        >
+                          ▲
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => moveShot(s.id, 1)}
+                          disabled={idx === shots.length - 1}
+                          style={{
+                            ...ui.btnSecondary,
+                            padding: '7px 12px',
+                            opacity: idx === shots.length - 1 ? 0.4 : 1,
+                          }}
+                          title="Move down"
+                        >
+                          ▼
+                        </button>
+                      </div>
+                    </div>
+        
+                    <div
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 210px), 1fr))',
+                        gap: 12,
+                        minWidth: 0,
+                      }}
+                    >
+                      <div style={{ minWidth: 0 }}>
+                        <label style={{ ...ui.label, display: 'block', marginBottom: 5 }}>
+                          Checklist label
+                        </label>
+                        <input
+                          type="text"
+                          value={s.label || ''}
+                          onChange={(e) => updateLabel(s.id, e.target.value)}
+                          style={{ ...ui.input, width: '100%', minWidth: 0, boxSizing: 'border-box' }}
+                        />
+                      </div>
+        
+                      <div style={{ minWidth: 0 }}>
+                        <label style={{ ...ui.label, display: 'block', marginBottom: 5 }}>
+                          Area
+                        </label>
+                        <select
+                          value={s.area_key || 'general'}
+                          onChange={(e) => updateArea(s.id, e.target.value)}
+                          style={{
+                            ...ui.input,
+                            width: '100%',
+                            minWidth: 0,
+                            boxSizing: 'border-box',
+                            background: '#0b1220',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          {AREAS.map(([v, label]) => (
+                            <option key={v} value={v}>{label}</option>
+                          ))}
+                        </select>
+                      </div>
+        
+                      <div style={{ minWidth: 0 }}>
+                        <label style={{ ...ui.label, display: 'block', marginBottom: 5 }}>
+                          Required photos
+                        </label>
+                        <input
+                          type="number"
+                          min={1}
+                          step={1}
+                          value={s.min_count || 1}
+                          onChange={(e) => updateRequired(s.id, e.target.value)}
+                          style={{ ...ui.input, width: '100%', minWidth: 0, boxSizing: 'border-box' }}
+                        />
+                      </div>
+                    </div>
+        
+                    <div
+                      style={{
+                        marginTop: 16,
+                        paddingTop: 14,
+                        borderTop: '1px solid #1f2937',
+                        minWidth: 0,
+                      }}
+                    >
+                      <div style={{ fontSize: 13, fontWeight: 600, color: '#cbd5e1', marginBottom: 10 }}>
+                        Reference photos ({refCount})
+                      </div>
+        
+                      {refCount > 0 ? (
+                        <div
+                          style={{
+                            display: 'flex',
+                            flexWrap: 'wrap',
+                            gap: 10,
+                            marginBottom: 12,
+                          }}
+                        >
+                          {s.reference_paths.map((path) => {
+                            if (!thumbByPath[path]) ensureThumb(path);
+                            const thumb = thumbByPath[path] || null;
+        
+                            return (
                               <div
+                                key={path}
                                 style={{
-                                  fontSize: 12,
-                                  color: '#9ca3af',
-                                  marginBottom: 6,
-                                  fontWeight: 600,
+                                  position: 'relative',
+                                  width: 82,
+                                  height: 82,
+                                  borderRadius: 9,
+                                  border: '1px solid #374151',
+                                  background: '#020617',
+                                  overflow: 'hidden',
+                                  flexShrink: 0,
+                                  cursor: 'pointer',
+                                }}
+                                onClick={(e) => {
+                                  if (e.target.closest('button')) return;
+                                  openSignedPath(path);
                                 }}
                               >
-                                Reference photo
-                                {refCount > 1 ? 's' : ''} for {s.label}
+                                {thumb ? (
+                                  <img
+                                    src={thumb}
+                                    alt="Reference"
+                                    style={{
+                                      width: '100%',
+                                      height: '100%',
+                                      objectFit: 'cover',
+                                    }}
+                                  />
+                                ) : (
+                                  <div
+                                    style={{
+                                      width: '100%',
+                                      height: '100%',
+                                      background: '#0f172a',
+                                    }}
+                                  />
+                                )}
+        
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteRefPhoto(s.id, path)}
+                                  style={{
+                                    position: 'absolute',
+                                    top: 3,
+                                    right: 3,
+                                    width: 22,
+                                    height: 22,
+                                    borderRadius: '50%',
+                                    border: 'none',
+                                    background: '#7f1d1d',
+                                    color: '#fee2e2',
+                                    cursor: 'pointer',
+                                  }}
+                                  title="Delete reference photo"
+                                  aria-label="Delete reference photo"
+                                >
+                                  ✕
+                                </button>
                               </div>
-                              <div
-                                style={{
-                                  display: 'flex',
-                                  flexWrap: 'wrap',
-                                  gap: 8,
-                                }}
-                              >
-                                {s.reference_paths.map((path) => {
-                                  if (!thumbByPath[path]) ensureThumb(path);
-                                  const thumb = thumbByPath[path] || null;
-
-                                  return (
-                                    <div
-                                      key={path}
-                                      style={{
-                                        position: 'relative',
-                                        width: 72,
-                                        height: 72,
-                                        borderRadius: 8,
-                                        overflow: 'hidden',
-                                        border: '1px solid #374151',
-                                        background: '#020617',
-                                        cursor: 'pointer',
-                                      }}
-                                      onClick={(e) => {
-                                        if (e.target.dataset?.role === 'delete-ref') return;
-                                        openSignedPath(path);
-                                      }}
-                                    >
-                                      {thumb ? (
-                                        <img
-                                          src={thumb}
-                                          alt="Reference"
-                                          style={{
-                                            width: '100%',
-                                            height: '100%',
-                                            objectFit: 'cover',
-                                          }}
-                                        />
-                                      ) : (
-                                        <div
-                                          style={{
-                                            width: '100%',
-                                            height: '100%',
-                                            background: '#0f172a',
-                                          }}
-                                        />
-                                      )}
-
-                                      <button
-                                        type="button"
-                                        data-role="delete-ref"
-                                        onClick={() =>
-                                          handleDeleteRefPhoto(s.id, path)
-                                        }
-                                        style={{
-                                          position: 'absolute',
-                                          top: 2,
-                                          right: 2,
-                                          width: 18,
-                                          height: 18,
-                                          borderRadius: '999px',
-                                          border: 'none',
-                                          background: '#7f1d1d',
-                                          color: '#fee2e2',
-                                          fontSize: 11,
-                                          cursor: 'pointer',
-                                          display: 'flex',
-                                          alignItems: 'center',
-                                          justifyContent: 'center',
-                                        }}
-                                        title="Delete reference photo"
-                                      >
-                                        ✕
-                                      </button>
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    }
-
-                    // Main row (draggable + up/down buttons)
-                    rows.push(
-                      <tr
-                        key={s.id}
-                        draggable
-                        onDragStart={() => handleDragStart(s.id)}
-                        onDragOver={(e) => e.preventDefault()}
-                        onDrop={() => handleRowDrop(s.id)}
-                        onDragEnd={handleDragEnd}
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <div style={{ ...ui.subtle, marginBottom: 10 }}>
+                          No reference photos yet.
+                        </div>
+                      )}
+        
+                      <input
+                        type="file"
+                        accept="image/*"
+                        style={{ display: 'none' }}
+                        ref={(el) => { refInputs.current[s.id] = el; }}
+                        onChange={(e) => handleRefFileChange(s, e)}
+                      />
+        
+                      <button
+                        type="button"
+                        style={{ ...ui.btnSecondary, maxWidth: '100%', whiteSpace: 'normal' }}
+                        onClick={() => refInputs.current[s.id]?.click()}
+                      >
+                        + Add reference photo
+                      </button>
+                    </div>
+        
+                    <div
+                      style={{
+                        marginTop: 16,
+                        paddingTop: 12,
+                        borderTop: '1px solid #1f2937',
+                        display: 'flex',
+                        justifyContent: 'flex-end',
+                      }}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => deleteShot(s.id)}
                         style={{
-                          borderBottom: '1px solid #111827',
-                          background: isDragging ? '#020617' : 'transparent',
-                          opacity: isDragging ? 0.85 : 1,
+                          ...ui.btnSecondary,
+                          color: '#fca5a5',
+                          borderColor: '#7f1d1d',
                         }}
                       >
-                        <td style={{ padding: '10px 8px', verticalAlign: 'top' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                            <span style={{ fontSize: 16, color: '#6b7280', cursor: 'grab' }}>⋮⋮</span>
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                              <button
-                                type="button"
-                                onClick={() => moveShot(s.id, -1)}
-                                disabled={idx === 0}
-                                style={{
-                                  width: 20, height: 18, borderRadius: 4,
-                                  border: '1px solid #374151',
-                                  background: '#020617',
-                                  color: '#9ca3af',
-                                  fontSize: 10,
-                                  cursor: idx === 0 ? 'default' : 'pointer',
-                                }}
-                                title="Move up"
-                              >
-                                ▲
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => moveShot(s.id, +1)}
-                                disabled={idx === shots.length - 1}
-                                style={{
-                                  width: 20, height: 18, borderRadius: 4,
-                                  border: '1px solid #374151',
-                                  background: '#020617',
-                                  color: '#9ca3af',
-                                  fontSize: 10,
-                                  cursor: idx === shots.length - 1 ? 'default' : 'pointer',
-                                }}
-                                title="Move down"
-                              >
-                                ▼
-                              </button>
-                            </div>
-                          </div>
-                        </td>
-
-                        <td style={{ padding: '10px 8px', verticalAlign: 'top' }}>
-                          <input
-                            type="text"
-                            value={s.label || ''}
-                            onChange={(e) => updateLabel(s.id, e.target.value)}
-                            style={{ ...ui.input }}
-                          />
-                        </td>
-
-                        <td style={{ padding: '10px 8px', verticalAlign: 'top' }}>
-                          <select
-                            value={s.area_key || 'general'}
-                            onChange={(e) => updateArea(s.id, e.target.value)}
-                            style={{ ...ui.input, background: '#0b1220', cursor: 'pointer' }}
-                          >
-                            {AREAS.map(([v, label]) => (
-                              <option key={v} value={v}>{label}</option>
-                            ))}
-                          </select>
-                        </td>
-
-                        <td style={{ padding: '10px 8px', verticalAlign: 'top' }}>
-                          <input
-                            type="number"
-                            min={1}
-                            step={1}
-                            value={s.min_count || 1}
-                            onChange={(e) => updateRequired(s.id, e.target.value)}
-                            style={{ ...ui.input }}
-                          />
-                        </td>
-
-                        <td style={{ padding: '10px 8px', verticalAlign: 'top' }}>
-                          <input
-                            type="file"
-                            accept="image/*"
-                            style={{ display: 'none' }}
-                            ref={(el) => { refInputs.current[s.id] = el; }}
-                            onChange={(e) => handleRefFileChange(s, e)}
-                          />
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                            <div style={{ fontSize: 12, color: '#9ca3af' }}>
-                              {refCount === 0 && 'No reference photos yet'}
-                              {refCount === 1 && '1 reference photo'}
-                              {refCount > 1 && `${refCount} reference photos`}
-                            </div>
-                            <button
-                              type="button"
-                              style={ui.btnSecondary}
-                              onClick={() => refInputs.current[s.id]?.click()}
-                            >
-                              + Add reference photo
-                            </button>
-                          </div>
-                        </td>
-
-                        <td style={{ padding: '10px 8px', verticalAlign: 'top' }}>
-                          <button
-                            type="button"
-                            onClick={() => deleteShot(s.id)}
-                            style={ui.btnSecondary}
-                          >
-                            Delete
-                          </button>
-                        </td>
-                      </tr>
-                    );
-
-                    return rows;
-                  })}
-                </tbody>
-              </table>
-            )}
-          </div>
+                        Delete item
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         {/* ✅ Next steps card (this is what fixes your JSX nesting issue) */}
