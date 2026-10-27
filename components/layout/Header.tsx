@@ -119,11 +119,22 @@ export default function Header() {
             <button
               type="button"
               onClick={signOut}
-              className="btn"
               style={{
-                padding: '6px 12px',
-                borderRadius: 12,
-                flexShrink: 0,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 'auto',
+                flex: '0 0 auto',
+                marginLeft: 'auto',
+                padding: '8px 14px',
+                borderRadius: 10,
+                border: '1px solid #334155',
+                background: '#111827',
+                color: '#e2e8f0',
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
               }}
               aria-label="Sign out"
             >
