@@ -1,5 +1,4 @@
-
- // pages/dashboard/index.js
+// pages/dashboard/index.js
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
@@ -349,8 +348,19 @@ export default function Dashboard() {
               padding: 18,
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12 }}>
-              <div style={{ fontSize: 22, fontWeight: 800, color: '#e5e7eb' }}>Getting Started</div>
+            <div
+              className="tqa-property-header"
+              style={{
+                display: 'flex',
+                alignItems: 'baseline',
+                justifyContent: 'space-between',
+                gap: 12,
+                flexWrap: 'wrap',
+              }}
+            >
+              <div style={{ fontSize: 22, fontWeight: 800, color: '#e5e7eb' }}>
+                Getting Started
+              </div>
               <button
                 type="button"
                 onClick={dismissGettingStarted}
@@ -396,7 +406,15 @@ export default function Dashboard() {
       <section style={ui.sectionGrid}>
         {/* Create Property */}
         <div style={ui.card}>
-          <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+          <div
+            style={{
+              position: 'relative',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 12,
+            }}
+          >
             <h2 style={{ marginTop: 0, marginBottom: 8 }}>Create a property</h2>
 
             <button
@@ -408,7 +426,7 @@ export default function Dashboard() {
                 borderRadius: 999,
                 border: '1px solid #334155',
                 background: '#0f172a',
-                color: '#cbd5e1'
+                color: '#cbd5e1',
               }}
               title="Help / Getting Started"
               aria-label="Help / Getting Started"
@@ -416,16 +434,17 @@ export default function Dashboard() {
               ❓ Help
             </button>
           </div>
+
           <form onSubmit={createProperty}>
             <label htmlFor="propname" style={ui.label}>
               Property name
             </label>
-            <div style={{ ...ui.row }}>
+            <div className="tqa-create-row" style={{ ...ui.row }}>
               <input
                 id="propname"
                 type="text"
                 placeholder="e.g., Glendale — 2BR Condo"
-                style={{ ...ui.input, flex: 1, minWidth: 220 }}
+                style={{ ...ui.input, flex: 1, minWidth: 0, width: '100%' }}
                 value={propName}
                 onChange={e => setPropName(e.target.value)}
               />
@@ -434,12 +453,22 @@ export default function Dashboard() {
               </button>
             </div>
           </form>
+
           {msg && <div style={{ marginTop: 10, color: '#fca5a5' }}>{msg}</div>}
         </div>
 
         {/* Your Properties */}
         <div style={ui.card}>
-          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12 }}>
+          <div
+            className="tqa-property-header"
+            style={{
+              display: 'flex',
+              alignItems: 'baseline',
+              justifyContent: 'space-between',
+              gap: 12,
+              flexWrap: 'wrap',
+            }}
+          >
             <h2 style={{ marginTop: 0, marginBottom: 8 }}>Your properties</h2>
 
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -492,6 +521,7 @@ export default function Dashboard() {
               {propsList.map(p => (
                 <div
                   key={p.id}
+                  className="tqa-property-card"
                   style={{
                     display: 'flex',
                     alignItems: 'center',
@@ -502,17 +532,31 @@ export default function Dashboard() {
                     padding: 12,
                   }}
                 >
-                  <div style={{ fontWeight: 600 }}>{p.name}</div>
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <div
+                    className="tqa-property-name"
+                    style={{ fontWeight: 700, overflowWrap: 'anywhere' }}
+                  >
+                    {p.name}
+                  </div>
+
+                  <div
+                    className="tqa-property-actions"
+                    style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}
+                  >
                     {!showArchived ? (
                       <>
                         <Link href={`/properties/${p.id}/template`} style={ui.btnSecondary}>
                           Checklist
                         </Link>
+
                         <Link href={`/properties/${p.id}/invite`} style={ui.btnSecondary}>
                           Invite cleaner
                         </Link>
-                        <Link href={`/managers/turns?property_id=${encodeURIComponent(p.id)}`} style={ui.btnSecondary}>
+
+                        <Link
+                          href={`/managers/turns?property_id=${encodeURIComponent(p.id)}`}
+                          style={ui.btnSecondary}
+                        >
                           Review turns
                         </Link>
 
@@ -530,20 +574,18 @@ export default function Dashboard() {
                         </button>
                       </>
                     ) : (
-                      <>
-                        <button
-                          type="button"
-                          onClick={() => restoreProperty(p.id, p.name)}
-                          style={{
-                            ...ui.btnSecondary,
-                            border: '1px solid #065f46',
-                            color: '#bbf7d0',
-                            background: 'rgba(6, 95, 70, 0.15)',
-                          }}
-                        >
-                          Restore
-                        </button>
-                      </>
+                      <button
+                        type="button"
+                        onClick={() => restoreProperty(p.id, p.name)}
+                        style={{
+                          ...ui.btnSecondary,
+                          border: '1px solid #065f46',
+                          color: '#bbf7d0',
+                          background: 'rgba(6, 95, 70, 0.15)',
+                        }}
+                      >
+                        Restore
+                      </button>
                     )}
                   </div>
                 </div>
@@ -552,6 +594,82 @@ export default function Dashboard() {
           )}
         </div>
       </section>
+
+      <style jsx global>{`
+        .tqa-create-row {
+          display: flex;
+          gap: 10px;
+          align-items: stretch;
+          flex-wrap: wrap;
+        }
+
+        .tqa-create-row input {
+          flex: 1 1 220px;
+        }
+
+        .tqa-create-row button {
+          flex: 0 0 auto;
+        }
+
+        .tqa-property-actions {
+          align-items: center;
+        }
+
+        .tqa-property-actions a,
+        .tqa-property-actions button {
+          text-decoration: none;
+          text-align: center;
+          box-sizing: border-box;
+          white-space: normal;
+          overflow-wrap: anywhere;
+        }
+
+        @media (max-width: 640px) {
+          .tqa-create-row {
+            display: grid !important;
+            grid-template-columns: minmax(0, 1fr);
+          }
+
+          .tqa-create-row input,
+          .tqa-create-row button {
+            width: 100%;
+            min-width: 0 !important;
+          }
+
+          .tqa-property-card {
+            display: grid !important;
+            grid-template-columns: minmax(0, 1fr);
+            gap: 14px !important;
+          }
+
+          .tqa-property-name {
+            font-size: 18px;
+          }
+
+          .tqa-property-actions {
+            display: grid !important;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px !important;
+            width: 100%;
+          }
+
+          .tqa-property-actions a,
+          .tqa-property-actions button {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            width: 100%;
+            min-width: 0;
+            min-height: 48px;
+            padding: 10px 8px !important;
+            font-size: 14px;
+          }
+
+          .tqa-property-header {
+            align-items: flex-start !important;
+          }
+        }
+      `}</style>
     </ChromeDark>
   );
 }
