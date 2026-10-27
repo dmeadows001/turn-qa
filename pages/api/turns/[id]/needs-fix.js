@@ -57,24 +57,39 @@ async function requireManagerFromBearer(token) {
   return { ok: true, userId, managerId: mgrRow.id };
 }
 
-// Manager can own a turn either via turns.manager_id OR properties.manager_id
+// Only the current property owner may request turnover fixes.
+// A historical turns.manager_id must not override property ownership.
 async function authorizeManagerForTurn(turnId, managerId) {
-  const { data: t, error } = await supa
+  const { data: turn, error: turnErr } = await supa
     .from('turns')
-    .select('id, manager_id, property_id, properties!inner(manager_id)')
+    .select('id, property_id')
     .eq('id', turnId)
     .maybeSingle();
 
-  if (error) return { ok: false, error: error.message || 'Turn lookup failed' };
-  if (!t) return { ok: false, error: 'Turn not found' };
-
-  const propMgr = t?.properties?.manager_id || null;
-
-  if (t.manager_id === managerId || propMgr === managerId) {
-    return { ok: true, turn: t };
+  if (turnErr) {
+    return { ok: false, error: turnErr.message || 'Turn lookup failed' };
   }
 
-  return { ok: false, error: 'Not authorized (turn)' };
+  if (!turn) {
+    return { ok: false, error: 'Turn not found' };
+  }
+
+  const { data: property, error: propErr } = await supa
+    .from('properties')
+    .select('id')
+    .eq('id', turn.property_id)
+    .eq('manager_id', managerId)
+    .maybeSingle();
+
+  if (propErr) {
+    return { ok: false, error: propErr.message || 'Property lookup failed' };
+  }
+
+  if (!property) {
+    return { ok: false, error: 'Not authorized (turn)' };
+  }
+
+  return { ok: true, turn };
 }
 
 async function requireManagerBillingActive(userId) {
