@@ -1,3 +1,4 @@
+
 import Link from 'next/link';
 import Image from 'next/image';
 import { useEffect, useState } from 'react';
@@ -25,7 +26,6 @@ export default function Header() {
         return;
       }
 
-      // ✅ profiles columns that actually exist in your schema
       const { data: profile } = await supabase
         .from('profiles')
         .select('full_name, phone, email')
@@ -42,10 +42,8 @@ export default function Header() {
       setDisplayName(name);
     }
 
-        load();
+    load();
 
-    // Schedule profile loading after Supabase finishes
-    // processing the authentication event.
     const { data: listener } = supabase.auth.onAuthStateChange(() => {
       setTimeout(() => {
         load();
@@ -77,49 +75,91 @@ export default function Header() {
         style={{
           display: 'flex',
           alignItems: 'center',
+          justifyContent: 'space-between',
+          flexWrap: 'wrap',
           gap: 12,
           paddingTop: 14,
           paddingBottom: 14,
+          minWidth: 0,
         }}
       >
-        <Link href="/" aria-label="TurnQA home" style={{ display: 'inline-flex', alignItems: 'center', gap: 12 }}>
-          <Image src="/logo-camera.svg" alt="TurnQA" width={36} height={36} priority />
-          <span style={{ fontWeight: 700, letterSpacing: 0.2 }}>TurnQA</span>
+        <Link
+          href="/"
+          aria-label="TurnQA home"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 12,
+            flexShrink: 0,
+            textDecoration: 'none',
+          }}
+        >
+          <Image
+            src="/logo-camera.svg"
+            alt="TurnQA"
+            width={36}
+            height={36}
+            priority
+          />
+          <span style={{ fontWeight: 700, letterSpacing: 0.2 }}>
+            TurnQA
+          </span>
         </Link>
 
-        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
-          <div style={{ opacity: 0.7, fontSize: 14 }}>Midnight</div>
+        {displayName ? (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'flex-end',
+              gap: 10,
+              minWidth: 0,
+              flex: '1 1 180px',
+            }}
+          >
+            <span
+              className="muted"
+              style={{
+                fontSize: 13,
+                padding: '6px 10px',
+                border: '1px solid var(--border)',
+                borderRadius: 12,
+                background: 'rgba(255,255,255,.04)',
+                minWidth: 0,
+                maxWidth: '100%',
+                overflowWrap: 'anywhere',
+                textAlign: 'right',
+              }}
+              title={displayName}
+            >
+              {displayName}
+            </span>
 
-          {displayName ? (
-            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-              <span
-                className="muted"
-                style={{
-                  fontSize: 14,
-                  padding: '6px 10px',
-                  border: '1px solid var(--border)',
-                  borderRadius: 999,
-                  background: 'rgba(255,255,255,.04)',
-                }}
-                title="Signed in"
-              >
-                {displayName}
-              </span>
-              <button
-                onClick={signOut}
-                className="btn"
-                style={{ padding: '6px 10px', borderRadius: 12 }}
-                aria-label="Sign out"
-              >
-                Sign out
-              </button>
-            </div>
-          ) : (
-            <Link href="/login" className="btn" style={{ padding: '6px 10px', borderRadius: 12 }}>
-              Sign in
-            </Link>
-          )}
-        </div>
+            <button
+              onClick={signOut}
+              className="btn"
+              style={{
+                padding: '6px 10px',
+                borderRadius: 12,
+                flexShrink: 0,
+              }}
+              aria-label="Sign out"
+            >
+              Sign out
+            </button>
+          </div>
+        ) : (
+          <Link
+            href="/login"
+            className="btn"
+            style={{
+              padding: '6px 10px',
+              borderRadius: 12,
+            }}
+          >
+            Sign in
+          </Link>
+        )}
       </div>
     </header>
   );
