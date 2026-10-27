@@ -112,24 +112,26 @@ export default function Header() {
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'flex-end',
+              flexWrap: 'wrap',
               gap: 10,
               minWidth: 0,
-              flex: '1 1 180px',
+              width: '100%',
             }}
           >
             <span
               className="muted"
-              style={{
-                fontSize: 13,
-                padding: '6px 10px',
-                border: '1px solid var(--border)',
-                borderRadius: 12,
-                background: 'rgba(255,255,255,.04)',
-                minWidth: 0,
-                maxWidth: '100%',
-                overflowWrap: 'anywhere',
-                textAlign: 'right',
-              }}
+                style={{
+                  fontSize: 13,
+                  padding: '6px 10px',
+                  border: '1px solid var(--border)',
+                  borderRadius: 12,
+                  background: 'rgba(255,255,255,.04)',
+                  maxWidth: '100%',
+                  boxSizing: 'border-box',
+                  overflowWrap: 'anywhere',
+                  textAlign: 'right',
+                  flexShrink: 0,
+                }}
               title={displayName}
             >
               {displayName}
