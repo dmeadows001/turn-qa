@@ -1070,10 +1070,11 @@ export default function TemplateBuilder() {
                     </div>
                   </div>
                 );
-              })}
+                           })}
             </div>
           )}
         </div>
+      </div>
 
         {/* ✅ Next steps card (this is what fixes your JSX nesting issue) */}
         <div style={ui.card}>
