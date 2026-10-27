@@ -59,7 +59,7 @@ export default function Header() {
     window.location.href = '/';
   }
 
-  return (
+    return (
     <header
       style={{
         position: 'sticky',
@@ -73,75 +73,55 @@ export default function Header() {
       <div
         className="container"
         style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          flexWrap: 'wrap',
-          gap: 12,
           paddingTop: 14,
           paddingBottom: 14,
-          minWidth: 0,
         }}
       >
-        <Link
-          href="/"
-          aria-label="TurnQA home"
+        {/* First row: TurnQA logo and Sign out */}
+        <div
           style={{
-            display: 'inline-flex',
+            display: 'flex',
             alignItems: 'center',
+            justifyContent: 'space-between',
             gap: 12,
-            flexShrink: 0,
-            textDecoration: 'none',
           }}
         >
-          <Image
-            src="/logo-camera.svg"
-            alt="TurnQA"
-            width={36}
-            height={36}
-            priority
-          />
-          <span style={{ fontWeight: 700, letterSpacing: 0.2 }}>
-            TurnQA
-          </span>
-        </Link>
-
-        {displayName ? (
-          <div
+          <Link
+            href="/"
+            aria-label="TurnQA home"
             style={{
-              display: 'flex',
+              display: 'inline-flex',
               alignItems: 'center',
-              justifyContent: 'flex-end',
-              flexWrap: 'wrap',
-              gap: 10,
+              gap: 12,
               minWidth: 0,
-              width: '100%',
+              textDecoration: 'none',
             }}
           >
+            <Image
+              src="/logo-camera.svg"
+              alt="TurnQA"
+              width={36}
+              height={36}
+              priority
+            />
             <span
-              className="muted"
-                style={{
-                  fontSize: 13,
-                  padding: '6px 10px',
-                  border: '1px solid var(--border)',
-                  borderRadius: 12,
-                  background: 'rgba(255,255,255,.04)',
-                  maxWidth: '100%',
-                  boxSizing: 'border-box',
-                  overflowWrap: 'anywhere',
-                  textAlign: 'right',
-                  flexShrink: 0,
-                }}
-              title={displayName}
+              style={{
+                fontWeight: 700,
+                letterSpacing: 0.2,
+                whiteSpace: 'nowrap',
+              }}
             >
-              {displayName}
+              TurnQA
             </span>
+          </Link>
 
+          {displayName ? (
             <button
+              type="button"
               onClick={signOut}
               className="btn"
               style={{
-                padding: '6px 10px',
+                padding: '6px 12px',
                 borderRadius: 12,
                 flexShrink: 0,
               }}
@@ -149,18 +129,49 @@ export default function Header() {
             >
               Sign out
             </button>
-          </div>
-        ) : (
-          <Link
-            href="/login"
-            className="btn"
+          ) : (
+            <Link
+              href="/login"
+              className="btn"
+              style={{
+                padding: '6px 12px',
+                borderRadius: 12,
+                flexShrink: 0,
+              }}
+            >
+              Sign in
+            </Link>
+          )}
+        </div>
+
+        {/* Second row: Account email */}
+        {displayName && (
+          <div
             style={{
-              padding: '6px 10px',
-              borderRadius: 12,
+              display: 'flex',
+              justifyContent: 'center',
+              marginTop: 12,
+              minWidth: 0,
             }}
           >
-            Sign in
-          </Link>
+            <span
+              className="muted"
+              style={{
+                fontSize: 13,
+                padding: '6px 12px',
+                border: '1px solid var(--border)',
+                borderRadius: 999,
+                background: 'rgba(255,255,255,.04)',
+                maxWidth: '100%',
+                boxSizing: 'border-box',
+                overflowWrap: 'anywhere',
+                textAlign: 'center',
+              }}
+              title="Signed in account"
+            >
+              {displayName}
+            </span>
+          </div>
         )}
       </div>
     </header>
