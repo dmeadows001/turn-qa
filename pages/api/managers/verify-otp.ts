@@ -1,132 +1,226 @@
-// pages/api/managers/verify-otp.ts
+
 import type { NextApiRequest, NextApiResponse } from 'next';
+import { createPagesServerClient } from '@supabase/auth-helpers-nextjs';
 import { createClient } from '@supabase/supabase-js';
+import { timingSafeEqual } from 'crypto';
 
 export const config = { api: { bodyParser: true } };
 
-// Simple E.164 validator
 const E164 = /^\+[1-9]\d{6,14}$/;
 
-// Best-effort US normalization: 10 digits -> +1XXXXXXXXXX, 11 starting with 1 -> +XXXXXXXXXXX
 function normalizeToE164(raw: string): string | null {
   if (!raw) return null;
+
   const s = String(raw).trim();
   if (E164.test(s)) return s;
 
   const digits = s.replace(/\D/g, '');
+
   if (digits.length === 10) return `+1${digits}`;
-  if (digits.length === 11 && digits.startsWith('1')) return `+${digits}`;
+  if (digits.length === 11 && digits.startsWith('1')) {
+    return `+${digits}`;
+  }
+
   return null;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
+function codesMatch(expected: string, received: string): boolean {
+  const a = Buffer.from(expected);
+  const b = Buffer.from(received);
+
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
+
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse
+) {
+  res.setHeader('Cache-Control', 'no-store');
+
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'POST');
+    return res.status(405).json({
+      error: 'Method Not Allowed',
+    });
+  }
 
   try {
-    const { user_id, code, consent } = (req.body || {}) as {
-      user_id?: string;
-      code?: string;
-      consent?: boolean;
-    };
-    if (!user_id || !code) return res.status(400).json({ error: 'user_id and code required' });
+    // Authenticate the manager using their Supabase session.
+    const authClient = createPagesServerClient({ req, res });
+
+    const {
+      data: { user },
+      error: authError,
+    } = await authClient.auth.getUser();
+
+    if (authError || !user) {
+      return res.status(401).json({
+        error: 'Please sign in before verifying your phone.',
+      });
+    }
+
+    // Never trust a user_id supplied by the browser.
+    const userId = user.id;
+
+    const { code, consent } = req.body || {};
+
+    if (typeof code !== 'string' || !/^\d{6}$/.test(code)) {
+      return res.status(400).json({
+        error: 'Enter a valid 6-digit code.',
+      });
+    }
+
+    if (consent !== true) {
+      return res.status(400).json({
+        error: 'SMS consent is required.',
+      });
+    }
 
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const serviceKey = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
-    if (!supabaseUrl || !serviceKey) return res.status(500).json({ error: 'Supabase service env vars missing' });
+    const serviceKey =
+      process.env.SUPABASE_SERVICE_KEY ||
+      process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+    if (!supabaseUrl || !serviceKey) {
+      return res.status(500).json({
+        error: 'Supabase service environment variables missing',
+      });
+    }
 
     const supabase = createClient(supabaseUrl, serviceKey);
 
-    // 1) Get latest pending verification for this user
-    const { data: row, error: rowErr } = await supabase
+    // Find the latest OTP for the authenticated manager only.
+    const { data: row, error: rowError } = await supabase
       .from('manager_phone_verifications')
       .select('*')
-      .eq('user_id', user_id)
+      .eq('user_id', userId)
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
 
-    if (rowErr || !row) return res.status(400).json({ error: 'No pending verification found' });
-    if ((row.attempts ?? 0) >= 5) return res.status(429).json({ error: 'Too many attempts. Request a new code.' });
-    if (new Date(row.expires_at).getTime() < Date.now()) return res.status(400).json({ error: 'Code expired. Request a new one.' });
+    if (rowError) throw rowError;
 
-    if (String(row.code) !== String(code)) {
-      await supabase
+    if (!row) {
+      return res.status(400).json({
+        error: 'No pending verification found.',
+      });
+    }
+
+    if ((row.attempts ?? 0) >= 5) {
+      return res.status(429).json({
+        error: 'Too many attempts. Request a new code.',
+      });
+    }
+
+    if (new Date(row.expires_at).getTime() < Date.now()) {
+      return res.status(400).json({
+        error: 'Code expired. Request a new one.',
+      });
+    }
+
+    if (!codesMatch(String(row.code), code)) {
+      const { error: attemptError } = await supabase
         .from('manager_phone_verifications')
         .update({ attempts: (row.attempts ?? 0) + 1 })
         .eq('id', row.id);
-      return res.status(400).json({ error: 'Invalid code.' });
+
+      if (attemptError) throw attemptError;
+
+      return res.status(400).json({
+        error: 'Invalid code.',
+      });
     }
 
-    // 2) Normalize phone and validate
-    const e164 = normalizeToE164(row.phone || '');
-    if (!e164) return res.status(400).json({ error: 'Invalid phone format. Please re-enter as +1XXXXXXXXXX.' });
+    const phone = normalizeToE164(row.phone || '');
 
-    // 3) Consent snapshot + IP
+    if (!phone) {
+      return res.status(400).json({
+        error: 'Invalid phone number.',
+      });
+    }
+
     const now = new Date().toISOString();
-    const consentText = 'I agree to receive SMS alerts (STOP to opt out, HELP for help).';
-    const ip =
-      (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
-      (req.socket?.remoteAddress ?? null);
 
-    // 4) Ensure a managers row exists WITH A NAME (NOT NULL)
-    const { data: mgrExisting, error: mgrFetchErr } = await supabase
+    const consentText =
+      'I agree to receive SMS alerts (STOP to opt out, HELP for help).';
+
+    const ip =
+      (req.headers['x-forwarded-for'] as string | undefined)
+        ?.split(',')[0]
+        ?.trim() ||
+      req.socket?.remoteAddress ||
+      null;
+
+    // Ensure the authenticated manager has a database record.
+    const { data: existing, error: fetchError } = await supabase
       .from('managers')
       .select('id, name')
-      .eq('user_id', user_id)
+      .eq('user_id', userId)
       .maybeSingle();
 
-    if (mgrFetchErr) return res.status(500).json({ error: mgrFetchErr.message });
+    if (fetchError) throw fetchError;
 
-    if (!mgrExisting) {
-      // Pull a friendly display name from auth; fall back to email or "Manager"
-      let displayName = 'Manager';
-      try {
-        const { data: au } = await supabase.auth.admin.getUserById(user_id);
-        const u = au?.user;
-        displayName =
-          (u?.user_metadata?.full_name as string) ||
-          (u?.user_metadata?.name as string) ||
-          (u?.email as string) ||
-          'Manager';
-      } catch {
-        // ignore; keep fallback
-      }
+    if (!existing) {
+      const displayName =
+        (user.user_metadata?.full_name as string) ||
+        (user.user_metadata?.name as string) ||
+        user.email ||
+        'Manager';
 
-      const { error: insErr } = await supabase
+      const { error: insertError } = await supabase
         .from('managers')
         .insert({
-          user_id,
-          name: displayName, // <- NOT NULL
+          user_id: userId,
+          name: displayName,
           phone: null,
           created_at: now,
-        })
-        .select('id')
-        .single();
+        });
 
-      if (insErr) return res.status(500).json({ error: insErr.message });
+      if (insertError) throw insertError;
     }
 
-    // 5) Update phone + consent on the managers row
-    const { error: upErr } = await supabase
+    // Update only the authenticated manager's phone record.
+    const { data: updated, error: updateError } = await supabase
       .from('managers')
       .update({
-        phone: e164,
+        phone,
         phone_verified_at: now,
-        sms_consent: !!consent,
-        sms_consent_at: consent ? now : null,
-        sms_consent_ip: ip ? (ip as any) : null,
-        consent_text_snapshot: consent ? consentText : null,
+        sms_consent: true,
+        sms_consent_at: now,
+        sms_consent_ip: ip,
+        consent_text_snapshot: consentText,
       })
-      .eq('user_id', user_id);
+      .eq('user_id', userId)
+      .select('id');
 
-    if (upErr) return res.status(500).json({ error: upErr.message });
+    if (updateError) throw updateError;
 
-    // 6) OTP consumed — delete it
-    await supabase.from('manager_phone_verifications').delete().eq('id', row.id);
+    if (!updated || updated.length === 0) {
+      return res.status(500).json({
+        error: 'Manager record could not be updated.',
+      });
+    }
 
-    return res.status(200).json({ ok: true, phone: e164, consent: !!consent, verified_at: now });
-  } catch (err: any) {
-    console.error('[verify-otp] error', err);
-    return res.status(500).json({ error: 'Internal error' });
+    // Consume the OTP after successful verification.
+    const { error: deleteError } = await supabase
+      .from('manager_phone_verifications')
+      .delete()
+      .eq('id', row.id);
+
+    if (deleteError) throw deleteError;
+
+    return res.status(200).json({
+      ok: true,
+      phone,
+      consent: true,
+      verified_at: now,
+    });
+  } catch (err) {
+    console.error('[manager verify-otp] error', err);
+
+    return res.status(500).json({
+      error: 'Internal error',
+    });
   }
 }
