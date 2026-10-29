@@ -15,11 +15,14 @@ export default function Header() {
 
   useEffect(() => {
     const supabase = supabaseBrowser();
+    let mounted = true;
 
     async function load() {
       const {
         data: { session },
       } = await supabase.auth.getSession();
+
+      if (!mounted) return;
 
       if (!session?.user) {
         setDisplayName(null);
@@ -31,6 +34,8 @@ export default function Header() {
         .select('full_name, phone, email')
         .eq('id', session.user.id)
         .maybeSingle();
+
+      if (!mounted) return;
 
       const name =
         profile?.full_name ||
@@ -46,11 +51,14 @@ export default function Header() {
 
     const { data: listener } = supabase.auth.onAuthStateChange(() => {
       setTimeout(() => {
-        load();
+        if (mounted) load();
       }, 0);
     });
 
-    return () => listener.subscription.unsubscribe();
+    return () => {
+      mounted = false;
+      listener.subscription.unsubscribe();
+    };
   }, []);
 
   async function signOut() {
@@ -59,12 +67,33 @@ export default function Header() {
     window.location.href = '/';
   }
 
-    return (
+  const actionStyle = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flex: '0 0 auto',
+    width: 'auto',
+    padding: '8px 14px',
+    borderRadius: 10,
+    border: '1px solid #334155',
+    background: '#111827',
+    color: '#e2e8f0',
+    fontSize: 13,
+    fontWeight: 600,
+    lineHeight: '20px',
+    textDecoration: 'none',
+    whiteSpace: 'nowrap' as const,
+    cursor: 'pointer',
+    boxSizing: 'border-box' as const,
+  };
+
+  return (
     <header
       style={{
         position: 'sticky',
         top: 0,
         zIndex: 20,
+        width: '100%',
         borderBottom: '1px solid var(--border)',
         background: 'rgba(11,11,13,0.6)',
         backdropFilter: 'blur(8px)',
@@ -73,17 +102,22 @@ export default function Header() {
       <div
         className="container"
         style={{
+          width: '100%',
+          boxSizing: 'border-box',
           paddingTop: 14,
           paddingBottom: 14,
         }}
       >
-        {/* First row: TurnQA logo and Sign out */}
+        {/* First row: logo and authentication action */}
         <div
           style={{
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
+            flexWrap: 'nowrap',
             gap: 12,
+            width: '100%',
+            minWidth: 0,
           }}
         >
           <Link
@@ -94,7 +128,9 @@ export default function Header() {
               alignItems: 'center',
               gap: 12,
               minWidth: 0,
+              flex: '0 1 auto',
               textDecoration: 'none',
+              color: 'inherit',
             }}
           >
             <Image
@@ -103,6 +139,7 @@ export default function Header() {
               width={36}
               height={36}
               priority
+              style={{ flexShrink: 0 }}
             />
             <span
               style={{
@@ -119,23 +156,7 @@ export default function Header() {
             <button
               type="button"
               onClick={signOut}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                width: 'auto',
-                flex: '0 0 auto',
-                marginLeft: 'auto',
-                padding: '8px 14px',
-                borderRadius: 10,
-                border: '1px solid #334155',
-                background: '#111827',
-                color: '#e2e8f0',
-                fontSize: 13,
-                fontWeight: 600,
-                cursor: 'pointer',
-                whiteSpace: 'nowrap',
-              }}
+              style={actionStyle}
               aria-label="Sign out"
             >
               Sign out
@@ -143,19 +164,14 @@ export default function Header() {
           ) : (
             <Link
               href="/login"
-              className="btn"
-              style={{
-                padding: '6px 12px',
-                borderRadius: 12,
-                flexShrink: 0,
-              }}
+              style={actionStyle}
             >
               Sign in
             </Link>
           )}
         </div>
 
-        {/* Second row: Account email */}
+        {/* Second row: account identity, only when signed in */}
         {displayName && (
           <div
             style={{
