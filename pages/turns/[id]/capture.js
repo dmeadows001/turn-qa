@@ -1303,6 +1303,8 @@ export default function Capture() {
                               <img
                                 src={refThumb}
                                 alt="Reference"
+                                loading="lazy"
+                                decoding="async"
                                 style={{
                                   width: 80,
                                   height: 80,
