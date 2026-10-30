@@ -7,6 +7,44 @@ import { ui } from '../../../lib/theme';
 
 const supabase = supabaseBrowser();
 
+// Create a lightweight thumbnail for reference photos.
+// The original image remains unchanged.
+async function createReferenceThumbnail(file) {
+  const image = await createImageBitmap(file);
+
+  try {
+    const maxSize = 240;
+    const scale = Math.min(
+      1,
+      maxSize / Math.max(image.width, image.height)
+    );
+
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(image.width * scale));
+    canvas.height = Math.max(1, Math.round(image.height * scale));
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('Canvas unavailable');
+
+    ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+    const blob = await new Promise((resolve, reject) => {
+      canvas.toBlob(
+        (result) => {
+          if (result) resolve(result);
+          else reject(new Error('Thumbnail creation failed'));
+        },
+        'image/jpeg',
+        0.72
+      );
+    });
+
+    return blob;
+  } finally {
+    image.close();
+  }
+}
+
 // Opinionated areas; tweak as needed
 const AREAS = [
   ['general', 'General'],
