@@ -315,19 +315,53 @@ export default function TemplateBuilder() {
   }
 
   function ensureThumb(path) {
-    if (!path || requestedThumbsRef.current.has(path) || thumbByPath[path]) return;
-    requestedThumbsRef.current.add(path);
-    signPath(path)
-      .then((url) => {
-        if (!url) return;
-        setThumbByPath((prev) =>
-          prev[path] ? prev : { ...prev, [path]: url }
-        );
-      })
-      .catch(() => {
-        requestedThumbsRef.current.delete(path);
-      });
-  }
+  if (!path || requestedThumbsRef.current.has(path) || thumbByPath[path]) return;
+
+  requestedThumbsRef.current.add(path);
+
+  (async () => {
+    let url = null;
+
+    // Try the optimized thumbnail first for reference photos.
+    if (path.startsWith('refs/')) {
+      const thumbPath = path.replace(/^refs\//, 'ref-thumbs/');
+
+      try {
+        const thumbUrl = await signPath(thumbPath);
+
+        if (thumbUrl) {
+          // A signed URL can exist even when the file does not.
+          // Verify that the image actually loads.
+          await new Promise((resolve, reject) => {
+            const img = new Image();
+            img.onload = resolve;
+            img.onerror = reject;
+            img.src = thumbUrl;
+          });
+
+          url = thumbUrl;
+        }
+      } catch (e) {
+        // Older references may not have optimized thumbnails.
+        // Fall back to the original photo.
+      }
+    }
+
+    // Original photo fallback, also used for non-reference photos.
+    if (!url) {
+      url = await signPath(path);
+    }
+
+    if (url) {
+      setThumbByPath((prev) =>
+        prev[path] ? prev : { ...prev, [path]: url }
+      );
+    }
+  })().catch((error) => {
+    console.warn('Thumbnail loading failed:', error);
+    requestedThumbsRef.current.delete(path);
+  });
+}
 
    useEffect(() => {
     if (!propertyId || subscriptionAccess !== 'allowed') return;
