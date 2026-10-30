@@ -83,11 +83,48 @@ export default async function handler(req, res) {
       return res.status(200).json({ url: data.signedUrl });
     }
 
-    // ---- B) Reference photos (refs/<shotId>/...)
-    if (path.startsWith("refs/")) {
+    // ---- B) Reference photos and optimized thumbnails
+    const isOriginalRef = path.startsWith("refs/");
+    const isRefThumb = path.startsWith("ref-thumbs/");
+    
+    if (isOriginalRef || isRefThumb) {
       const parts = path.split("/");
-      const shotId = parts[1]; // refs/<shotId>/filename
-      if (!shotId) return res.status(403).json({ error: "Not authorized (bad refs path)" });
+      const shotId = parts[1];
+    
+      // Require exactly: refs/<shotId>/<filename>
+      // or ref-thumbs/<shotId>/<filename>
+      if (
+        parts.length !== 3 ||
+        !shotId ||
+        !parts[2] ||
+        parts[2] === "." ||
+        parts[2] === ".."
+      ) {
+        return res.status(403).json({ error: "Not authorized (bad refs path)" });
+      }
+    
+      // A thumbnail must correspond to an existing registered reference.
+      if (isRefThumb) {
+        const originalPath = `refs/${shotId}/${parts[2]}`;
+    
+        const { data: registeredShot, error: registeredErr } = await supabaseAdmin
+          .from("template_shots")
+          .select("reference_paths")
+          .eq("id", shotId)
+          .single();
+    
+        if (registeredErr || !registeredShot) {
+          return res.status(403).json({ error: "Not authorized (thumbnail shot)" });
+        }
+    
+        const registeredPaths = Array.isArray(registeredShot.reference_paths)
+          ? registeredShot.reference_paths
+          : [];
+    
+        if (!registeredPaths.includes(originalPath)) {
+          return res.status(403).json({ error: "Not authorized (unregistered thumbnail)" });
+        }
+      }
 
       // Resolve shot -> template -> property -> properties.manager_id
       const { data: shotRow, error: shotErr } = await supabaseAdmin
