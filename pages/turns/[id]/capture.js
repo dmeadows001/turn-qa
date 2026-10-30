@@ -328,12 +328,50 @@ export default function Capture() {
     });
   }
 
-  function ensureThumb(path) {
+    function ensureThumb(path) {
     if (!path || requestedThumbsRef.current.has(path) || thumbByPath[path]) return;
+
     requestedThumbsRef.current.add(path);
-    signPath(path).then(url => {
-      if (url) setThumbByPath(prev => (prev[path] ? prev : { ...prev, [path]: url }));
-    }).catch(() => {
+
+    (async () => {
+      let url = null;
+
+      // Use optimized thumbnails for reference photos.
+      if (path.startsWith('refs/')) {
+        const thumbPath = path.replace(/^refs\//, 'ref-thumbs/');
+
+        try {
+          const thumbUrl = await signPath(thumbPath);
+
+          if (thumbUrl) {
+            // Verify the thumbnail exists and loads successfully.
+            await new Promise((resolve, reject) => {
+              const img = new Image();
+              img.onload = resolve;
+              img.onerror = reject;
+              img.src = thumbUrl;
+            });
+
+            url = thumbUrl;
+          }
+        } catch (e) {
+          // Older references may not have thumbnails yet.
+          // Fall back to the original.
+        }
+      }
+
+      // Preserve original behavior for turn photos and older references.
+      if (!url) {
+        url = await signPath(path);
+      }
+
+      if (url) {
+        setThumbByPath(prev =>
+          prev[path] ? prev : { ...prev, [path]: url }
+        );
+      }
+    })().catch(error => {
+      console.warn('Thumbnail loading failed:', error);
       requestedThumbsRef.current.delete(path);
     });
   }
