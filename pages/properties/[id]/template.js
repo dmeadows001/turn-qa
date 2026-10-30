@@ -602,6 +602,28 @@ export default function TemplateBuilder() {
         });
       if (uploadErr) throw uploadErr;
 
+      // Generate and store a lightweight thumbnail.
+      // This is best-effort: failure must not prevent the original upload.
+      try {
+        const thumbnail = await createReferenceThumbnail(file);
+        const thumbPath = `ref-thumbs/${shot.id}/${path.split('/').pop()}`;
+      
+        const { error: thumbErr } = await supabase
+          .storage
+          .from('photos')
+          .upload(thumbPath, thumbnail, {
+            contentType: 'image/jpeg',
+            cacheControl: '3600',
+            upsert: false,
+          });
+      
+        if (thumbErr) {
+          console.warn('Reference thumbnail upload failed:', thumbErr);
+        }
+      } catch (thumbError) {
+        console.warn('Reference thumbnail generation failed:', thumbError);
+      }
+
       const existing = Array.isArray(shot.reference_paths)
         ? shot.reference_paths
         : [];
