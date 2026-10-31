@@ -104,6 +104,17 @@ export default function Capture() {
   const [shots, setShots] = useState(null);
   // files we render per-shot; each file: {name, url (storage path), width, height, shotId, preview?, isFix?, cleanerNote?, capturedAt?}
   const [uploadsByShot, setUploadsByShot] = useState({});
+  
+  // Track background photo uploads and their progress.
+  const [uploadProgressById, setUploadProgressById] = useState({});
+  const pendingUploadsRef = useRef(new Map());
+
+  // Track photos removed while a background upload is running.
+  const removedUploadIdsRef = useRef(new Set());
+  const uploadFilesRef = useRef(new Map()); // Retain File objects for retry while page is open
+  const activeXhrsRef = useRef(new Map()); // Cancel removed uploads
+
+  
   const [submitting, setSubmitting] = useState(false);
   const [templateRules, setTemplateRules] = useState({ property: '', template: '' });
 
@@ -164,7 +175,113 @@ export default function Capture() {
 
   // ------- helpers -------
   const smallMeta = { fontSize: 12, color: '#94a3b8' };
+  // Update the status and progress of an individual photo upload.
+  function updateUploadProgress(uploadId, status, percent = 0) {
+    setUploadProgressById(prev => ({
+      ...prev,
+      [uploadId]: {
+        status,
+        percent: Math.max(0, Math.min(100, Math.round(percent))),
+      },
+    }));
+  }
+  
+  // Upload a photo with real byte-level progress reporting.
+  function uploadWithProgress(url, options, uploadId) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+  
+      xhr.open(options.method || 'PUT', url, true);
+      activeXhrsRef.current.set(uploadId, xhr);
+  
+      Object.entries(options.headers || {}).forEach(([key, value]) => {
+        xhr.setRequestHeader(key, value);
+      });
+  
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable && event.total > 0) {
+          const percent = Math.round(
+            (event.loaded / event.total) * 100
+          );
+  
+          // Keep 100% reserved for confirmed upload success.
+          if (!removedUploadIdsRef.current.has(uploadId)) {
+            updateUploadProgress(uploadId, 'uploading', Math.min(percent, 99));
+          }
+        }
+      };
+  
+      xhr.onload = () => {
+        if (activeXhrsRef.current.get(uploadId) === xhr) activeXhrsRef.current.delete(uploadId);
+        resolve({
+          ok: xhr.status >= 200 && xhr.status < 300,
+          status: xhr.status,
+          text: xhr.responseText || '',
+        });
+      };
+  
+      xhr.onerror = () => {
+        if (activeXhrsRef.current.get(uploadId) === xhr) activeXhrsRef.current.delete(uploadId);
+        reject(new Error('Network upload failed'));
+      };
+      xhr.onabort = () => {
+        if (activeXhrsRef.current.get(uploadId) === xhr) activeXhrsRef.current.delete(uploadId);
+        reject(new Error('Upload was cancelled'));
+      };
+      xhr.ontimeout = () => {
+        if (activeXhrsRef.current.get(uploadId) === xhr) activeXhrsRef.current.delete(uploadId);
+        reject(new Error('Upload timed out'));
+      };
+  
+      xhr.send(options.body);
+    });
+  }
 
+
+  // Give every photo upload its own unique tracking ID.
+  function createUploadId() {
+    if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+      return crypto.randomUUID();
+    }
+  
+    return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
+
+  // Read the current upload status for a photo.
+  function getPhotoUploadStatus(photo) {
+    if (!photo?.uploadId) {
+      return { status: 'uploaded', percent: 100 };
+    }
+  
+    return uploadProgressById[photo.uploadId] || {
+      status: 'pending',
+      percent: 0,
+    };
+  }
+
+  // Display a captured photo immediately, before its upload finishes.
+  function addPendingPhoto(shotId, photo) {
+    setUploadsByShot(prev => ({
+      ...prev,
+      [shotId]: [
+        ...(prev[shotId] || []),
+        photo,
+      ],
+    }));
+  }
+
+  // Update an existing photo when its background upload completes.
+  function updatePendingPhoto(shotId, uploadId, changes) {
+    setUploadsByShot(prev => ({
+      ...prev,
+      [shotId]: (prev[shotId] || []).map(photo =>
+        photo.uploadId === uploadId
+          ? { ...photo, ...changes }
+          : photo
+      ),
+    }));
+  }
+    
   // ---- Optional manager auth header (does NOT break cleaners) ----
   function getSupabaseAccessToken() {
     try {
@@ -307,6 +424,20 @@ export default function Capture() {
     return () => window.removeEventListener('keydown', onKey);
   }, [refLightbox.open]);
 
+  // Warn before closing/reloading the page while transfers are active.
+  useEffect(() => {
+    const warn = (event) => {
+      const hasUnsavedPhotos = Object.values(uploadsByShot || {}).flat().some(
+        photo => photo.uploadId && getPhotoUploadStatus(photo).status !== 'uploaded'
+      );
+      if (pendingUploadsRef.current.size === 0 && !hasUnsavedPhotos) return;
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [uploadsByShot, uploadProgressById]);
+
   // --- Image dimension helper (safe if load fails) ---
   async function getDims(file) {
     return new Promise((resolve) => {
@@ -318,7 +449,7 @@ export default function Capture() {
           resolve(dims);
         };
         img.onerror = () => {
-          // If we can't read dimensions (e.g., HEIC on some desktops), don't block upload
+          URL.revokeObjectURL(img.src);
           resolve({ width: 0, height: 0 });
         };
         img.src = URL.createObjectURL(file);
@@ -424,6 +555,7 @@ export default function Capture() {
   }
 
   // --- Translate helper for per-photo note (Spanish -> English) ---
+  // New photos use stable uploadId as note key; persisted photos retain storage path.
   async function translatePhotoNoteToEnglish(path) {
     if (!path) return;
     const text = String(cleanerNoteByNewPath[path]?.original || '').trim();
@@ -540,7 +672,15 @@ export default function Capture() {
           (byShot[targetShot] ||= []).push(file);
         }
 
-        setUploadsByShot(byShot);
+        setUploadsByShot(prev => {
+          const merged = { ...byShot };
+          // Do not discard photos captured while the initial fetch was in flight.
+          Object.entries(prev).forEach(([shotId, photos]) => {
+            const local = (photos || []).filter(f => !!f.uploadId);
+            if (local.length) merged[shotId] = [...(merged[shotId] || []), ...local];
+          });
+          return merged;
+        });
 
         // kick off signing for thumbnails we’ll render
         Object.values(byShot).flat().forEach(f => ensureThumb(f.url));
@@ -656,135 +796,165 @@ export default function Capture() {
   }, [turnId, gettingStartedKey]);
 
   // -------- Add files (quality + upload to Storage) --------
+
+  // Each photo is shown immediately; uploads run independently in the background.
   async function addFiles(shotId, fileList) {
     const files = Array.from(fileList || []);
-    const uploaded = [];
-
     for (const f of files) {
-      // 1) Local validation
-      const dims = await getDims(f);
-      const longest = Math.max(dims.width, dims.height);
-      const tooSmall = longest < 1024;
-      const tooBig = f.size > 6 * 1024 * 1024;
-
-      if (tooSmall || tooBig) {
-        alert(
-          `Rejected "${f.name}": ` +
-          (tooSmall ? `min longest side is 1024px (got ${dims.width}×${dims.height}). ` : '') +
-          (tooBig ? `file > 6MB.` : '')
-        );
-        continue;
-      }
-
+      // Create the local preview before any network request.
+      const uploadId = createUploadId();
       const preview = URL.createObjectURL(f);
-
-      // ✅ capture timestamp (client time) for badge
       const capturedAt = new Date().toISOString();
+      const localPath = `pending:${uploadId}`;
+      setScanStatus('idle');
+      setScanIssues([]);
+      setScanIssuesByArea({});
+      setScanMessage('');
+      addPendingPhoto(shotId, {
+        uploadId, name: f.name, shotId, url: localPath,
+        width: null, height: null, preview, isFix: isFixMode, capturedAt,
+      });
+      updateUploadProgress(uploadId, 'uploading', 0);
+      uploadFilesRef.current.set(uploadId, f);
 
-      // 2) Ask backend for upload target
-      let meta = {};
+      // Validation and transfer run in the background, without holding the camera UI.
+      startPhotoUpload(shotId, uploadId, f);
+    }
+  }
+
+  function startPhotoUpload(shotId, uploadId, file) {
+    // Mark immediately, so navigation protection includes the URL request.
+    pendingUploadsRef.current.set(uploadId, true);
+    updateUploadProgress(uploadId, 'uploading', 0);
+
+    const task = (async () => {
       try {
+        const dims = await getDims(file);
+        if (removedUploadIdsRef.current.has(uploadId)) return;
+        const longest = Math.max(dims.width, dims.height);
+        if (longest > 0 && longest < 1024) {
+          throw new Error(`Photo too small: ${dims.width}×${dims.height}; minimum longest side is 1024px.`);
+        }
+        if (file.size > 6 * 1024 * 1024) {
+          throw new Error('Photo exceeds the 6MB upload limit. Retake with a smaller file.');
+        }
+        updatePendingPhoto(shotId, uploadId, { width: dims.width, height: dims.height });
+
         const resp = await fetch('/api/upload-url', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ turnId, shotId, filename: f.name, mime: f.type || 'image/jpeg' })
+          body: JSON.stringify({
+            turnId, shotId, filename: file.name, mime: file.type || 'image/jpeg',
+          }),
         });
-        meta = await resp.json();
-      } catch {
-        URL.revokeObjectURL(preview);
-        alert('Could not get upload URL; try again.');
-        continue;
-      }
+        if (!resp.ok) throw new Error(`Upload URL request failed (${resp.status})`);
+        const meta = await resp.json();
+        const finalPath = meta.path || meta.storage_path || '';
+        if (!finalPath) throw new Error('Upload target missing (no storage path).');
+        if (removedUploadIdsRef.current.has(uploadId)) return;
 
-      const finalPath = meta.path || meta.storage_path || '';
-      if (!finalPath) {
-        URL.revokeObjectURL(preview);
-        alert('Upload target missing (no storage path).');
-        continue;
-      }
-
-      // 3) Upload using whichever shape the API returned
-      try {
-        // Tiny trace id for this file attempt
         const traceId = Math.random().toString(36).slice(2, 8);
-        let done = false;
         const tried = [];
-
-        // Helper to expose what happened when ?debug=1
+        let done = false;
         const trace = (obj) => {
           try {
             if (typeof window !== 'undefined' && window.__CAPTURE_DEBUG__) {
               window.__CAPTURE_DEBUG__.lastUpload = {
                 ...(window.__CAPTURE_DEBUG__.lastUpload || {}),
-                [traceId]: { name: f.name, path: finalPath, ...obj },
+                [traceId]: { name: file.name, path: finalPath, ...obj },
               };
             }
           } catch {}
           console.debug('[capture upload]', traceId, obj);
         };
 
-        // Try proxy PUT first (keeps existing preference)
-        if (meta.uploadUrl && !done) {
-          const up = await fetch(meta.uploadUrl, {
-            method: 'PUT',
-            headers: { 'Content-Type': meta.mime || 'application/octet-stream' },
-            body: f,
-          });
-          tried.push(`proxy:${up.status}`);
-          if (up.ok) {
-            done = true;
-            trace({ via: 'proxy', status: up.status });
-          } else {
-            const txt = await up.text().catch(() => '');
-            trace({ via: 'proxy', status: up.status, err: txt.slice(0, 200) });
+        // Keep the original preferred proxy PUT and signed POST fallback.
+        if (meta.uploadUrl) {
+          try {
+            const up = await uploadWithProgress(meta.uploadUrl, {
+              method: 'PUT',
+              headers: { 'Content-Type': meta.mime || 'application/octet-stream' },
+              body: file,
+            }, uploadId);
+            tried.push(`proxy:${up.status}`);
+            if (up.ok) {
+              done = true;
+              trace({ via: 'proxy', status: up.status });
+            } else {
+              trace({ via: 'proxy', status: up.status, err: (up.text || '').slice(0, 200) });
+            }
+          } catch (e) {
+            tried.push(`proxy:${e?.message || 'network error'}`);
+            trace({ via: 'proxy', err: e?.message || 'network error' });
           }
         }
 
-        // Fallback: Supabase signed upload (multipart/form-data)
-        if (!done && meta.signedUploadUrl) {
+        if (!done && meta.signedUploadUrl && !removedUploadIdsRef.current.has(uploadId)) {
+          updateUploadProgress(uploadId, 'uploading', 0);
           const fd = new FormData();
-          fd.append('file', f);
+          fd.append('file', file);
           if (meta.token) fd.append('token', meta.token);
-          const up2 = await fetch(meta.signedUploadUrl, { method: 'POST', body: fd });
-          tried.push(`signed:${up2.status}`);
-          if (up2.ok) {
-            done = true;
-            trace({ via: 'signed', status: up2.status });
-          } else {
-            const txt2 = await up2.text().catch(() => '');
-            trace({ via: 'signed', status: up2.status, err: txt2.slice(0, 200) });
+          try {
+            const up2 = await uploadWithProgress(meta.signedUploadUrl, {
+              method: 'POST', body: fd,
+            }, uploadId);
+            tried.push(`signed:${up2.status}`);
+            if (up2.ok) {
+              done = true;
+              trace({ via: 'signed', status: up2.status });
+            } else {
+              trace({ via: 'signed', status: up2.status, err: (up2.text || '').slice(0, 200) });
+            }
+          } catch (e) {
+            tried.push(`signed:${e?.message || 'network error'}`);
+            trace({ via: 'signed', err: e?.message || 'network error' });
           }
         }
 
-        if (!done) {
-          throw new Error(`All upload paths failed (${tried.join(', ')}).`);
-        }
-
-        // 4) Success → add to UI
-        uploaded.push({
-          name: f.name,
-          shotId,
-          url: finalPath,           // store the object key (used later for signing/preview)
-          width: dims.width,
-          height: dims.height,
-          preview,
-          isFix: isFixMode,
-          capturedAt,               // ✅ new badge field
-        });
+        if (removedUploadIdsRef.current.has(uploadId)) return;
+        if (!done) throw new Error(`All upload paths failed (${tried.join(', ')}).`);
+        updatePendingPhoto(shotId, uploadId, { url: finalPath });
+        updateUploadProgress(uploadId, 'uploaded', 100);
+        uploadFilesRef.current.delete(uploadId);
       } catch (e) {
-        URL.revokeObjectURL(preview);
-        console.warn('[capture addFiles] upload error:', e?.message || e);
-        alert(`Upload failed. Please try again.\n(${e?.message || 'unknown error'})`);
+        if (!removedUploadIdsRef.current.has(uploadId)) {
+          console.warn('[capture addFiles] upload error:', e?.message || e);
+          updateUploadProgress(uploadId, 'failed', 0);
+        }
+      } finally {
+        pendingUploadsRef.current.delete(uploadId);
       }
-    }
+    })();
+    // Keep a reference for debugging; the Map entry is removed in finally.
+    return task;
+  }
 
-    if (uploaded.length) {
-      setUploadsByShot(prev => ({ ...prev, [shotId]: [ ...(prev[shotId] || []), ...uploaded ] }));
+  function retryPhotoUpload(shotId, photo) {
+    const uploadId = photo?.uploadId;
+    if (!uploadId || pendingUploadsRef.current.has(uploadId)) return;
+    const file = uploadFilesRef.current.get(uploadId);
+    if (!file) {
+      alert('The original photo is no longer available. Please retake it.');
+      return;
     }
+    startPhotoUpload(shotId, uploadId, file);
   }
 
   // Allow cleaner to "retake" a photo by removing it from this shot
   function removePhoto(shotId, fileToRemove) {
+    // Prevent an in-flight upload from updating a removed photo.
+    if (fileToRemove.uploadId) {
+      removedUploadIdsRef.current.add(fileToRemove.uploadId);
+      const xhr = activeXhrsRef.current.get(fileToRemove.uploadId);
+      if (xhr) xhr.abort();
+      uploadFilesRef.current.delete(fileToRemove.uploadId);
+      setUploadProgressById(prev => {
+        const next = { ...prev };
+        delete next[fileToRemove.uploadId];
+        return next;
+      });
+    }
+    
     try {
       if (fileToRemove.preview) {
         URL.revokeObjectURL(fileToRemove.preview);
@@ -794,20 +964,45 @@ export default function Capture() {
     // Remove from uploadsByShot so AI Scan + submit won't see it
     setUploadsByShot(prev => {
       const next = { ...prev };
-      next[shotId] = (next[shotId] || []).filter(f => f.url !== fileToRemove.url);
+      next[shotId] = (next[shotId] || []).filter(f =>
+        fileToRemove.uploadId
+          ? f.uploadId !== fileToRemove.uploadId
+          : f.url !== fileToRemove.url
+      );
       return next;
     });
 
     // Also clear any per-photo cleaner note for that path
     setCleanerNoteByNewPath(prev => {
-      if (!prev[fileToRemove.url]) return prev;
-      const { [fileToRemove.url]: _omit, ...rest } = prev;
+      const noteKey = fileToRemove.uploadId || fileToRemove.url;
+      if (!prev[noteKey]) return prev;
+      const { [noteKey]: _omit, ...rest } = prev;
       return rest;
     });
   }
 
   // -------- AI Scan: PRECHECK + VISION + mark scan-done --------
   async function runAiScan() {
+    // Do not scan photos that are still uploading or have failed.
+    const incompleteUploads = Object.values(uploadsByShot || {})
+      .flat()
+      .filter(photo => {
+        const { status } = getPhotoUploadStatus(photo);
+        return status !== 'uploaded';
+      });
+    
+    if (incompleteUploads.length > 0 || pendingUploadsRef.current.size > 0) {
+      const failedCount = incompleteUploads.filter(
+        photo => getPhotoUploadStatus(photo).status === 'failed'
+      ).length;
+    
+      alert(
+        failedCount > 0
+          ? `${failedCount} photo upload(s) failed. Remove or retry them before running the AI scan.`
+          : `Please wait for ${Math.max(incompleteUploads.length, pendingUploadsRef.current.size)} photo upload(s) to finish before running the AI scan.`
+      );
+      return;
+    }
     if (!turnId) return;
     if (!Array.isArray(shots) || shots.length === 0) {
       alert('No checklist sections are loaded yet. Please wait a moment and try again.');
@@ -962,8 +1157,25 @@ export default function Capture() {
   // -------- Submit initial turn --------
   async function submitAll() {
     if (submitting) return;
+    // Prevent submission while photos are uploading or have failed.
+    const incompleteUploads = Object.values(uploadsByShot || {})
+      .flat()
+      .filter(photo => getPhotoUploadStatus(photo).status !== 'uploaded');
+    
+    if (incompleteUploads.length > 0 || pendingUploadsRef.current.size > 0) {
+      const failedCount = incompleteUploads.filter(
+        photo => getPhotoUploadStatus(photo).status === 'failed'
+      ).length;
+    
+      alert(
+        failedCount > 0
+          ? `${failedCount} photo upload(s) failed. Remove or retry them before submitting.`
+          : `Please wait for ${Math.max(incompleteUploads.length, pendingUploadsRef.current.size)} photo upload(s) to finish before submitting.`
+      );
+      return;
+    }
     // minimal: ensure each shot meets min_count
-    const unmet = (shots || []).filter(s => getMinCount(s) > (uploadsByShot[s.shot_id]?.length || 0));
+    const unmet = (shots || []).filter(s => getMinCount(s) > (uploadsByShot[s.shot_id] || []).filter(f => getPhotoUploadStatus(f).status === 'uploaded').length);
     if (unmet.length) {
       alert('Please add required photos before submitting:\n' + unmet.map(a => `• ${a.label}`).join('\n'));
       return;
@@ -1013,6 +1225,23 @@ export default function Capture() {
   // -------- Submit ONLY fixes (new photos + per-photo notes) --------
   async function submitFixes() {
     if (submitting) return;
+    // Prevent submitting fixes while photo uploads are incomplete.
+    const incompleteUploads = Object.values(uploadsByShot || {})
+      .flat()
+      .filter(photo => getPhotoUploadStatus(photo).status !== 'uploaded');
+    
+    if (incompleteUploads.length > 0 || pendingUploadsRef.current.size > 0) {
+      const failedCount = incompleteUploads.filter(
+        photo => getPhotoUploadStatus(photo).status === 'failed'
+      ).length;
+    
+      alert(
+        failedCount > 0
+          ? `${failedCount} photo upload(s) failed. Remove or retry them before submitting fixes.`
+          : `Please wait for ${Math.max(incompleteUploads.length, pendingUploadsRef.current.size)} photo upload(s) to finish before submitting fixes.`
+      );
+      return;
+    }
 
     // ✅ NEW RULE: must include at least one NEW FIX photo
     // New photos are those with preview present, and FIX photos are those with isFix true
@@ -1021,7 +1250,7 @@ export default function Capture() {
       .filter(f => !!f.preview && !!f.isFix);
 
     const newPhotos = newFixFiles.map(f => {
-      const noteObj = cleanerNoteByNewPath[f.url] || {};
+      const noteObj = cleanerNoteByNewPath[f.uploadId || f.url] || {};
       const no = String(noteObj.original || '').trim();     // Spanish
       const nt = String(noteObj.translated || '').trim();   // English
 
@@ -1107,7 +1336,7 @@ export default function Capture() {
 
   const hasNewFixPhoto = Object.values(uploadsByShot || {})
     .flat()
-    .some(f => !!f.preview && !!f.isFix);
+    .some(f => !!f.preview && !!f.isFix && getPhotoUploadStatus(f).status === 'uploaded');
 
   return (
     <ChromeDark title="Start Taking Photos">
@@ -1275,11 +1504,29 @@ export default function Capture() {
             </div>
           )}
 
+          {/* Keep the page open until all transfers finish. */}
+          {Object.values(uploadsByShot || {}).flat().some(
+            f => f.uploadId && getPhotoUploadStatus(f).status !== 'uploaded'
+          ) && (
+            <div style={{ marginTop: 10, padding: '10px 12px', borderRadius: 8,
+              border: '1px solid #2563eb', background: '#0f1e36',
+              color: '#bfdbfe', fontSize: 13 }}>
+              Photos are being uploaded or need attention. You can keep taking photos,
+              but please keep this page open until all uploads say Uploaded.
+            </div>
+          )}
+
           {/* Shots */}
           {renderShots.map(s => {
-            const files = uploadsByShot[s.shot_id] || [];
+           const files = uploadsByShot[s.shot_id] || [];
             const required = getMinCount(s);
-            const missing = Math.max(0, required - files.length);
+            
+            // Only completed uploads count toward the required photos.
+            const uploadedCount = files.filter(
+              f => getPhotoUploadStatus(f).status === 'uploaded'
+            ).length;
+            
+            const missing = Math.max(0, required - uploadedCount);
 
             // Normalize area key and label for AI summaries
             const areaKey = String(s.area_key || s.shot_id || '').toLowerCase();
@@ -1421,7 +1668,7 @@ export default function Capture() {
                         color: missing > 0 ? '#f59e0b' : '#22c55e'
                       }}
                     >
-                      Required: {required} • Uploaded: {files.length} {missing>0 ? `• Missing: ${missing}` : '• ✅'}
+                      Required: {required} • Uploaded: {uploadedCount} {missing>0 ? `• Missing: ${missing}` : '• ✅'}
                     </div>
                   </div>
 
@@ -1446,17 +1693,23 @@ export default function Capture() {
                       fixNotes?.byPath?.[f.url] ||
                       null;
 
-                    const perPhoto = cleanerNoteByNewPath[f.url] || {};
+                    const noteKey = f.uploadId || f.url;
+                    const perPhoto = cleanerNoteByNewPath[noteKey] || {};
                     const perPhotoOriginal = String(perPhoto.original || '');
                     const perPhotoTranslated = String(perPhoto.translated || '');
                     const perPhotoLoading = !!perPhoto.isTranslating;
                     const perPhotoErr = String(perPhoto.error || '');
 
                     const capturedLabel = formatCapturedAt(f.capturedAt);
+                    
+                    // Current upload status for this photo.
+                    const uploadInfo = getPhotoUploadStatus(f);
+                    const uploadStatus = uploadInfo.status;
+                    const uploadPercent = uploadInfo.percent;
 
                     return (
                       <div
-                        key={f.url}
+                        key={f.uploadId || f.url}
                         style={{
                           border: f.isFix ? '1px solid #065f46' : (managerNote ? '1px solid #d97706' : ui.card.border),
                           boxShadow: f.isFix
@@ -1502,68 +1755,132 @@ export default function Capture() {
                           )}
                         </div>
 
-<div
-  style={{
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    gap: 8,
-    marginBottom: 6,
-    flexWrap: 'wrap',          // ✅ allows buttons to drop to next line on mobile
-  }}
->
-  <div
-    style={{
-      fontSize: 13,
-      flex: '1 1 180px',        // ✅ left side can shrink/grow
-      minWidth: 0,              // ✅ needed for ellipsis in flex items
-    }}
-  >
-    <b
-      title={f.name}
-      style={{
-        display: 'block',
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
-        whiteSpace: 'nowrap',   // ✅ keep filename to one line with …
-      }}
-    >
-      {f.name}
-    </b>
+                        {/* Photo upload status */}
+                        {f.uploadId && (
+                          <div style={{ marginBottom: 10 }}>
+                            <div style={{
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              fontSize: 12,
+                              fontWeight: 600,
+                              marginBottom: 5,
+                              color: uploadStatus === 'uploaded'
+                                ? '#86efac'
+                                : uploadStatus === 'failed'
+                                  ? '#fca5a5'
+                                  : '#93c5fd',
+                            }}>
+                              <span>
+                                {uploadStatus === 'uploaded'
+                                  ? '✓ Uploaded'
+                                  : uploadStatus === 'failed'
+                                    ? '⚠ Upload failed'
+                                    : 'Uploading...'}
+                              </span>
+                              {uploadStatus === 'uploaded' && <span>100%</span>}
+                              {uploadStatus === 'uploading' && uploadPercent > 0 && (
+                                <span>{uploadPercent}%</span>
+                              )}
+                            </div>
+                        
+                            {(uploadStatus === 'uploading' || uploadStatus === 'pending') && (
+                              <div style={{
+                                height: 6,
+                                background: '#1e293b',
+                                borderRadius: 999,
+                                overflow: 'hidden',
+                              }}>
+                                <div style={{
+                                  height: '100%',
+                                  width: `${uploadPercent}%`,
+                                  background: '#3b82f6',
+                                  borderRadius: 999,
+                                  transition: 'width 150ms ease',
+                                }} />
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        {uploadStatus === 'failed' && (
+                          <div style={{ marginBottom: 10 }}>
+                            <ThemedButton
+                              kind="secondary"
+                              onClick={() => retryPhotoUpload(s.shot_id, f)}
+                              ariaLabel={`Retry upload for ${f.name}`}
+                            >
+                              ↻ Retry upload
+                            </ThemedButton>
+                            <div style={{ fontSize: 11, color: '#fca5a5', marginTop: 4 }}>
+                              Upload failed. Retry or retake this photo before submitting.
+                            </div>
+                          </div>
+                        )}
 
-    {/* ✅ Capture badge stays exactly as you have it */}
-    {capturedLabel ? (
-      <div style={{ marginTop: 4, fontSize: 12, color: '#93c5fd' }}>
-        Captured: {capturedLabel}
-      </div>
-    ) : null}
-  </div>
-
-  <div
-    style={{
-      display: 'flex',
-      gap: 8,
-      flex: '0 0 auto',
-      marginLeft: 'auto',
-    }}
-  >
-    <ThemedButton
-      kind="secondary"
-      onClick={() => openSignedPath(f.url)}
-      ariaLabel={`View ${f.name}`}
-    >
-      👁️ View
-    </ThemedButton>
-
-    <ThemedButton
-      kind="secondary"
-      onClick={() => removePhoto(s.shot_id, f)}
-      ariaLabel={`Retake ${f.name}`}
-    >
-      🔁 Retake
-    </ThemedButton>
-  </div>
-</div>
+                            <div
+                              style={{
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'flex-start',
+                                gap: 8,
+                                marginBottom: 6,
+                                flexWrap: 'wrap',          // ✅ allows buttons to drop to next line on mobile
+                              }}
+                            >
+                              <div
+                                style={{
+                                  fontSize: 13,
+                                  flex: '1 1 180px',        // ✅ left side can shrink/grow
+                                  minWidth: 0,              // ✅ needed for ellipsis in flex items
+                                }}
+                              >
+                                <b
+                                  title={f.name}
+                                  style={{
+                                    display: 'block',
+                                    overflow: 'hidden',
+                                    textOverflow: 'ellipsis',
+                                    whiteSpace: 'nowrap',   // ✅ keep filename to one line with …
+                                  }}
+                                >
+                                  {f.name}
+                                </b>
+                            
+                                {/* ✅ Capture badge stays exactly as you have it */}
+                                {capturedLabel ? (
+                                  <div style={{ marginTop: 4, fontSize: 12, color: '#93c5fd' }}>
+                                    Captured: {capturedLabel}
+                                  </div>
+                                ) : null}
+                              </div>
+                            
+                              <div
+                                style={{
+                                  display: 'flex',
+                                  gap: 8,
+                                  flex: '0 0 auto',
+                                  marginLeft: 'auto',
+                                }}
+                              >
+                                <ThemedButton
+                                  kind="secondary"
+                                  onClick={() => {
+                                    if (f.preview) window.open(f.preview, '_blank');
+                                    else openSignedPath(f.url);
+                                  }}
+                                  ariaLabel={`View ${f.name}`}
+                                >
+                                  👁️ View
+                                </ThemedButton>
+                            
+                                <ThemedButton
+                                  kind="secondary"
+                                  onClick={() => removePhoto(s.shot_id, f)}
+                                  ariaLabel={`Retake ${f.name}`}
+                                >
+                                  🔁 Retake
+                                </ThemedButton>
+                              </div>
+                            </div>
 
 
                         {/* Manager note (if flagged) visible to cleaner */}
@@ -1592,7 +1909,7 @@ export default function Capture() {
                                 const v = e.target.value;
                                 setCleanerNoteByNewPath(prev => ({
                                   ...prev,
-                                  [f.url]: { ...(prev[f.url] || {}), original: v }
+                                  [noteKey]: { ...(prev[noteKey] || {}), original: v }
                                 }));
                               }}
                               placeholder="Escribe tu nota en Español…"
@@ -1602,7 +1919,7 @@ export default function Capture() {
                             <div style={{ display:'flex', gap:10, alignItems:'center', marginTop:8 }}>
                               <ThemedButton
                                 kind="secondary"
-                                onClick={() => translatePhotoNoteToEnglish(f.url)}
+                                onClick={() => translatePhotoNoteToEnglish(noteKey)}
                                 loading={perPhotoLoading}
                                 disabled={perPhotoLoading || !String(perPhotoOriginal || '').trim()}
                                 ariaLabel="Translate photo note to English"
@@ -1627,7 +1944,7 @@ export default function Capture() {
                                 const v = e.target.value;
                                 setCleanerNoteByNewPath(prev => ({
                                   ...prev,
-                                  [f.url]: { ...(prev[f.url] || {}), translated: v }
+                                  [noteKey]: { ...(prev[noteKey] || {}), translated: v }
                                 }));
                               }}
                               placeholder="English version will appear here… (editable)"
