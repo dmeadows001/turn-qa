@@ -1,172 +1,169 @@
 // pages/api/submit-turn.js
+// Finalize an initial turn without duplicating photos that were registered
+// as soon as their background Storage uploads completed.
 import { supabaseAdmin as _admin } from '@/lib/supabaseAdmin';
 import { notifyManagerForTurn } from '@/lib/notify';
 import { readCleanerSession } from '@/lib/session';
 
-// Support both export styles (function returning client vs direct client)
 const supa = typeof _admin === 'function' ? _admin() : _admin;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function nowIso() { return new Date().toISOString(); }
-
-// ----------------- body parsing -----------------
 function parseBody(raw) {
-  let body = raw;
+  let body = raw || {};
   if (typeof raw === 'string') {
     try { body = JSON.parse(raw); } catch { body = {}; }
   }
-  const turnId = (body.turnId || body.turn_id || '').trim();
-  const photos = Array.isArray(body.photos) ? body.photos : [];
-  return { turnId, photos };
+  return {
+    turnId: String(body?.turnId || body?.turn_id || '').trim(),
+    photos: Array.isArray(body?.photos) ? body.photos : [],
+  };
 }
 
-// ----------------- build rows -----------------
-function buildRows(turnId, photos) {
-  // capture.js sends: { name, shotId, url: up.path, width, height, preview }
-  const rows = (photos || [])
-    .map(p => {
-      const storagePath = (p.path || p.url || '').toString().trim();
-      if (!storagePath) return null;
-      return {
-        turn_id: turnId,
-        _path_value: storagePath,
-        shot_id: p.shotId || p.shot_id || null,
-        area_key: p.area_key || '',
-        created_at: nowIso(),
-      };
-    })
-    .filter(Boolean);
-  return rows;
-}
-
-// ----------------- tolerant inserts -----------------
-async function tolerantInsertTurnPhotos(rows) {
-  if (!rows.length) return { ok: true, tried: 0 };
-
-  const shapes = [
-    r => ({ turn_id: r.turn_id, storage_path: r._path_value, shot_id: r.shot_id, area_key: r.area_key, created_at: r.created_at }),
-    r => ({ turn_id: r.turn_id, path:          r._path_value, shot_id: r.shot_id, area_key: r.area_key, created_at: r.created_at }),
-    r => ({ turn_id: r.turn_id, photo_path:    r._path_value, shot_id: r.shot_id, area_key: r.area_key, created_at: r.created_at }),
-    r => ({ turn_id: r.turn_id, url:           r._path_value, shot_id: r.shot_id, area_key: r.area_key, created_at: r.created_at }),
-    r => ({ turn_id: r.turn_id, file:          r._path_value, shot_id: r.shot_id, area_key: r.area_key, created_at: r.created_at }),
-    r => ({ turn_id: r.turn_id, storage_path:  r._path_value }),
-    r => ({ turn_id: r.turn_id, path:          r._path_value }),
-  ];
-
-  let lastErr = null;
-  let tried = 0;
-
-  for (const make of shapes) {
-    tried++;
-    const payload = rows.map(make);
-    const { error } = await supa.from('turn_photos').insert(payload, { returning: 'minimal' });
-    if (!error) return { ok: true, tried };
-    const msg = (error.message || '').toLowerCase();
-    if (!/column|does not exist|null value|constraint|invalid input|duplicate/i.test(msg)) {
-      lastErr = error;
-      break;
+function normalizePhotos(turnId, photos) {
+  const unique = new Map();
+  for (const photo of photos) {
+    const path = String(photo?.path || photo?.url || '').trim();
+    if (!path || path.startsWith('pending:')) {
+      throw new Error('A photo has not finished uploading. Please wait and try again.');
     }
-    lastErr = error;
+    const parts = path.split('/');
+    if (
+      parts.length < 4 || parts[0] !== 'turns' || parts[1] !== turnId ||
+      parts.some(p => !p || p === '.' || p === '..') ||
+      path.includes('\\') || path.includes('?') || path.includes('#')
+    ) {
+      throw new Error('A photo has an invalid Storage path.');
+    }
+    const rawShotId = String(photo?.shotId || photo?.shot_id || '').trim();
+    // Fallback template identifiers are not UUIDs and cannot be written
+    // to the UUID-typed turn_photos.shot_id column.
+    const shotId = UUID.test(rawShotId) ? rawShotId : null;
+    unique.set(path, {
+      turn_id: turnId,
+      storage_path: path,
+      shot_id: shotId,
+      area_key: String(photo?.area_key || ''),
+    });
+  }
+  return [...unique.values()];
+}
+
+async function ensurePhotoRows(turnId, rows) {
+  if (!rows.length) return;
+
+  // Include both path columns for compatibility with historical photo rows.
+  const { data: existing, error: lookupError } = await supa
+    .from('turn_photos')
+    .select('id, storage_path, path')
+    .eq('turn_id', turnId);
+  if (lookupError) throw lookupError;
+
+  const knownPaths = new Set();
+  for (const row of existing || []) {
+    if (row.storage_path) knownPaths.add(row.storage_path);
+    if (row.path) knownPaths.add(row.path);
   }
 
-  return { ok: false, tried, error: lastErr };
-}
+  // Backward compatibility: the old capture page did not register uploads.
+  // Insert only missing paths, so a transition to the new capture page does
+  // not create duplicate records on normal sequential requests.
+  const missing = rows.filter(row => !knownPaths.has(row.storage_path));
+  if (!missing.length) return;
 
-async function fallbackInsertLegacyPhotos(rows) {
-  if (!rows.length) return { ok: true };
-  const shapes = [
-    r => ({ turn_id: r.turn_id, path:          r._path_value, area_key: r.area_key || '', created_at: r.created_at }),
-    r => ({ turn_id: r.turn_id, storage_path:  r._path_value, area_key: r.area_key || '', created_at: r.created_at }),
-    r => ({ turn_id: r.turn_id, photo_path:    r._path_value, area_key: r.area_key || '', created_at: r.created_at }),
-    r => ({ turn_id: r.turn_id, url:           r._path_value, area_key: r.area_key || '', created_at: r.created_at }),
-  ];
-  let lastErr = null;
-  for (const make of shapes) {
-    const payload = rows.map(make);
-    const { error } = await supa.from('photos').insert(payload, { returning: 'minimal' });
-    if (!error) return { ok: true };
-    const msg = (error.message || '').toLowerCase();
-    if (!/column|does not exist|null value|constraint|invalid input|duplicate/i.test(msg)) {
-      lastErr = error;
-      break;
+  // Verify that every missing file really exists in Storage before inserting.
+  const bucket = process.env.NEXT_PUBLIC_SUPABASE_STORAGE_BUCKET ||
+    process.env.SUPABASE_STORAGE_BUCKET || 'photos';
+  for (const row of missing) {
+    const parts = row.storage_path.split('/');
+    const filename = parts.pop();
+    const folder = parts.join('/');
+    const { data: objects, error } = await supa.storage
+      .from(bucket).list(folder, { search: filename, limit: 100 });
+    if (error) throw error;
+    if (!(objects || []).some(object => object.name === filename)) {
+      throw new Error(`Uploaded photo not found in Storage: ${filename}`);
     }
-    lastErr = error;
   }
-  return { ok: false, error: lastErr };
+
+  // Insert individually, allowing a concurrent registration request to win.
+  for (const row of missing) {
+    const { error } = await supa.from('turn_photos').insert(row);
+    if (!error) continue;
+    if (error.code === '23505') continue; // unique path constraint, if present
+    throw error;
+  }
 }
 
-// ----------------- handler -----------------
 export default async function handler(req, res) {
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', ['POST']);
+    return res.status(405).json({ error: 'Method Not Allowed' });
+  }
 
   try {
     const { turnId, photos } = parseBody(req.body);
-    if (!turnId) return res.status(400).json({ error: 'turnId is required' });
+    if (!UUID.test(turnId)) {
+      return res.status(400).json({ error: 'A valid turnId is required' });
+    }
 
-    // Require an authenticated cleaner session.
-const session = readCleanerSession(req);
+    const session = readCleanerSession(req);
+    if (!session?.cleaner_id) {
+      return res.status(401).json({ error: 'Cleaner authentication required' });
+    }
 
-if (!session?.cleaner_id) {
-  return res.status(401).json({
-    error: 'Cleaner authentication required',
-  });
-}
-
-    // --- Guard: require AI Scan to have been RUN at least once ---
-    const { data: turnRow, error: turnErr } = await supa
+    const { data: turn, error: turnError } = await supa
       .from('turns')
-      .select('id, cleaner_id, status, scan_ok, scan_checked_at')
+      .select('id, cleaner_id, status, scan_checked_at')
       .eq('id', turnId)
-      .single();
-
-    if (turnErr) {
-      return res.status(500).json({ error: turnErr.message || 'Failed to load turn' });
+      .maybeSingle();
+    if (turnError) throw turnError;
+    if (!turn) return res.status(404).json({ error: 'Turn not found' });
+    if (String(turn.cleaner_id) !== String(session.cleaner_id)) {
+      return res.status(403).json({ error: 'You are not authorized to submit this turnover' });
     }
-    if (!turnRow) {
-      return res.status(404).json({ error: 'Turn not found' });
+    if (turn.status !== 'in_progress') {
+      return res.status(409).json({ error: `Turn cannot be submitted while status is ${turn.status}` });
     }
-
-    // Only the cleaner who owns this turn may submit it.
-if (turnRow.cleaner_id !== session.cleaner_id) {
-  return res.status(403).json({
-    error: 'You are not authorized to submit this turnover',
-  });
-}
-    
-    if (!turnRow.scan_checked_at) {
-      // Only enforce that a scan has been *performed* (even if it found issues).
+    if (!turn.scan_checked_at) {
       return res.status(409).json({
         error: 'AI Scan is required before submitting this turn.',
         code: 'SCAN_REQUIRED',
       });
     }
-    // ----------------------------------------------------------
 
-    // 1) Insert photos (tolerant)
-    const rows = buildRows(turnId, photos);
-    if (rows.length) {
-      const ins = await tolerantInsertTurnPhotos(rows);
-      if (!ins.ok) {
-        const fb = await fallbackInsertLegacyPhotos(rows);
-        if (!fb.ok) {
-          throw new Error((ins.error?.message || fb.error?.message) || 'could not insert photos');
-        }
-      }
+    let rows;
+    try { rows = normalizePhotos(turnId, photos); }
+    catch (error) { return res.status(400).json({ error: error.message }); }
+    if (!rows.length) {
+      return res.status(400).json({ error: 'At least one uploaded photo is required' });
     }
 
-    // 2) Mark the turn as submitted
-    const { error: updErr } = await supa
+    await ensurePhotoRows(turnId, rows);
+
+    // The status guard also prevents a second successful submission from
+    // sending another manager notification.
+    const { data: updated, error: updateError } = await supa
       .from('turns')
-      .update({ status: 'submitted', submitted_at: nowIso() })
-      .eq('id', turnId);
+      .update({ status: 'submitted', submitted_at: new Date().toISOString() })
+      .eq('id', turnId)
+      .eq('status', 'in_progress')
+      .select('id')
+      .maybeSingle();
+    if (updateError) throw updateError;
+    if (!updated) {
+      return res.status(409).json({ error: 'Turn status changed before submission completed. Please reload.' });
+    }
 
-    if (updErr) throw updErr;
+    try {
+      await notifyManagerForTurn(turnId, 'initial');
+    } catch (notifyError) {
+      console.error('[submit-turn] manager notification failed:', notifyError);
+      // The turn is already submitted. Do not falsely report submission failure.
+    }
 
-    // 3) 🔔 Notify the property's manager (fire-and-forget)
-    notifyManagerForTurn(turnId, 'initial').catch(console.error);
-
-    return res.json({ ok: true });
-  } catch (e) {
-    console.error('submit-turn error', e);
-    return res.status(500).json({ error: e.message || 'submit-turn failed' });
+    return res.status(200).json({ ok: true, photoCount: rows.length });
+  } catch (error) {
+    console.error('[submit-turn]', error);
+    return res.status(500).json({ error: error?.message || 'submit-turn failed' });
   }
 }
