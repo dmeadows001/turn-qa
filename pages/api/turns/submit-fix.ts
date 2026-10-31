@@ -2,213 +2,120 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { createClient } from '@supabase/supabase-js';
 import { notifyManagerForTurn } from '@/lib/notify';
+import { readCleanerSession } from '@/lib/session';
 
 export const config = { api: { bodyParser: true } };
 
-function nowIso() {
-  return new Date().toISOString();
+const nowIso = () => new Date().toISOString();
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function parseBody(raw: any): any {
+  if (typeof raw !== 'string') return raw || {};
+  try { return JSON.parse(raw); } catch { return {}; }
 }
 
-function parseBody(raw: any) {
-  try {
-    return typeof raw === 'string' ? JSON.parse(raw) : (raw || {});
-  } catch {
-    return {};
+function stringValue(v: any): string {
+  return typeof v === 'string' ? v.trim() : '';
+}
+
+type FixPhoto = {
+  path: string;
+  shotId: string | null;
+  areaKey: string;
+  cleanerNote: string | null;
+  original: string | null;
+  translated: string | null;
+  originalLang: string | null;
+  translatedLang: string | null;
+};
+
+function normalizePhotos(turnId: string, photos: any[]): FixPhoto[] {
+  const result = new Map<string, FixPhoto>();
+  for (const p of photos) {
+    if (!p || typeof p !== 'object') throw new Error('Invalid photo entry');
+    const path = stringValue(p.path || p.url);
+    if (!path || !path.startsWith(`turns/${turnId}/`) || path.includes('..') || path.includes('?') || path.includes('#')) {
+      throw new Error('Invalid fix photo storage path');
+    }
+    const rawShotId = stringValue(p.shotId || p.shot_id);
+    const shotId = UUID.test(rawShotId) ? rawShotId : null;
+    const original = stringValue(p.note_original || p.cleaner_note_original);
+    const translated = stringValue(p.note_translated || p.cleaner_note_translated);
+    const originalLang = stringValue(p.note_original_lang || p.cleaner_note_original_lang);
+    const translatedLang = stringValue(p.note_translated_lang || p.cleaner_note_translated_lang);
+    const legacyNote = stringValue(p.note || p.cleaner_note);
+    result.set(path, {
+      path, shotId,
+      areaKey: stringValue(p.area_key),
+      cleanerNote: translated || legacyNote || original || null,
+      original: original || null,
+      translated: translated || null,
+      originalLang: originalLang || (original ? 'es' : null),
+      translatedLang: translatedLang || (translated ? 'en' : null),
+    });
   }
+  return [...result.values()];
 }
 
-/**
- * Build canonical rows with:
- * - _path_value as the chosen photo path/url (normalized)
- * - cleaner_note as manager-facing note (prefer EN translated)
- * - bilingual note fields for history
- */
-function buildRows(turnId: string, photos: any[]) {
-  return (photos || [])
-    .map((p: any) => {
-      const storagePath = (p.path || p.url || '').toString().trim();
-      if (!storagePath) return null;
-
-      // Per-photo bilingual fields (optional)
-      const noteOriginal = String(p.note_original || p.cleaner_note_original || '').trim();
-      const noteTranslated = String(p.note_translated || p.cleaner_note_translated || '').trim();
-      const noteOriginalLang = String(p.note_original_lang || p.cleaner_note_original_lang || '').trim();
-      const noteTranslatedLang = String(p.note_translated_lang || p.cleaner_note_translated_lang || '').trim();
-
-      // Legacy single note (optional)
-      const legacyNote = String(p.note || p.cleaner_note || '').trim();
-
-      // Manager-facing note: prefer EN translated when present, else legacy, else original
-      const noteSent = noteTranslated || legacyNote || noteOriginal || null;
-
-      return {
-        turn_id: turnId,
-        _path_value: storagePath,
-        shot_id: p.shotId || p.shot_id || null,
-        area_key: p.area_key || '',
-
-        // mark these as FIX photos
-        is_fix: true,
-
-        // manager-facing note (string) + bilingual fields
-        cleaner_note: noteSent,
-
-        cleaner_note_original: noteOriginal || null,
-        cleaner_note_translated: noteTranslated || null,
-
-        cleaner_note_original_lang: noteOriginalLang || (noteOriginal ? 'es' : null),
-        cleaner_note_translated_lang: noteTranslatedLang || (noteTranslated ? 'en' : null),
-
-        created_at: nowIso(),
-      };
-    })
-    .filter(Boolean) as any[];
+function isMissingColumn(error: any): boolean {
+  const msg = String(error?.message || '');
+  return /column|schema cache|does not exist/i.test(msg) || error?.code === 'PGRST204' || error?.code === '42703';
 }
 
-// Try inserting into turn_photos with multiple column shapes
-async function tolerantInsertTurnPhotos(supa: any, rows: any[]) {
-  if (!rows.length) return { ok: true, tried: 0 };
+function photoFields(p: FixPhoto) {
+  return {
+    is_fix: true,
+    cleaner_note: p.cleanerNote,
+    cleaner_note_original: p.original,
+    cleaner_note_translated: p.translated,
+    cleaner_note_original_lang: p.originalLang,
+    cleaner_note_translated_lang: p.translatedLang,
+  };
+}
 
-  const shapes: Array<(r: any) => Record<string, any>> = [
-    // Most complete (new schema)
-    (r: any) => ({
-      turn_id: r.turn_id,
-      storage_path: r._path_value,
-      shot_id: r.shot_id,
-      area_key: r.area_key,
-      is_fix: r.is_fix,
-      cleaner_note: r.cleaner_note,
-      cleaner_note_original: r.cleaner_note_original,
-      cleaner_note_translated: r.cleaner_note_translated,
-      cleaner_note_original_lang: r.cleaner_note_original_lang,
-      cleaner_note_translated_lang: r.cleaner_note_translated_lang,
-      created_at: r.created_at,
-    }),
-    (r: any) => ({
-      turn_id: r.turn_id,
-      path: r._path_value,
-      shot_id: r.shot_id,
-      area_key: r.area_key,
-      is_fix: r.is_fix,
-      cleaner_note: r.cleaner_note,
-      cleaner_note_original: r.cleaner_note_original,
-      cleaner_note_translated: r.cleaner_note_translated,
-      cleaner_note_original_lang: r.cleaner_note_original_lang,
-      cleaner_note_translated_lang: r.cleaner_note_translated_lang,
-      created_at: r.created_at,
-    }),
-    (r: any) => ({
-      turn_id: r.turn_id,
-      photo_path: r._path_value,
-      shot_id: r.shot_id,
-      area_key: r.area_key,
-      is_fix: r.is_fix,
-      cleaner_note: r.cleaner_note,
-      cleaner_note_original: r.cleaner_note_original,
-      cleaner_note_translated: r.cleaner_note_translated,
-      cleaner_note_original_lang: r.cleaner_note_original_lang,
-      cleaner_note_translated_lang: r.cleaner_note_translated_lang,
-      created_at: r.created_at,
-    }),
-    (r: any) => ({
-      turn_id: r.turn_id,
-      url: r._path_value,
-      shot_id: r.shot_id,
-      area_key: r.area_key,
-      is_fix: r.is_fix,
-      cleaner_note: r.cleaner_note,
-      cleaner_note_original: r.cleaner_note_original,
-      cleaner_note_translated: r.cleaner_note_translated,
-      cleaner_note_original_lang: r.cleaner_note_original_lang,
-      cleaner_note_translated_lang: r.cleaner_note_translated_lang,
-      created_at: r.created_at,
-    }),
-    (r: any) => ({
-      turn_id: r.turn_id,
-      file: r._path_value,
-      shot_id: r.shot_id,
-      area_key: r.area_key,
-      is_fix: r.is_fix,
-      cleaner_note: r.cleaner_note,
-      cleaner_note_original: r.cleaner_note_original,
-      cleaner_note_translated: r.cleaner_note_translated,
-      cleaner_note_original_lang: r.cleaner_note_original_lang,
-      cleaner_note_translated_lang: r.cleaner_note_translated_lang,
-      created_at: r.created_at,
-    }),
+// Existing photos were registered immediately after upload. Update those rows
+// rather than inserting them again; insert only a genuinely missing row.
+async function saveFixPhoto(supa: any, turnId: string, p: FixPhoto) {
+  const { data: existing, error: lookupErr } = await supa
+    .from('turn_photos')
+    .select('id')
+    .eq('turn_id', turnId)
+    .eq('storage_path', p.path)
+    .limit(1);
+  if (lookupErr) throw lookupErr;
 
-    // Older schema (no bilingual cols) but still include cleaner_note
-    (r: any) => ({
-      turn_id: r.turn_id,
-      storage_path: r._path_value,
-      shot_id: r.shot_id,
-      area_key: r.area_key,
-      is_fix: r.is_fix,
-      cleaner_note: r.cleaner_note,
-      created_at: r.created_at,
-    }),
-    (r: any) => ({
-      turn_id: r.turn_id,
-      path: r._path_value,
-      shot_id: r.shot_id,
-      area_key: r.area_key,
-      is_fix: r.is_fix,
-      cleaner_note: r.cleaner_note,
-      created_at: r.created_at,
-    }),
-    (r: any) => ({
-      turn_id: r.turn_id,
-      photo_path: r._path_value,
-      shot_id: r.shot_id,
-      area_key: r.area_key,
-      is_fix: r.is_fix,
-      cleaner_note: r.cleaner_note,
-      created_at: r.created_at,
-    }),
-    (r: any) => ({
-      turn_id: r.turn_id,
-      url: r._path_value,
-      shot_id: r.shot_id,
-      area_key: r.area_key,
-      is_fix: r.is_fix,
-      cleaner_note: r.cleaner_note,
-      created_at: r.created_at,
-    }),
-    (r: any) => ({
-      turn_id: r.turn_id,
-      file: r._path_value,
-      shot_id: r.shot_id,
-      area_key: r.area_key,
-      is_fix: r.is_fix,
-      cleaner_note: r.cleaner_note,
-      created_at: r.created_at,
-    }),
-
-    // minimal fallbacks (very old schemas)
-    (r: any) => ({ turn_id: r.turn_id, storage_path: r._path_value }),
-    (r: any) => ({ turn_id: r.turn_id, path: r._path_value }),
+  const base = photoFields(p);
+  const updateShapes: any[] = [
+    base,
+    { is_fix: true, cleaner_note: p.cleanerNote },
+    { is_fix: true },
+  ];
+  const insertShapes: any[] = [
+    { turn_id: turnId, storage_path: p.path, shot_id: p.shotId, area_key: p.areaKey, ...base, created_at: nowIso() },
+    { turn_id: turnId, storage_path: p.path, shot_id: p.shotId, area_key: p.areaKey, is_fix: true, cleaner_note: p.cleanerNote, created_at: nowIso() },
+    { turn_id: turnId, storage_path: p.path, shot_id: p.shotId, is_fix: true, cleaner_note: p.cleanerNote },
+    { turn_id: turnId, storage_path: p.path, is_fix: true },
   ];
 
-  let lastErr: any = null;
-  let tried = 0;
-
-  for (const make of shapes) {
-    tried++;
-    const payload = rows.map((r: any) => make(r)) as any[];
-    const { error } = await supa.from('turn_photos').insert(payload, { returning: 'minimal' });
-
-    if (!error) return { ok: true, tried };
-
-    const msg = (error.message || '').toLowerCase();
-    // If it looks like a column mismatch / constraint / duplicate, try next shape.
-    if (!/column|does not exist|null value|constraint|invalid input|duplicate/i.test(msg)) {
-      lastErr = error;
-      break;
+  let lastError: any = null;
+  if (existing?.length) {
+    for (const fields of updateShapes) {
+      const { error } = await supa.from('turn_photos').update(fields)
+        .eq('turn_id', turnId).eq('storage_path', p.path);
+      if (!error) return;
+      lastError = error;
+      if (!isMissingColumn(error)) break;
     }
-    lastErr = error;
+  } else {
+    for (const fields of insertShapes) {
+      const { error } = await supa.from('turn_photos').insert(fields);
+      if (!error) return;
+      lastError = error;
+      // Do not retry a duplicate insert with different shapes.
+      if (!isMissingColumn(error)) break;
+    }
   }
-
-  return { ok: false, tried, error: lastErr };
+  throw lastError || new Error('Could not save fix photo');
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -216,107 +123,84 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     const body = parseBody(req.body);
+    const turnId = stringValue(body.turnId || body.turn_id);
+    if (!UUID.test(turnId)) return res.status(400).json({ error: 'Valid turnId is required' });
+    if (body.photos != null && !Array.isArray(body.photos)) {
+      return res.status(400).json({ error: 'photos must be an array' });
+    }
 
-    const turnId = String(body.turnId || body.turn_id || '').trim();
-    const photos = Array.isArray(body.photos) ? body.photos : [];
+    const session = readCleanerSession(req);
+    if (!session?.cleaner_id) return res.status(401).json({ error: 'Cleaner authentication required' });
 
-    // Legacy reply (what manager receives). We will prefer translated reply if provided.
-    const legacyReply: string = String(body.reply || body.cleaner_reply || '').trim();
-
-    // Bilingual reply fields (new)
-    const replyOriginal: string = String(body.reply_original || '').trim();
-    const replyTranslated: string = String(body.reply_translated || '').trim();
-    const replyOriginalLang: string = String(body.reply_original_lang || '').trim();
-    const replyTranslatedLang: string = String(body.reply_translated_lang || '').trim();
-
-    // What we store in cleaner_reply/cleaner_note (manager-facing) — prefer English translated when present
-    const replySent = replyTranslated || legacyReply || replyOriginal;
-
-    if (!turnId) return res.status(400).json({ error: 'turnId is required' });
-
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-    const key = (process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY)!;
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const key = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
     if (!url || !key) return res.status(500).json({ error: 'Supabase service env vars missing' });
-
     const supa = createClient(url, key);
 
-    // 1) Store the fix photos (+ per-photo bilingual notes if provided)
-    if (photos.length) {
-      const rows = buildRows(turnId, photos);
-      const ins = await tolerantInsertTurnPhotos(supa, rows);
-      if (!ins.ok) {
-        return res.status(500).json({ error: ins.error?.message || 'could not save fix photos' });
-      }
+    const { data: turn, error: turnErr } = await supa.from('turns')
+      .select('id, cleaner_id, status').eq('id', turnId).single();
+    if (turnErr || !turn) return res.status(404).json({ error: 'Turn not found' });
+    if (turn.cleaner_id !== session.cleaner_id) {
+      return res.status(403).json({ error: 'You are not authorized to submit fixes for this turnover' });
+    }
+    if (turn.status !== 'needs_fix') {
+      return res.status(409).json({ error: 'This turnover is not awaiting fixes', currentStatus: turn.status });
     }
 
-    // 2) Update the turn with cleaner reply + status + bilingual fields
-    try {
-      const updates: any = {
-        status: 'submitted',
-        submitted_at: nowIso(),
-      };
+    let photos: FixPhoto[];
+    try { photos = normalizePhotos(turnId, body.photos || []); }
+    catch (e: any) { return res.status(400).json({ error: e.message }); }
 
-      // Legacy fields for compatibility (what manager sees)
-      if (replySent) {
-        updates.cleaner_reply = replySent;
-        updates.cleaner_note = replySent;
-      }
+    const legacyReply = stringValue(body.reply || body.cleaner_reply);
+    const original = stringValue(body.reply_original);
+    const translated = stringValue(body.reply_translated);
+    const originalLang = stringValue(body.reply_original_lang);
+    const translatedLang = stringValue(body.reply_translated_lang);
+    const replySent = translated || legacyReply || original;
 
-      // Bilingual fields (only if present; columns exist in your DB per your screenshot)
-      const ro = replyOriginal || replySent; // original (Spanish) - fallback if UI only sent reply
-      const rt = replyTranslated || null;    // translated (English)
+    // Preserve notes for already-registered photos and add any missing records.
+    for (const photo of photos) await saveFixPhoto(supa, turnId, photo);
 
-      if (ro) updates.cleaner_reply_original = ro;
-      updates.cleaner_reply_translated = rt;
-
-      const rol = replyOriginalLang || (ro ? 'es' : null);
-      const rtl = replyTranslatedLang || (rt ? 'en' : null);
-
-      updates.cleaner_reply_original_lang = rol;
-      updates.cleaner_reply_translated_lang = rtl;
-
-      let { error: updErr } = await supa.from('turns').update(updates).eq('id', turnId);
-
-      // Extra safety: if any environment lacks bilingual columns, retry without them (do not break flow)
-      if (updErr && /column .* does not exist/i.test(updErr.message || '')) {
-        const fallback: any = {
-          status: updates.status,
-          submitted_at: updates.submitted_at,
-        };
-        if (replySent) {
-          fallback.cleaner_reply = replySent;
-          fallback.cleaner_note = replySent;
-        }
-        const retry = await supa.from('turns').update(fallback).eq('id', turnId);
-        updErr = retry.error || null;
-      }
-
-      if (updErr) {
-        console.warn('[submit-fix] could not update turns row:', updErr.message || updErr);
-      }
-    } catch (e: any) {
-      console.warn('[submit-fix] turn update failed (non-fatal):', e?.message || e);
+    const updates: any = { status: 'submitted', submitted_at: nowIso() };
+    if (replySent) {
+      updates.cleaner_reply = replySent;
+      updates.cleaner_note = replySent;
     }
+    const originalForHistory = original || replySent;
+    if (originalForHistory) updates.cleaner_reply_original = originalForHistory;
+    updates.cleaner_reply_translated = translated || null;
+    updates.cleaner_reply_original_lang = originalLang || (originalForHistory ? 'es' : null);
+    updates.cleaner_reply_translated_lang = translatedLang || (translated ? 'en' : null);
 
-    // 3) Notify manager (kind = 'fix'); non-fatal on error
+    // Only transition a turn that is still in needs_fix. Never claim success
+    // if the database update failed or another request changed its status.
+    let updated: any[] | null = null;
+    let lastError: any = null;
+    const fallback = { status: 'submitted', submitted_at: updates.submitted_at,
+      ...(replySent ? { cleaner_reply: replySent, cleaner_note: replySent } : {}) };
+    for (const payload of [updates, fallback, { status: 'submitted', submitted_at: updates.submitted_at }]) {
+      const { data, error } = await supa.from('turns').update(payload)
+        .eq('id', turnId).eq('status', 'needs_fix').select('id');
+      if (!error) { updated = data || []; break; }
+      lastError = error;
+      if (!isMissingColumn(error)) break;
+    }
+    if (updated === null) throw lastError || new Error('Could not update turn status');
+    if (!updated.length) return res.status(409).json({ error: 'Turn status changed; refresh and try again' });
+
     let notify: any = null;
-    try {
-      notify = await notifyManagerForTurn(turnId, 'fix');
-    } catch (e: any) {
-      console.warn('[submit-fix] notify failed (non-fatal):', e?.message || e);
-    }
+    try { notify = await notifyManagerForTurn(turnId, 'fix'); }
+    catch (e: any) { console.warn('[submit-fix] manager notification failed:', e?.message || e); }
 
     return res.json({
-      ok: true,
-      notify,
-      newStatus: 'submitted',
+      ok: true, notify, newStatus: 'submitted',
       replySaved: !!replySent,
-      bilingualSaved: !!(replyOriginal || replyTranslated),
-      replySentPreview: replySent ? replySent.slice(0, 80) : '',
+      bilingualSaved: !!(original || translated),
+      replySentPreview: replySent.slice(0, 80),
       testMode: process.env.DISABLE_SMS === '1',
     });
   } catch (e: any) {
     console.error('[submit-fix] error', e);
-    return res.status(500).json({ error: e.message || 'submit-fix failed' });
+    return res.status(500).json({ error: e?.message || 'submit-fix failed' });
   }
 }
