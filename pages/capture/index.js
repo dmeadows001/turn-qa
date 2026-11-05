@@ -42,6 +42,7 @@ export default function Capture() {
   const [properties, setProperties] = useState([]);
   const [propertyId, setPropertyId] = useState('');
   const [propsLoading, setPropsLoading] = useState(false);
+  const [unfinishedTurns, setUnfinishedTurns] = useState(null);
 
   // needs-fix
   const [fixTurns, setFixTurns] = useState([]);
@@ -182,7 +183,7 @@ export default function Capture() {
   // ------------------------------------------------------------------
   // 3) Start turn
   // ------------------------------------------------------------------
-  async function startTurn() {
+  async function requestStart(action = 'check') {
     if (!propertyId) return;
     setPropsLoading(true);
     setMsg(null);
@@ -190,17 +191,26 @@ export default function Capture() {
       const r = await fetch('/api/cleaner/start-turn', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ property_id: propertyId }),
+        body: JSON.stringify({ property_id: propertyId, action }),
       });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.error || 'start failed');
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || 'Could not start turn');
+      if (j.choice_required) {
+        setUnfinishedTurns(j.unfinished || []);
+        return;
+      }
       if (!j.turn_id) throw new Error('No turn id returned');
-      window.location.href = `/turns/${j.turn_id}/capture?from=capture`;
+      window.location.href = `/turns/${encodeURIComponent(j.turn_id)}/capture?from=capture`;
     } catch (e) {
       setMsg(e.message || 'Start failed');
     } finally {
       setPropsLoading(false);
     }
+  }
+
+  function startTurn() {
+    setUnfinishedTurns(null);
+    return requestStart('check');
   }
 
   // ------------------------------------------------------------------
@@ -332,7 +342,7 @@ export default function Capture() {
             <div style={{ position: 'relative' }}>
               <select
                 value={propertyId}
-                onChange={(e) => setPropertyId(e.target.value)}
+                onChange={(e) => { setPropertyId(e.target.value); setUnfinishedTurns(null); setMsg(null); }}
                 style={{ ...ui.input, appearance: 'none', paddingRight: 34 }}
               >
                 {properties.map((p) => (
@@ -373,6 +383,39 @@ export default function Capture() {
               </a>
             </div>
 
+            {unfinishedTurns !== null && (
+              <div style={{ marginTop: 16, border: '1px solid #475569', borderRadius: 12, padding: 12 }}>
+                <h3 style={{ marginTop: 0 }}>Unfinished cleaning found</h3>
+                <p style={{ color: '#cbd5e1', fontSize: 14 }}>
+                  This property has an unfinished cleaning under your account.
+                  Choose which cleaning to continue, or start a new one.
+                </p>
+                {unfinishedTurns.map((t) => (
+                  <div key={t.id} style={{ marginBottom: 12, display: 'grid', gap: 6 }}>
+                    <span style={{ fontSize: 13, color: '#cbd5e1' }}>
+                      Started: {t.created_at ? new Date(t.created_at).toLocaleString() : 'Unknown date'}
+                    </span>
+                    <a
+                      href={`/turns/${encodeURIComponent(t.id)}/capture?from=capture`}
+                      style={{ ...ui.btnSecondary, display: 'inline-block', textAlign: 'center' }}
+                    >
+                      Continue this cleaning
+                    </a>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  style={ui.btnPrimary}
+                  disabled={propsLoading}
+                  onClick={() => requestStart('new')}
+                >
+                  {propsLoading ? 'Starting…' : 'Start Fresh Cleaning'}
+                </button>
+                <p style={{ fontSize: 12, color: '#94a3b8' }}>
+                  Starting fresh will not delete the older unfinished cleaning. Safe cleanup will be added separately.
+                </p>
+              </div>
+            )}
             {msg && <div style={{ marginTop: 10, color: '#ef4444' }}>{msg}</div>}
           </Card>
         )}
