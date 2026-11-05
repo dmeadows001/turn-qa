@@ -12,89 +12,68 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
 
   try {
-    const { property_id, notes } = req.body || {};
+    const { property_id, notes, action = 'check' } = req.body || {};
     if (!property_id) return res.status(400).json({ error: 'property_id is required' });
+    if (!['check', 'new'].includes(action)) {
+      return res.status(400).json({ error: 'Invalid action' });
+    }
 
     const sess = readCleanerSession(req);
-    if (!sess) return res.status(401).json({ error: 'not_authenticated' });
-
-    const cleaner_id = sess.cleaner_id || sess.sub;
+    const cleaner_id = sess?.cleaner_id || sess?.sub;
     if (!cleaner_id) return res.status(401).json({ error: 'not_authenticated' });
 
-    // ensure assigned
     const { data: allowed, error: aErr } = await supabase
       .from('property_cleaners')
       .select('property_id')
       .eq('property_id', property_id)
       .eq('cleaner_id', cleaner_id)
       .maybeSingle();
-
     if (aErr) throw aErr;
     if (!allowed) return res.status(403).json({ error: 'Cleaner not assigned to this property' });
 
-    // lookup manager_id
     const { data: propRow, error: pErr } = await supabase
       .from('properties')
       .select('manager_id')
       .eq('id', property_id)
       .maybeSingle();
+    if (pErr) throw pErr;
+    const manager_id = propRow?.manager_id;
+    if (!manager_id) return res.status(403).json({ error: 'Property has no assigned manager' });
 
-if (pErr) throw pErr;
-
-const manager_id = propRow?.manager_id || null;
-
-if (!manager_id) {
-  return res.status(403).json({
-    error: 'Property has no assigned manager',
-  });
-}
-
-// Find the manager's Supabase user account.
-const { data: manager, error: mErr } = await supabase
-  .from('managers')
-  .select('user_id')
-  .eq('id', manager_id)
-  .maybeSingle();
-
-if (mErr) throw mErr;
-
-if (!manager?.user_id) {
-  return res.status(403).json({
-    error: 'Manager account not found',
-  });
-}
-
-// Check the subscription belonging to this manager.
-const { data: profile, error: sErr } = await supabase
-  .from('profiles')
-  .select('id, subscription_status, active_until, trial_ends_at')
-  .eq('id', manager.user_id)
-  .maybeSingle();
-
-if (sErr) throw sErr;
-
-if (!isActiveProfile(profile)) {
-  return res.status(402).json({
-    error: 'The property manager subscription is inactive',
-  });
-}
-
-    // ✅ IDPOTENT: return existing in-progress turn if it exists
-    const { data: existing, error: eErr } = await supabase
-      .from('turns')
-      .select('id')
-      .eq('property_id', property_id)
-      .eq('cleaner_id', cleaner_id)
-      .eq('status', 'in_progress')
-      .order('created_at', { ascending: false })
+    const { data: manager, error: mErr } = await supabase
+      .from('managers')
+      .select('user_id')
+      .eq('id', manager_id)
       .maybeSingle();
+    if (mErr) throw mErr;
+    if (!manager?.user_id) return res.status(403).json({ error: 'Manager account not found' });
 
-    if (eErr) throw eErr;
-    if (existing?.id) {
-      return res.json({ ok: true, turn_id: existing.id, reused: true });
+    const { data: profile, error: sErr } = await supabase
+      .from('profiles')
+      .select('id, subscription_status, active_until, trial_ends_at')
+      .eq('id', manager.user_id)
+      .maybeSingle();
+    if (sErr) throw sErr;
+    if (!isActiveProfile(profile)) {
+      return res.status(402).json({ error: 'The property manager subscription is inactive' });
     }
 
-    // create new turn only if none exists
+    if (action === 'check') {
+      const { data: unfinished, error: eErr } = await supabase
+        .from('turns')
+        .select('id, created_at')
+        .eq('property_id', property_id)
+        .eq('cleaner_id', cleaner_id)
+        .eq('status', 'in_progress')
+        .order('created_at', { ascending: false })
+        .limit(50);
+      if (eErr) throw eErr;
+      if (unfinished?.length) {
+        return res.status(200).json({ ok: true, choice_required: true, unfinished });
+      }
+    }
+
+    // 'new' is an explicit user choice; never silently reuse an old turn.
     const { data: turn, error: tErr } = await supabase
       .from('turns')
       .insert({
@@ -102,14 +81,12 @@ if (!isActiveProfile(profile)) {
         cleaner_id,
         manager_id,
         notes: notes || null,
-        status: 'in_progress'
+        status: 'in_progress',
       })
       .select('id')
       .single();
-
     if (tErr) throw tErr;
-
-    return res.json({ ok: true, turn_id: turn.id, reused: false });
+    return res.status(200).json({ ok: true, turn_id: turn.id, reused: false });
   } catch (e) {
     console.error('start-turn error', e);
     return res.status(500).json({ error: e.message || 'server error' });
