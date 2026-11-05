@@ -104,6 +104,31 @@ export default function Capture() {
   const [shots, setShots] = useState(null);
   // files we render per-shot; each file: {name, url (storage path), width, height, shotId, preview?, isFix?, cleanerNote?, capturedAt?}
   const [uploadsByShot, setUploadsByShot] = useState({});
+  const [deletingPaths, setDeletingPaths] = useState({});
+
+  // Tracks correction photos created in the current needs-fix cycle across refreshes.
+  // This is UI state only; the server independently enforces deletion permissions.
+  const fixDraftKey = `turnqa_fix_drafts_${turnId}`;
+  function readFixDrafts() {
+    try { return JSON.parse(window.localStorage.getItem(fixDraftKey) || '[]'); }
+    catch { return []; }
+  }
+  function addFixDraft(path) {
+    try {
+      const paths = new Set(readFixDrafts());
+      paths.add(path);
+      window.localStorage.setItem(fixDraftKey, JSON.stringify([...paths]));
+    } catch {}
+  }
+  function removeFixDraft(path) {
+    try { window.localStorage.setItem(fixDraftKey, JSON.stringify(readFixDrafts().filter(p => p !== path))); }
+    catch {}
+  }
+  function clearFixDrafts() {
+    try { window.localStorage.removeItem(fixDraftKey); } catch {}
+  }
+  const fixNotesDraftKey = `turnqa_fix_notes_${turnId}`;
+
   
   // Track background photo uploads and their progress.
   const [uploadProgressById, setUploadProgressById] = useState({});
@@ -160,6 +185,18 @@ export default function Capture() {
   // Per-new-photo cleaner notes (keyed by storage path)
   // shape: { [path]: { original: string, translated: string, isTranslating?: boolean, error?: string } }
   const [cleanerNoteByNewPath, setCleanerNoteByNewPath] = useState({});
+  useEffect(() => {
+    if (!turnId || !isFixMode) return;
+    try {
+      const notes = JSON.parse(window.localStorage.getItem(fixNotesDraftKey) || '{}');
+      if (notes && typeof notes === 'object') setCleanerNoteByNewPath(notes);
+    } catch {}
+  }, [turnId, isFixMode]);
+  useEffect(() => {
+    if (!turnId || !isFixMode) return;
+    try { window.localStorage.setItem(fixNotesDraftKey, JSON.stringify(cleanerNoteByNewPath)); } catch {}
+  }, [turnId, isFixMode, cleanerNoteByNewPath]);
+
 
   // --- AI scan state ---
   // scanStatus: 'idle' | 'running' | 'ready'
@@ -657,6 +694,7 @@ export default function Capture() {
             null;
 
           const file = {
+            isNewFixDraft: isFixRow && readFixDrafts().includes(path),
             name: path.split('/').pop() || 'photo.jpg',
             url: path,
             width: null,
@@ -676,7 +714,8 @@ export default function Capture() {
           const merged = { ...byShot };
           // Do not discard photos captured while the initial fetch was in flight.
           Object.entries(prev).forEach(([shotId, photos]) => {
-            const local = (photos || []).filter(f => !!f.uploadId);
+            const known = new Set((merged[shotId] || []).map(f => f.url));
+            const local = (photos || []).filter(f => !!f.uploadId && !known.has(f.url));
             if (local.length) merged[shotId] = [...(merged[shotId] || []), ...local];
           });
           return merged;
@@ -913,7 +952,32 @@ export default function Capture() {
 
         if (removedUploadIdsRef.current.has(uploadId)) return;
         if (!done) throw new Error(`All upload paths failed (${tried.join(', ')}).`);
-        updatePendingPhoto(shotId, uploadId, { url: finalPath });
+        updateUploadProgress(uploadId, 'registering', 99);
+        const shotIsUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(shotId));
+        const reg = await fetch('/api/register-turn-photo', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          body: JSON.stringify({
+            turnId, shotId: shotIsUuid ? shotId : '',
+            path: finalPath, isFix: isFixMode,
+            width: dims.width, height: dims.height, bytes: file.size,
+          }),
+        });
+        const regBody = await reg.json().catch(() => ({}));
+        if (!reg.ok) throw new Error(regBody.error || `Photo registration failed (${reg.status})`);
+        if (removedUploadIdsRef.current.has(uploadId)) return;
+        if (isFixMode) {
+          addFixDraft(finalPath);
+          setCleanerNoteByNewPath(prev => {
+            if (!prev[uploadId]) return prev;
+            const next = { ...prev, [finalPath]: prev[uploadId] };
+            delete next[uploadId];
+            return next;
+          });
+        }
+        updatePendingPhoto(shotId, uploadId, {
+          url: finalPath, isNewFixDraft: isFixMode, registered: true,
+        });
         updateUploadProgress(uploadId, 'uploaded', 100);
         uploadFilesRef.current.delete(uploadId);
       } catch (e) {
@@ -940,45 +1004,67 @@ export default function Capture() {
     startPhotoUpload(shotId, uploadId, file);
   }
 
-  // Allow cleaner to "retake" a photo by removing it from this shot
-  function removePhoto(shotId, fileToRemove) {
-    // Prevent an in-flight upload from updating a removed photo.
-    if (fileToRemove.uploadId) {
-      removedUploadIdsRef.current.add(fileToRemove.uploadId);
-      const xhr = activeXhrsRef.current.get(fileToRemove.uploadId);
+  // Remove initial-capture drafts; never delete correction photos or submitted originals.
+  async function removePhoto(shotId, fileToRemove) {
+    if (isFixMode && (fileToRemove.isFix || !fileToRemove.uploadId)) {
+      alert('Saved correction and original photos are protected. Add another correction photo instead.');
+      return;
+    }
+    const uploadId = fileToRemove.uploadId;
+    const path = fileToRemove.url || '';
+    const isStored = path.startsWith(`turns/${turnId}/`);
+    if (deletingPaths[path]) return;
+
+    if (uploadId && pendingUploadsRef.current.has(uploadId) && isStored) {
+      alert('Please wait until this photo finishes uploading before removing it.');
+      return;
+    }
+    if (uploadId && pendingUploadsRef.current.has(uploadId)) {
+      // Abort an unfinished transfer. Registration may race; keep the card until
+      // the transfer finishes rather than pretending a stored object was removed.
+      removedUploadIdsRef.current.add(uploadId);
+      const xhr = activeXhrsRef.current.get(uploadId);
       if (xhr) xhr.abort();
-      uploadFilesRef.current.delete(fileToRemove.uploadId);
+    }
+
+    if (isStored) {
+      setDeletingPaths(prev => ({ ...prev, [path]: true }));
+      try {
+        const response = await fetch('/api/delete-turn-photo', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          body: JSON.stringify({ turnId, path }),
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(result.error || `Delete failed (${response.status})`);
+      } catch (error) {
+        alert(`Unable to remove photo: ${error.message || error}`);
+        setDeletingPaths(prev => { const next = { ...prev }; delete next[path]; return next; });
+        return;
+      }
+      removeFixDraft(path);
+    }
+
+    if (uploadId) {
+      removedUploadIdsRef.current.add(uploadId);
+      uploadFilesRef.current.delete(uploadId);
       setUploadProgressById(prev => {
-        const next = { ...prev };
-        delete next[fileToRemove.uploadId];
-        return next;
+        const next = { ...prev }; delete next[uploadId]; return next;
       });
     }
-    
-    try {
-      if (fileToRemove.preview) {
-        URL.revokeObjectURL(fileToRemove.preview);
-      }
-    } catch {}
-
-    // Remove from uploadsByShot so AI Scan + submit won't see it
-    setUploadsByShot(prev => {
+    try { if (fileToRemove.preview) URL.revokeObjectURL(fileToRemove.preview); } catch {}
+    setUploadsByShot(prev => ({
+      ...prev,
+      [shotId]: (prev[shotId] || []).filter(f =>
+        uploadId ? f.uploadId !== uploadId : f.url !== path),
+    }));
+    setCleanerNoteByNewPath(prev => {
       const next = { ...prev };
-      next[shotId] = (next[shotId] || []).filter(f =>
-        fileToRemove.uploadId
-          ? f.uploadId !== fileToRemove.uploadId
-          : f.url !== fileToRemove.url
-      );
+      delete next[uploadId || path];
       return next;
     });
-
-    // Also clear any per-photo cleaner note for that path
-    setCleanerNoteByNewPath(prev => {
-      const noteKey = fileToRemove.uploadId || fileToRemove.url;
-      if (!prev[noteKey]) return prev;
-      const { [noteKey]: _omit, ...rest } = prev;
-      return rest;
-    });
+    setDeletingPaths(prev => { const next = { ...prev }; delete next[path]; return next; });
+    setScanStatus('idle');
   }
 
   // -------- AI Scan: PRECHECK + VISION + mark scan-done --------
@@ -1244,13 +1330,13 @@ export default function Capture() {
     }
 
     // ✅ NEW RULE: must include at least one NEW FIX photo
-    // New photos are those with preview present, and FIX photos are those with isFix true
+    // New correction photos can be restored from the server after a refresh
     const newFixFiles = Object.values(uploadsByShot)
       .flat()
-      .filter(f => !!f.preview && !!f.isFix);
+      .filter(f => !!f.isFix && (!!f.preview || !!f.isNewFixDraft));
 
     const newPhotos = newFixFiles.map(f => {
-      const noteObj = cleanerNoteByNewPath[f.uploadId || f.url] || {};
+      const noteObj = cleanerNoteByNewPath[f.url] || cleanerNoteByNewPath[f.uploadId] || {};
       const no = String(noteObj.original || '').trim();     // Spanish
       const nt = String(noteObj.translated || '').trim();   // English
 
@@ -1308,6 +1394,8 @@ export default function Capture() {
         return;
       }
 
+      clearFixDrafts();
+      try { window.localStorage.removeItem(fixNotesDraftKey); } catch {}
       alert('Fixes submitted for review ✅');
       window.location.href = '/capture';
     } finally {
@@ -1336,7 +1424,7 @@ export default function Capture() {
 
   const hasNewFixPhoto = Object.values(uploadsByShot || {})
     .flat()
-    .some(f => !!f.preview && !!f.isFix && getPhotoUploadStatus(f).status === 'uploaded');
+    .some(f => !!f.isFix && (!!f.preview || !!f.isNewFixDraft) && getPhotoUploadStatus(f).status === 'uploaded');
 
   return (
     <ChromeDark title="Start Taking Photos">
@@ -1400,7 +1488,7 @@ export default function Capture() {
                     <div style={{ fontWeight: 800, marginBottom: 6 }}>You’re in “Needs Fix” mode</div>
                     <ul style={{ margin: 0, paddingLeft: 18 }}>
                       <li>Look for photos marked <b style={{ color: '#fcd34d' }}>Needs fix</b> (your manager left notes).</li>
-                      <li>Tap <b>Add photo</b> and upload a new “FIX” photo for the issue you corrected.</li>
+                      <li>Tap <b>Add Correction Photo</b> and upload a new “FIX” photo for the issue you corrected.</li>
                       <li>Optional: add a note to the manager (Spanish → Translate to English).</li>
                       <li>When you’re done, tap <b>Submit Fixes</b> to send the updates back for review.</li>
                     </ul>
@@ -1675,9 +1763,9 @@ export default function Capture() {
                   <ThemedButton
                     kind="secondary"
                     onClick={() => openPicker(s.shot_id)}
-                    ariaLabel={`Add photo for ${s.label}`}
+                    ariaLabel={`${isFixMode ? 'Add correction photo' : 'Add photo'} for ${s.label}`}
                   >
-                    ➕ Add photo
+                    {isFixMode ? '➕ Add Correction Photo' : '➕ Add photo'}
                   </ThemedButton>
                 </div>
 
@@ -1693,7 +1781,7 @@ export default function Capture() {
                       fixNotes?.byPath?.[f.url] ||
                       null;
 
-                    const noteKey = f.uploadId || f.url;
+                    const noteKey = f.url?.startsWith('turns/') ? f.url : (f.uploadId || f.url);
                     const perPhoto = cleanerNoteByNewPath[noteKey] || {};
                     const perPhotoOriginal = String(perPhoto.original || '');
                     const perPhotoTranslated = String(perPhoto.translated || '');
@@ -1872,13 +1960,16 @@ export default function Capture() {
                                   👁️ View
                                 </ThemedButton>
                             
-                                <ThemedButton
-                                  kind="secondary"
-                                  onClick={() => removePhoto(s.shot_id, f)}
-                                  ariaLabel={`Retake ${f.name}`}
-                                >
-                                  🔁 Retake
-                                </ThemedButton>
+                                {(!isFixMode || (f.isFix && !!f.uploadId && !f.registered && uploadStatus !== 'uploaded')) && (
+                                  <ThemedButton
+                                    kind="secondary"
+                                    disabled={!!deletingPaths[f.url]}
+                                    onClick={() => removePhoto(s.shot_id, f)}
+                                    ariaLabel={`Remove draft photo ${f.name}`}
+                                  >
+                                    {deletingPaths[f.url] ? 'Removing…' : '🗑 Remove Draft'}
+                                  </ThemedButton>
+                                )}
                               </div>
                             </div>
 
@@ -1895,7 +1986,7 @@ export default function Capture() {
                         )}
 
                         {/* Cleaner per-photo bilingual note editor ONLY for newly added fixes (with preview) */}
-                        {f.preview && f.isFix && (
+                        {(f.preview || f.isNewFixDraft) && f.isFix && (
                           <div style={{ marginTop:8 }}>
                             <div style={{ fontSize:12, color:'#9ca3af', marginBottom:4, fontWeight:700 }}>
                               Note to manager (Spanish → translate to English)
