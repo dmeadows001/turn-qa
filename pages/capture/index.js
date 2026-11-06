@@ -341,6 +341,9 @@ export default function Capture() {
                       <div style={{ fontSize: 13, color: '#94a3b8', lineHeight: 1.35 }}>
                         Turn <code>{t.id.slice(0, 8)}</code> &middot; status: {t.status}
                       </div>
+                      <div style={{ fontSize: 13, color: '#94a3b8', marginTop: 5 }}>
+                        Started: {t.created_at ? new Date(t.created_at).toLocaleString() : 'Date unavailable'}
+                      </div>
                     </div>
                     <a
                       href={`/turns/${t.id}/capture?tab=needs-fix`}
@@ -348,14 +351,7 @@ export default function Capture() {
                     >
                       Resume
                     </a>
-                    <button
-                      type="button"
-                      style={{ ...ui.btnSecondary, borderColor: '#b45353', color: '#fecaca' }}
-                      disabled={propsLoading || !!discardingId}
-                      onClick={() => discardTurn(t)}
-                    >
-                      {discardingId === t.id ? 'Discarding…' : 'Discard this cleaning'}
-                    </button>
+
                   </div>
                 ))}
               </div>
