@@ -43,6 +43,7 @@ export default function Capture() {
   const [propertyId, setPropertyId] = useState('');
   const [propsLoading, setPropsLoading] = useState(false);
   const [unfinishedTurns, setUnfinishedTurns] = useState(null);
+  const [discardingId, setDiscardingId] = useState(null);
 
   // needs-fix
   const [fixTurns, setFixTurns] = useState([]);
@@ -208,6 +209,27 @@ export default function Capture() {
     }
   }
 
+  async function discardTurn(turn) {
+    if (!window.confirm(`Permanently discard the unfinished cleaning started ${new Date(turn.created_at).toLocaleString()}? Its uploaded photos will be deleted. This cannot be undone.`)) return;
+    setDiscardingId(turn.id);
+    setMsg(null);
+    try {
+      const r = await fetch('/api/cleaner/discard-turn', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ turn_id: turn.id }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || 'Discard failed');
+      setUnfinishedTurns(prev => (prev || []).filter(t => t.id !== turn.id));
+      setMsg('Unfinished cleaning discarded. You can now start a new cleaning.');
+    } catch (e) {
+      setMsg(e.message || 'Discard failed');
+    } finally {
+      setDiscardingId(null);
+    }
+  }
+
   function startTurn() {
     setUnfinishedTurns(null);
     return requestStart('check');
@@ -326,6 +348,14 @@ export default function Capture() {
                     >
                       Resume
                     </a>
+                    <button
+                      type="button"
+                      style={{ ...ui.btnSecondary, borderColor: '#b45353', color: '#fecaca' }}
+                      disabled={propsLoading || !!discardingId}
+                      onClick={() => discardTurn(t)}
+                    >
+                      {discardingId === t.id ? 'Discarding…' : 'Discard this cleaning'}
+                    </button>
                   </div>
                 ))}
               </div>
@@ -401,6 +431,14 @@ export default function Capture() {
                     >
                       Continue this cleaning
                     </a>
+                    <button
+                      type="button"
+                      style={{ ...ui.btnSecondary, borderColor: '#b45353', color: '#fecaca' }}
+                      disabled={propsLoading || !!discardingId}
+                      onClick={() => discardTurn(t)}
+                    >
+                      {discardingId === t.id ? 'Discarding…' : 'Discard this cleaning'}
+                    </button>
                   </div>
                 ))}
                 <button
@@ -412,7 +450,7 @@ export default function Capture() {
                   {propsLoading ? 'Starting…' : 'Start Fresh Cleaning'}
                 </button>
                 <p style={{ fontSize: 12, color: '#94a3b8' }}>
-                  Starting fresh will not delete the older unfinished cleaning. Safe cleanup will be added separately.
+                  Starting fresh preserves older drafts. Use Discard this cleaning to remove an unwanted unfinished turn.
                 </p>
               </div>
             )}
