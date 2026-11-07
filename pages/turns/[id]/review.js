@@ -476,8 +476,8 @@ const PhotoCard = memo(
             {p.path}
           </div>
 
-          {/* OPTION A: Only show note + translation UI when checkbox is checked */}
-          {isManagerMode && selected && !isFix && (
+          {/* Show note + translation UI for selected original OR correction photos */}
+          {isManagerMode && selected && (
             <div style={{ marginTop: 10 }}>
               <div
                 style={{
@@ -993,7 +993,7 @@ export default function Review() {
 
         const note_to_cleaner = (translated || original || '').trim();
 
-        if (selected || original.length > 0 || translated.length > 0) {
+        if (selected) {
           payloadNotes.push({
             photo_id: p.id || null,
             path: p.path || '',
