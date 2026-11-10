@@ -492,7 +492,7 @@ export default async function handler(req, res) {
     // This avoids leaving the cleaner with a partial active round.
     const { data: priorFindings, error: priorErr } = await supa
       .from('qa_findings')
-      .select('id, review_round, is_active')
+      .select('id, photo_id, evidence_url, review_round, is_active, correction_task_id')
       .eq('turn_id', turnId);
     if (priorErr) throw priorErr;
 
@@ -500,26 +500,84 @@ export default async function handler(req, res) {
       (max, row) => Math.max(max, Number(row.review_round) || 1), 0
     );
     const reviewRound = previousRound + 1;
-    const previousActiveIds = (priorFindings || []).filter(r => r.is_active).map(r => r.id);
+    const previousActive = (priorFindings || []).filter(r => r.is_active);
+    const previousActiveIds = previousActive.map(r => r.id);
+
+    // Resolve selected photos to a stable task. A prior finding's own ID is
+    // the fallback task ID for records created before the schema migration.
+    // Only the latest active findings can be carried into a new round.
+    const { data: selectedPhotos, error: selectedErr } = await supa
+      .from('turn_photos')
+      .select('id, shot_id, path, storage_path, is_fix, correction_task_id')
+      .eq('turn_id', turnId);
+    if (selectedErr) throw selectedErr;
+
+    // Look up the prior active finding's photo and checklist item. This is
+    // needed only for old correction photos that predate correction_task_id.
+    const activePhotoIds = previousActive.map(f => f.photo_id).filter(Boolean);
+    let activePhotos = [];
+    if (activePhotoIds.length) {
+      const { data, error } = await supa.from('turn_photos')
+        .select('id, shot_id').eq('turn_id', turnId).in('id', activePhotoIds);
+      if (error) throw error;
+      activePhotos = data || [];
+    }
+    const selectedById = new Map((selectedPhotos || []).map(p => [String(p.id), p]));
+    const selectedByPath = new Map();
+    for (const p of selectedPhotos || []) {
+      if (p.path) selectedByPath.set(p.path, p);
+      if (p.storage_path) selectedByPath.set(p.storage_path, p);
+    }
+    const activeShotById = new Map(activePhotos.map(p => [String(p.id), p.shot_id]));
+
+    function taskForSelection(n) {
+      const photo = selectedById.get(String(n.photo_id || '')) || selectedByPath.get(n.path);
+      if (!photo) throw new Error('Selected photo could not be verified; refresh and retry');
+      const directTask = photo.correction_task_id || null;
+      if (directTask) return directTask;
+
+      // If a manager re-rejects the exact same photo, retain its task.
+      const exact = previousActive.filter(f =>
+        (f.photo_id && String(f.photo_id) === String(photo.id)) ||
+        (f.evidence_url && (f.evidence_url === photo.path || f.evidence_url === photo.storage_path))
+      );
+      if (exact.length === 1) return exact[0].correction_task_id || exact[0].id;
+
+      // Legacy correction uploads lack a task ID. Match by checklist item
+      // ONLY when exactly one active task occupies that item. Never guess
+      // when multiple issues share a shot.
+      if (photo.is_fix && photo.shot_id) {
+        const candidates = previousActive.filter(f => activeShotById.get(String(f.photo_id)) === photo.shot_id);
+        if (candidates.length === 1) return candidates[0].correction_task_id || candidates[0].id;
+        if (candidates.length > 1) throw new Error(
+          'This correction could match multiple outstanding issues in the same checklist item. Link it to a task before rejecting it again.'
+        );
+      }
+      return null; // First rejection: create a new task below.
+    }
 
     const findingRowsBase = normalizedNotes
       .filter(n => (n.path || '').trim().length > 0)
-      .map(n => ({
-        id: mkId(),
-        turn_id: turnId,
-        photo_id: n.photo_id || null,
-        evidence_url: String(n.path || '').trim(),
-        note: (n.norm?.legacy_note || '').trim() || null,
-        note_original: n.norm?.note_original ?? null,
-        note_original_lang: n.norm?.note_original_lang ?? null,
-        note_translated: n.norm?.note_translated ?? null,
-        note_translated_lang: n.norm?.note_translated_lang ?? null,
-        note_sent: n.norm?.note_sent ?? null,
-        note_sent_lang: n.norm?.note_sent_lang ?? null,
-        created_at: ts,
-        review_round: reviewRound,
-        is_active: false,
-      }));
+      .map(n => {
+        const id = mkId();
+        return {
+          id,
+          turn_id: turnId,
+          photo_id: n.photo_id || null,
+          evidence_url: String(n.path || '').trim(),
+          correction_task_id: taskForSelection(n) || id,
+          note: (n.norm?.legacy_note || '').trim() || null,
+          note_original: n.norm?.note_original ?? null,
+          note_original_lang: n.norm?.note_original_lang ?? null,
+          note_translated: n.norm?.note_translated ?? null,
+          note_translated_lang: n.norm?.note_translated_lang ?? null,
+          note_sent: n.norm?.note_sent ?? null,
+          note_sent_lang: n.norm?.note_sent_lang ?? null,
+          created_at: ts,
+          review_round: reviewRound,
+          is_active: false,
+        };
+      });
 
     const newIds = findingRowsBase.map(r => r.id);
     let findingsInserted = 0;
