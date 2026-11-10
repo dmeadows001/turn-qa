@@ -127,6 +127,21 @@ export default function Capture() {
   function clearFixDrafts() {
     try { window.localStorage.removeItem(fixDraftKey); } catch {}
   }
+  const fixTaskDraftKey = `turnqa_fix_task_links_${turnId}`;
+  function readFixTaskLinks() {
+    try { return JSON.parse(window.localStorage.getItem(fixTaskDraftKey) || '{}') || {}; }
+    catch { return {}; }
+  }
+  function saveFixTaskLink(path, taskId) {
+    if (!path || !taskId) return;
+    try {
+      window.localStorage.setItem(fixTaskDraftKey, JSON.stringify({ ...readFixTaskLinks(), [path]: taskId }));
+    } catch {}
+  }
+  function clearFixTaskLinks() {
+    try { window.localStorage.removeItem(fixTaskDraftKey); } catch {}
+  }
+
   const fixNotesDraftKey = `turnqa_fix_notes_${turnId}`;
 
   
@@ -174,6 +189,11 @@ export default function Capture() {
 
   // Needs-fix (manager) notes to show to cleaner, by storage path
   const [fixNotes, setFixNotes] = useState({ byPath: {}, overall: '', count: 0 });
+  const [activeTasks, setActiveTasks] = useState([]);
+  const [tasksLoading, setTasksLoading] = useState(true);
+  const [tasksError, setTasksError] = useState('');
+  const [pickerTaskId, setPickerTaskId] = useState(null);
+  const uploadTaskRef = useRef(new Map());
   const [hideFixBanner, setHideFixBanner] = useState(false);
 
   // Cleaner overall reply (optional) — bilingual (ES original + EN translated)
@@ -545,7 +565,8 @@ export default function Capture() {
   }
 
   // ✅ Camera-only: open camera immediately (no bottom-sheet choice)
-  function openPicker(shotId) {
+  function openPicker(shotId, taskId = null) {
+    setPickerTaskId(taskId);
     setPickerShot(shotId);
     const el = cameraInputRef.current;
     if (el) el.click();
@@ -555,11 +576,12 @@ export default function Capture() {
   function handleGlobalFileChange(e) {
     const files = e.target.files;
     if (files && files.length && pickerShot) {
-      addFiles(pickerShot, files);
+      addFiles(pickerShot, files, isFixMode ? pickerTaskId : null);
     }
     // reset input so same file can be re-selected
     try { e.target.value = ''; } catch {}
     setPickerShot(null);
+    setPickerTaskId(null);
   }
 
   function openGettingStarted() {
@@ -695,6 +717,7 @@ export default function Capture() {
 
           const file = {
             isNewFixDraft: isFixRow && readFixDrafts().includes(path),
+            correctionTaskId: it.correction_task_id || readFixTaskLinks()[path] || null,
             name: path.split('/').pop() || 'photo.jpg',
             url: path,
             width: null,
@@ -823,6 +846,35 @@ export default function Capture() {
     })();
   }, [turnId]);
 
+  // Active findings are the ONLY source of outstanding correction tasks.
+  // The older /notes endpoint may include historical notes and must not drive this UI.
+  useEffect(() => {
+    if (!turnId || !isFixMode) return;
+    let cancelled = false;
+    setTasksLoading(true);
+    setTasksError('');
+    (async () => {
+      try {
+        const response = await fetch(`/api/turns/${encodeURIComponent(turnId)}/findings`);
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error || 'Could not load outstanding corrections');
+        const rows = Array.isArray(payload.findings) ? payload.findings : [];
+        const tasks = rows.map((r, index) => ({
+          ...r,
+          correction_task_id: r.correction_task_id || r.id || null,
+          key: r.correction_task_id || r.id || `legacy-${index}`,
+          managerText: r.note_sent || r.note_translated || r.note_original || r.note || '',
+        }));
+        if (!cancelled) setActiveTasks(tasks);
+      } catch (error) {
+        if (!cancelled) setTasksError(error.message || 'Unable to load correction tasks');
+      } finally {
+        if (!cancelled) setTasksLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [turnId, isFixMode]);
+
   // Show Getting Started modal (only if user hasn't dismissed it before)
   useEffect(() => {
     if (!turnId) return;
@@ -837,11 +889,12 @@ export default function Capture() {
   // -------- Add files (quality + upload to Storage) --------
 
   // Each photo is shown immediately; uploads run independently in the background.
-  async function addFiles(shotId, fileList) {
+  async function addFiles(shotId, fileList, taskId = null) {
     const files = Array.from(fileList || []);
     for (const f of files) {
       // Create the local preview before any network request.
       const uploadId = createUploadId();
+      if (taskId) uploadTaskRef.current.set(uploadId, taskId);
       const preview = URL.createObjectURL(f);
       const capturedAt = new Date().toISOString();
       const localPath = `pending:${uploadId}`;
@@ -852,6 +905,7 @@ export default function Capture() {
       addPendingPhoto(shotId, {
         uploadId, name: f.name, shotId, url: localPath,
         width: null, height: null, preview, isFix: isFixMode, capturedAt,
+        correctionTaskId: taskId,
       });
       updateUploadProgress(uploadId, 'uploading', 0);
       uploadFilesRef.current.set(uploadId, f);
@@ -968,6 +1022,7 @@ export default function Capture() {
         if (removedUploadIdsRef.current.has(uploadId)) return;
         if (isFixMode) {
           addFixDraft(finalPath);
+          saveFixTaskLink(finalPath, uploadTaskRef.current.get(uploadId));
           setCleanerNoteByNewPath(prev => {
             if (!prev[uploadId]) return prev;
             const next = { ...prev, [finalPath]: prev[uploadId] };
@@ -977,9 +1032,11 @@ export default function Capture() {
         }
         updatePendingPhoto(shotId, uploadId, {
           url: finalPath, isNewFixDraft: isFixMode, registered: true,
+          correctionTaskId: uploadTaskRef.current.get(uploadId) || null,
         });
         updateUploadProgress(uploadId, 'uploaded', 100);
         uploadFilesRef.current.delete(uploadId);
+        uploadTaskRef.current.delete(uploadId);
       } catch (e) {
         if (!removedUploadIdsRef.current.has(uploadId)) {
           console.warn('[capture addFiles] upload error:', e?.message || e);
@@ -1329,31 +1386,41 @@ export default function Capture() {
       return;
     }
 
-    // ✅ NEW RULE: must include at least one NEW FIX photo
-    // New correction photos can be restored from the server after a refresh
-    const newFixFiles = Object.values(uploadsByShot)
-      .flat()
-      .filter(f => !!f.isFix && (!!f.preview || !!f.isNewFixDraft));
-
+    if (tasksLoading || tasksError || !activeTasks.length) {
+      alert(tasksError || 'Outstanding correction tasks are not ready. Refresh and try again.');
+      return;
+    }
+    const allFiles = Object.values(uploadsByShot).flat();
+    const newFixFiles = allFiles.filter(f =>
+      !!f.isFix && (!!f.preview || !!f.isNewFixDraft) &&
+      getPhotoUploadStatus(f).status === 'uploaded'
+    );
+    const validTaskIds = new Set(activeTasks.map(t => t.correction_task_id).filter(Boolean));
     const newPhotos = newFixFiles.map(f => {
       const noteObj = cleanerNoteByNewPath[f.url] || cleanerNoteByNewPath[f.uploadId] || {};
-      const no = String(noteObj.original || '').trim();     // Spanish
-      const nt = String(noteObj.translated || '').trim();   // English
-
+      const no = String(noteObj.original || '').trim();
+      const nt = String(noteObj.translated || '').trim();
+      const taskId = f.correctionTaskId || (validTaskIds.size === 1 ? [...validTaskIds][0] : null);
       return {
         url: f.url,
         shotId: f.shotId,
-
-        // manager-facing (English preferred)
-        note: (nt || no || '').trim() || null,
-
-        // bilingual fields for history (API stores into turn_photos new columns)
+        correction_task_id: taskId,
+        note: nt || no || null,
         note_original: no || null,
         note_translated: nt || null,
         note_original_lang: no ? 'es' : null,
         note_translated_lang: nt ? 'en' : null,
       };
     });
+    if (newPhotos.some(p => !p.correction_task_id || !validTaskIds.has(p.correction_task_id))) {
+      alert('A correction photo is not linked to an active task. Please refresh and retake that photo.');
+      return;
+    }
+    const submittedIds = new Set(newPhotos.map(p => p.correction_task_id));
+    if (validTaskIds.size !== submittedIds.size) {
+      alert('Please upload at least one correction photo for EACH outstanding task.');
+      return;
+    }
 
     const ro = (replyOriginal || '').trim();      // Spanish original
     const rt = (replyTranslated || '').trim();    // English translated (editable)
@@ -1395,6 +1462,7 @@ export default function Capture() {
       }
 
       clearFixDrafts();
+      clearFixTaskLinks();
       try { window.localStorage.removeItem(fixNotesDraftKey); } catch {}
       alert('Fixes submitted for review ✅');
       window.location.href = '/capture';
@@ -1419,12 +1487,20 @@ export default function Capture() {
     );
   }
 
-  const hasFixes = (fixNotes?.count || 0) > 0;
+  const hasFixes = isFixMode ? activeTasks.length > 0 : (fixNotes?.count || 0) > 0;
   const renderShots = Array.isArray(shots) ? shots : [];
 
   const hasNewFixPhoto = Object.values(uploadsByShot || {})
     .flat()
     .some(f => !!f.isFix && (!!f.preview || !!f.isNewFixDraft) && getPhotoUploadStatus(f).status === 'uploaded');
+  const taskPhotoCounts = Object.values(uploadsByShot || {}).flat()
+    .filter(f => f.isFix && (f.preview || f.isNewFixDraft) && getPhotoUploadStatus(f).status === 'uploaded')
+    .reduce((acc, f) => {
+      const id = f.correctionTaskId || (activeTasks.length === 1 ? activeTasks[0].correction_task_id : null);
+      if (id) acc[id] = (acc[id] || 0) + 1;
+      return acc;
+    }, {});
+  const allTasksHavePhotos = activeTasks.length > 0 && activeTasks.every(t => taskPhotoCounts[t.correction_task_id] > 0);
 
   return (
     <ChromeDark title="Start Taking Photos">
@@ -1566,7 +1642,7 @@ export default function Capture() {
           </div>
 
           {/* Needs-fix banner (if any) */}
-          {hasFixes && !hideFixBanner && (
+          {!isFixMode && hasFixes && !hideFixBanner && (
             <div
               style={{
                 marginTop: 10, padding: '10px 12px',
@@ -1604,8 +1680,79 @@ export default function Capture() {
             </div>
           )}
 
-          {/* Shots */}
-          {renderShots.map(s => {
+          {/* Focused correction tasks: never render historical photo sections here. */}
+          {isFixMode && (
+            <div style={{ marginTop: 16 }}>
+              <h3 style={{ marginBottom: 8 }}>Outstanding corrections ({activeTasks.length})</h3>
+              {tasksLoading && <p>Loading manager feedback…</p>}
+              {tasksError && <p style={{ color: '#fca5a5' }}>{tasksError}</p>}
+              {!tasksLoading && !tasksError && !activeTasks.length &&
+                <p>No active corrections were found. Please contact your manager before submitting.</p>}
+              {activeTasks.map((task, index) => {
+                const source = Object.values(uploadsByShot).flat().find(f =>
+                  (task.photo_id && f.photoId === task.photo_id) || f.url === task.path
+                );
+                const shot = renderShots.find(s => s.shot_id === source?.shotId) ||
+                  renderShots.find(s => String(s.area_key || '').toLowerCase() === String(task.area_key || '').toLowerCase());
+                const shotId = shot?.shot_id || source?.shotId || '__extras__';
+                const photos = Object.values(uploadsByShot).flat().filter(f =>
+                  f.isFix && (f.preview || f.isNewFixDraft) &&
+                  (f.correctionTaskId === task.correction_task_id ||
+                    (activeTasks.length === 1 && !f.correctionTaskId))
+                );
+                if (task.path && !thumbByPath[task.path]) ensureThumb(task.path);
+                return (
+                  <div key={task.key} style={{ padding: 14, marginBottom: 14, border: '1px solid #d97706', borderRadius: 12, background: '#171b25' }}>
+                    <div style={{ color: '#fde68a', fontWeight: 800, marginBottom: 8 }}>
+                      Correction {index + 1} — {shot?.label || task.label || 'Photo correction'}
+                    </div>
+                    <div style={{ whiteSpace: 'pre-wrap', marginBottom: 12, color: '#fef3c7' }}>
+                      {task.managerText || 'Manager requested a correction.'}
+                    </div>
+                    {task.path && (
+                      <div style={{ marginBottom: 12 }}>
+                        <div style={{ fontSize: 12, marginBottom: 5 }}>Photo flagged by manager</div>
+                        {thumbByPath[task.path] && <img src={thumbByPath[task.path]} alt="Photo needing correction" style={{ width: 180, maxWidth: '100%', borderRadius: 8 }} />}
+                        <div><ThemedButton kind="secondary" onClick={() => openSignedPath(task.path)}>View flagged photo</ThemedButton></div>
+                      </div>
+                    )}
+                    <ThemedButton kind="secondary" onClick={() => openPicker(shotId, task.correction_task_id)}
+                      disabled={!task.correction_task_id}>
+                      ➕ Add Correction Photo
+                    </ThemedButton>
+                    {!task.correction_task_id && <p style={{ color: '#fca5a5' }}>This task has no ID. Ask your manager to refresh the correction request.</p>}
+                    {photos.map(f => {
+                      const noteKey = f.url?.startsWith('turns/') ? f.url : (f.uploadId || f.url);
+                      const note = cleanerNoteByNewPath[noteKey] || {};
+                      const upload = getPhotoUploadStatus(f);
+                      if (!f.preview && !thumbByPath[f.url] && f.url?.startsWith('turns/')) ensureThumb(f.url);
+                      return (
+                        <div key={f.uploadId || f.url} style={{ marginTop: 12, padding: 10, border: '1px solid #475569', borderRadius: 10 }}>
+                          {(f.preview || thumbByPath[f.url]) && <img src={f.preview || thumbByPath[f.url]} alt="Correction awaiting review" style={{ width: 160, maxWidth: '100%', borderRadius: 8 }} />}
+                          <div style={{ fontSize: 12, marginTop: 5 }}>Correction uploaded — awaiting manager review</div>
+                          <div style={{ fontSize: 12 }}>{upload.status === 'uploaded' ? '✓ Uploaded' : upload.status === 'failed' ? '⚠ Upload failed' : `Uploading ${upload.percent}%`}</div>
+                          {upload.status === 'failed' && f.uploadId && <ThemedButton kind="secondary" onClick={() => retryPhotoUpload(shotId, f)}>Retry upload</ThemedButton>}
+                          <div style={{ fontSize: 12, marginTop: 8 }}>Note to manager (Spanish)</div>
+                          <textarea rows={2} value={note.original || ''} onChange={e => setCleanerNoteByNewPath(prev => ({ ...prev, [noteKey]: { ...(prev[noteKey] || {}), original: e.target.value } }))}
+                            style={{ ...ui.input, width: '100%', background: '#0b1220' }} />
+                          <ThemedButton kind="secondary" onClick={() => translatePhotoNoteToEnglish(noteKey)} loading={!!note.isTranslating}>🌐 Translate to English</ThemedButton>
+                          {note.error && <div style={{ color: '#fca5a5' }}>{note.error}</div>}
+                          <div style={{ fontSize: 12, marginTop: 8 }}>English (editable)</div>
+                          <textarea rows={2} value={note.translated || ''} onChange={e => setCleanerNoteByNewPath(prev => ({ ...prev, [noteKey]: { ...(prev[noteKey] || {}), translated: e.target.value } }))}
+                            style={{ ...ui.input, width: '100%', background: '#0b1220' }} />
+                        </div>
+                      );
+                    })}
+                    <div style={{ marginTop: 8, color: taskPhotoCounts[task.correction_task_id] ? '#93c5fd' : '#fbbf24', fontSize: 12 }}>
+                      {taskPhotoCounts[task.correction_task_id] ? `${taskPhotoCounts[task.correction_task_id]} correction photo(s) ready` : 'Correction photo required'}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {/* Shots: only shown during initial capture. */}
+          {!isFixMode && renderShots.map(s => {
            const files = uploadsByShot[s.shot_id] || [];
             const required = getMinCount(s);
             
@@ -2120,14 +2267,14 @@ export default function Capture() {
                   kind="secondary"
                   ariaLabel="Submit Fixes"
                   full
-                  disabled={!hasNewFixPhoto}
+                  disabled={!hasNewFixPhoto || !allTasksHavePhotos || tasksLoading || !!tasksError}
                 >
                   🔧 Submit Fixes
                 </ThemedButton>
 
-                {!hasNewFixPhoto && (
+                {!allTasksHavePhotos && (
                   <div style={{ fontSize: 12, color: '#f59e0b', marginTop: 6 }}>
-                    Add at least one NEW FIX photo to enable Submit Fixes.
+                    Add at least one correction photo for each outstanding task to enable Submit Fixes.
                   </div>
                 )}
 
