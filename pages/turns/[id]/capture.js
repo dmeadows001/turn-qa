@@ -1530,7 +1530,7 @@ export default function Capture() {
   return (
     <ChromeDark title="Start Taking Photos">
       <div style={{ padding: '8px 16px 12px', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12 }}>
-        <a href="/turns" style={{ color: '#93c5fd', fontWeight: 700, textDecoration: 'underline' }}>← Back to My Turns</a>
+        <a href="/cleaner/turns" style={{ color: '#93c5fd', fontWeight: 700, textDecoration: 'underline' }}>← Back to My Turns</a>
         <span style={{ color: '#cbd5e1', fontSize: 13 }}>
           {templateRules?.property ? `Property: ${templateRules.property} · ` : ''}
           {isFixMode ? 'Correction review' : 'Photo capture'}
