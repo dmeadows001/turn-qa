@@ -418,6 +418,31 @@ export default function Capture() {
     }
   }
 
+  // Mobile-safe flagged-photo viewer: never open an empty browser tab.
+  const [flaggedViewer, setFlaggedViewer] = useState({
+    open: false, path: '', url: '', loading: false, error: ''
+  });
+  async function viewFlaggedPhoto(path) {
+    if (!path) {
+      setFlaggedViewer({ open: true, path: '', url: '', loading: false, error: 'No photo path was supplied by the manager.' });
+      return;
+    }
+    setFlaggedViewer({ open: true, path, url: '', loading: true, error: '' });
+    try {
+      const response = await fetch('/api/sign-photo', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ path, expires: 600 })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || data.message || `Photo access failed (HTTP ${response.status})`);
+      if (!data.url) throw new Error('The photo service did not return a signed URL.');
+      setFlaggedViewer({ open: true, path, url: data.url, loading: false, error: '' });
+    } catch (error) {
+      setFlaggedViewer({ open: true, path, url: '', loading: false, error: error.message || 'Unable to load photo.' });
+    }
+  }
+
   // Lightbox helpers for reference photos
   async function openRefLightbox(paths, startIndex = 0) {
     const list = Array.isArray(paths) ? paths.filter(Boolean) : [];
@@ -1504,6 +1529,14 @@ export default function Capture() {
 
   return (
     <ChromeDark title="Start Taking Photos">
+      <div style={{ padding: '8px 16px 12px', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12 }}>
+        <a href="/turns" style={{ color: '#93c5fd', fontWeight: 700, textDecoration: 'underline' }}>← Back to My Turns</a>
+        <span style={{ color: '#cbd5e1', fontSize: 13 }}>
+          {templateRules?.property ? `Property: ${templateRules.property} · ` : ''}
+          {isFixMode ? 'Correction review' : 'Photo capture'}
+          {turnId ? ` · Turn ${turnId.slice(0, 8)}` : ''}
+        </span>
+      </div>
       <section style={ui.sectionGrid}>
         <div style={ui.card}>
           {/* Getting Started modal (Cleaner) */}
@@ -1700,7 +1733,7 @@ export default function Capture() {
                   (f.correctionTaskId === task.correction_task_id ||
                     (activeTasks.length === 1 && !f.correctionTaskId))
                 );
-                if (task.path && !thumbByPath[task.path]) ensureThumb(task.path);
+                // Flagged photos load on demand, so an unavailable thumbnail cannot silently fail.
                 return (
                   <div key={task.key} style={{ padding: 14, marginBottom: 14, border: '1px solid #d97706', borderRadius: 12, background: '#171b25' }}>
                     <div style={{ color: '#fde68a', fontWeight: 800, marginBottom: 8 }}>
@@ -1712,8 +1745,8 @@ export default function Capture() {
                     {task.path && (
                       <div style={{ marginBottom: 12 }}>
                         <div style={{ fontSize: 12, marginBottom: 5 }}>Photo flagged by manager</div>
-                        {thumbByPath[task.path] && <img src={thumbByPath[task.path]} alt="Photo needing correction" style={{ width: 180, maxWidth: '100%', borderRadius: 8 }} />}
-                        <div><ThemedButton kind="secondary" onClick={() => openSignedPath(task.path)}>View flagged photo</ThemedButton></div>
+                        {thumbByPath[task.path] && <img src={thumbByPath[task.path]} alt="Photo needing correction" style={{ width: 180, maxWidth: '100%', borderRadius: 8 }} onError={() => setThumbByPath(prev => { const next = { ...prev }; delete next[task.path]; return next; })} />}
+                        <div><ThemedButton kind="secondary" onClick={() => viewFlaggedPhoto(task.path)}>View flagged photo</ThemedButton></div>
                       </div>
                     )}
                     <ThemedButton kind="secondary" onClick={() => openPicker(shotId, task.correction_task_id)}
@@ -2342,6 +2375,37 @@ export default function Capture() {
             )}
           </div>
         </div>
+
+        {/* In-page photo viewer avoids about:blank on Android Chrome. */}
+        {flaggedViewer.open && (
+          <div role="dialog" aria-modal="true" aria-label="Manager flagged photo"
+            style={{ position: 'fixed', inset: 0, zIndex: 11000, background: 'rgba(0,0,0,.92)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+            onClick={() => setFlaggedViewer(prev => ({ ...prev, open: false }))}>
+            <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 720, maxHeight: '90vh',
+              overflowY: 'auto', padding: 16, border: '1px solid #475569', borderRadius: 14, background: '#0f172a',
+              color: '#e2e8f0' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 14 }}>
+                <strong>Photo flagged by manager</strong>
+                <button type="button" onClick={() => setFlaggedViewer(prev => ({ ...prev, open: false }))}
+                  style={{ ...ui.btnSecondary, padding: '8px 12px' }}>✕ Close</button>
+              </div>
+              {flaggedViewer.loading && <p>Loading photo securely…</p>}
+              {flaggedViewer.error && <p role="alert" style={{ color: '#fca5a5', overflowWrap: 'anywhere' }}>
+                {flaggedViewer.error}
+              </p>}
+              {flaggedViewer.url && !flaggedViewer.error && (
+                <img src={flaggedViewer.url} alt="Manager flagged photo"
+                  onError={() => setFlaggedViewer(prev => ({ ...prev, url: '', error: 'The signed photo link was created, but the image could not load on this device.' }))}
+                  style={{ display: 'block', width: '100%', maxHeight: '65vh', objectFit: 'contain', borderRadius: 8 }} />
+              )}
+              {!flaggedViewer.loading && (flaggedViewer.error || !flaggedViewer.url) && (
+                <button type="button" onClick={() => viewFlaggedPhoto(flaggedViewer.path)}
+                  style={{ ...ui.btnSecondary, marginTop: 12 }}>↻ Retry photo</button>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Reference-photo lightbox overlay */}
         {refLightbox.open && refLightbox.urls.length > 0 && (
