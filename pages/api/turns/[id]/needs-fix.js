@@ -487,14 +487,29 @@ export default async function handler(req, res) {
       } catch {}
     }
 
-    // --- 3) Persist findings rows so the cleaner page can highlight ---
+    // --- 3) Append a review round; never delete historical findings ---
+    // The new rows are staged inactive until every insert succeeds.
+    // This avoids leaving the cleaner with a partial active round.
+    const { data: priorFindings, error: priorErr } = await supa
+      .from('qa_findings')
+      .select('id, review_round, is_active')
+      .eq('turn_id', turnId);
+    if (priorErr) throw priorErr;
+
+    const previousRound = (priorFindings || []).reduce(
+      (max, row) => Math.max(max, Number(row.review_round) || 1), 0
+    );
+    const reviewRound = previousRound + 1;
+    const previousActiveIds = (priorFindings || []).filter(r => r.is_active).map(r => r.id);
+
     const findingRowsBase = normalizedNotes
       .filter(n => (n.path || '').trim().length > 0)
       .map(n => ({
         id: mkId(),
         turn_id: turnId,
+        photo_id: n.photo_id || null,
         evidence_url: String(n.path || '').trim(),
-        note: (n.norm?.legacy_note || '').trim() || null, // legacy
+        note: (n.norm?.legacy_note || '').trim() || null,
         note_original: n.norm?.note_original ?? null,
         note_original_lang: n.norm?.note_original_lang ?? null,
         note_translated: n.norm?.note_translated ?? null,
@@ -502,62 +517,44 @@ export default async function handler(req, res) {
         note_sent: n.norm?.note_sent ?? null,
         note_sent_lang: n.norm?.note_sent_lang ?? null,
         created_at: ts,
+        review_round: reviewRound,
+        is_active: false,
       }));
 
-    const rowsWithSeverity = findingRowsBase.map(r => ({ ...r, severity: 'warn' }));
-
+    const newIds = findingRowsBase.map(r => r.id);
     let findingsInserted = 0;
     let findingsInsertErr = null;
     const findingsTriedToInsert = findingRowsBase.length;
 
     try {
-      await supa.from('qa_findings').delete().eq('turn_id', turnId);
-
-      if (rowsWithSeverity.length) {
-        let { data: insData, error: insErr } = await supa
-          .from('qa_findings')
-          .insert(rowsWithSeverity)
-          .select('id');
-
+      if (findingRowsBase.length) {
+        const withSeverity = findingRowsBase.map(r => ({ ...r, severity: 'warn' }));
+        let { error: insErr } = await supa.from('qa_findings').insert(withSeverity);
         if (insErr && /severity|check constraint|violates check constraint/i.test(insErr.message || '')) {
-          const retry = await supa
-            .from('qa_findings')
-            .insert(findingRowsBase)
-            .select('id');
-          insData = retry.data;
-          insErr = retry.error;
+          ({ error: insErr } = await supa.from('qa_findings').insert(findingRowsBase));
         }
-
-        if (insErr && /column .* does not exist/i.test(insErr.message || '')) {
-          const legacyRows = findingRowsBase.map(r => ({
-            id: r.id,
-            turn_id: r.turn_id,
-            evidence_url: r.evidence_url,
-            note: r.note,
-            created_at: r.created_at,
-          }));
-
-          const legacyRowsWithSeverity = legacyRows.map(r => ({ ...r, severity: 'warn' }));
-          let retry2 = await supa.from('qa_findings').insert(legacyRowsWithSeverity).select('id');
-
-          if (retry2.error && /severity|check constraint|violates check constraint/i.test(retry2.error.message || '')) {
-            retry2 = await supa.from('qa_findings').insert(legacyRows).select('id');
-          }
-
-          insData = retry2.data;
-          insErr = retry2.error;
-        }
-
-        if (insErr) {
-          findingsInsertErr = insErr.message || String(insErr);
-          console.error('[qa_findings insert] error:', insErr);
-        } else {
-          findingsInserted = Array.isArray(insData) ? insData.length : 0;
-        }
+        if (insErr) throw insErr;
+        findingsInserted = findingRowsBase.length;
       }
-    } catch (e) {
-      findingsInsertErr = e?.message || String(e);
-      console.error('[qa_findings insert] exception:', e);
+
+      // Close the prior round only after the new records have been stored.
+      if (previousActiveIds.length) {
+        const { error: closeErr } = await supa.from('qa_findings')
+          .update({ is_active: false }).in('id', previousActiveIds);
+        if (closeErr) throw closeErr;
+      }
+      if (newIds.length) {
+        const { error: activateErr } = await supa.from('qa_findings')
+          .update({ is_active: true }).in('id', newIds);
+        if (activateErr) throw activateErr;
+      }
+    } catch (err) {
+      // Best-effort compensation; a DB transaction/RPC is the stronger long-term solution.
+      if (newIds.length) await supa.from('qa_findings').delete().in('id', newIds);
+      if (previousActiveIds.length) {
+        await supa.from('qa_findings').update({ is_active: true }).in('id', previousActiveIds);
+      }
+      throw new Error(`Could not save review round: ${err?.message || err}`);
     }
 
     // --- 4) SMS (optional) ---
@@ -610,19 +607,10 @@ export default async function handler(req, res) {
         ),
       });
 
-      // ✅ Hard fail with a clear message if missing/invalid (so you don't get Twilio 21211)
+      // A notification failure must not make a saved review appear unsaved.
       if (!cleaned || !isLikelyE164(cleaned)) {
-        return res.status(400).json({
-          error: 'Cleaner phone missing or invalid (must be E.164 like +14805551234)',
-          code: 'INVALID_CLEANER_PHONE',
-          rawPhone,
-          cleaned,
-          cleanerId,
-          propertyId,
-          turnId,
-        });
-      }
-
+        console.warn('[needs-fix] review saved, SMS skipped: invalid cleaner phone');
+      } else {
       const base =
         process.env.APP_BASE_URL ||
         process.env.NEXT_PUBLIC_APP_BASE_URL ||
@@ -644,9 +632,10 @@ export default async function handler(req, res) {
         await sendSmsMinimal({ to: cleaned, body: msg });
       } catch (e1) {
         // fallback for old signature
-        await sendSmsMinimal(cleaned, msg);
+        try { await sendSmsMinimal(cleaned, msg); }
+        catch (e2) { console.error('[needs-fix] SMS failed after review saved', e2); }
       }
-
+      }
     }
 
     return res.json({
@@ -655,6 +644,7 @@ export default async function handler(req, res) {
       findings_tried_to_insert: findingsTriedToInsert,
       findings_inserted: findingsInserted,
       findings_insert_error: findingsInsertErr,
+      review_round: reviewRound,
       summary_used: Boolean(summaryLegacy),
     });
   } catch (e) {
