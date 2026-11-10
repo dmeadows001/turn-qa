@@ -53,6 +53,7 @@ async function fetchPhotos(turnId) {
       created_at: p.created_at,
       url: p.signedUrl || p.url || '',
       path: p.path || '',
+      correction_task_id: p.correction_task_id || null,
       is_fix: !!(p.is_fix ?? p.isFix ?? p.fix),
       needs_fix: !!(p.needs_fix ?? p.needsFix ?? p.flagged),
       cleaner_note: p.cleaner_note ?? p.cleanerNote ?? '',
@@ -182,11 +183,11 @@ const flaggedCardStyle = {
   background: '#0b1220',
 };
 
-// Green “FIX” highlight (cleaner resubmitted photo)
+// Neutral blue highlight: a correction is submitted, NOT automatically approved
 const fixCardStyle = {
-  border: '1px solid #065f46',
-  boxShadow: '0 0 0 3px rgba(5,150,105,0.20) inset',
-  background: '#071a16',
+  border: '1px solid #2563eb',
+  boxShadow: '0 0 0 3px rgba(37,99,235,0.15) inset',
+  background: '#0b1930',
 };
 
 // Dashed section frame, like cleaner need-fix
@@ -372,6 +373,8 @@ const PhotoCard = memo(
     toggleKey,
     onTranslate,
     translateBusyByKey,
+    allowSelection = true,
+    acceptedTaskIds,
   }) {
     const k = keyFor(p);
     const selected = selectedKeys.has(k);
@@ -384,12 +387,13 @@ const PhotoCard = memo(
 
     const finding = findingsByKey[k] || null;
 
-    const flaggedFromFindings = !!finding;
-    const flaggedFromRow = !!p.needs_fix;
+    const flaggedFromFindings = !!finding && !isFix;
+    const flaggedFromRow = false; // legacy flags may remain true after a later round
     // Only ORIGINAL photos can be “needs fix”
-    const flagged = !isFix && (flaggedFromFindings || flaggedFromRow);
+    const flagged = !acceptedTaskIds?.has(p.correction_task_id) && (flaggedFromFindings || flaggedFromRow);
+    const accepted = !!p.correction_task_id && acceptedTaskIds?.has(p.correction_task_id);
 
-    const styleCard = isFix ? fixCardStyle : flagged ? flaggedCardStyle : null;
+    const styleCard = accepted ? { border: '1px solid #065f46' } : flagged ? flaggedCardStyle : isFix ? fixCardStyle : null;
 
     const busy = !!(translateBusyByKey && translateBusyByKey[k]);
 
@@ -441,24 +445,27 @@ const PhotoCard = memo(
                 </span>
               )}
 
-              {isFix && (
+               {accepted && (
+                <span style={{ padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 700, color: '#86efac', background: '#064e3b', border: '1px solid #065f46' }}>Accepted</span>
+               )}
+               {isFix && !accepted && (
                 <span
                   style={{
                     padding: '2px 8px',
                     borderRadius: 999,
                     fontSize: 11,
                     fontWeight: 700,
-                    color: '#86efac',
-                    background: '#064e3b',
-                    border: '1px solid #065f46',
+                    color: '#93c5fd',
+                    background: '#0b3b72',
+                    border: '1px solid #2563eb',
                   }}
                 >
-                  FIX
+                  Correction uploaded
                 </span>
               )}
             </div>
 
-            {isManagerMode && (
+             {isManagerMode && allowSelection && (
               <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', userSelect: 'none' }}>
                 <input
                   type="checkbox"
@@ -620,7 +627,10 @@ const PhotoCard = memo(
     // translate busy state for THIS photo (optional prop)
     const prevBusy = !!(prev.translateBusyByKey && prev.translateBusyByKey[pk]);
     const nextBusy = !!(next.translateBusyByKey && next.translateBusyByKey[nk]);
-    if (prevBusy !== nextBusy) return false;
+         if (prevBusy !== nextBusy) return false;
+     if (prev.allowSelection !== next.allowSelection) return false;
+     if (!!prev.acceptedTaskIds?.has(prev.p.correction_task_id) !== !!next.acceptedTaskIds?.has(next.p.correction_task_id)) return false;
+     if (prev.p.needs_fix !== next.p.needs_fix || prev.p.correction_task_id !== next.p.correction_task_id) return false;
 
     return true; // unchanged → skip render
   }
@@ -739,6 +749,8 @@ export default function Review() {
 
   // Findings for highlight + prefill (keyed by photoKey)
   const [findingsByKey, setFindingsByKey] = useState({});
+  const [activeFindings, setActiveFindings] = useState([]);
+  const [viewFullTurn, setViewFullTurn] = useState(false);
 
   // Translate busy per-photo
   const [translateBusyByKey, setTranslateBusyByKey] = useState({});
@@ -792,52 +804,14 @@ export default function Review() {
 
         setPhotos(ph);
 
-        // Prefill findings keyed by photo key
+        // Active findings describe outstanding tasks, NOT a new manager selection.
+        // Never pre-select old findings: doing so would re-reject accepted corrections.
         const f = await fetchFindings(turnId);
-        if (f.length) {
-          // Build index: path -> keys currently shown
-          const pathToKeys = ph.reduce((acc, p) => {
-            const k = keyFor(p);
-            const path = p.path || '';
-            if (!acc[path]) acc[path] = [];
-            acc[path].push(k);
-            return acc;
-          }, {});
-
-          const map = {};
-          const sel = new Set();
-          const notes = {};
-
-          f.forEach((it) => {
-            const path = (it && it.path) || '';
-            const keys = pathToKeys[path] || [];
-            for (const k of keys) {
-              map[k] = it;
-              if (isManagerMode) sel.add(k);
-
-              const o = String(it.note_original || '').trim();
-              const t2 = String(it.note_translated || '').trim();
-              const oLang = lc(it.note_original_lang);
-              const tLang = lc(it.note_translated_lang);
-
-              const originalPref = oLang === 'en' && o ? o : o ? o : String(it.note || '');
-              const translatedPref = tLang === 'es' && t2 ? t2 : t2 ? t2 : '';
-
-              notes[k] = {
-                original: originalPref || '',
-                translated: translatedPref || '',
-                sourceLang: oLang || 'en',
-                targetLang: tLang || 'es',
-              };
-            }
-          });
-
-          setFindingsByKey(map);
-          if (isManagerMode) setSelectedKeys(sel);
-          setNotesByKey((prev) => ({ ...notes, ...prev }));
-        } else {
-          setFindingsByKey({});
-        }
+        setActiveFindings(f);
+        setFindingsByKey(Object.fromEntries(f.filter(x => x.path).map(x => [x.path, x])));
+        setSelectedKeys(new Set());
+        setNotesByKey({});
+        setViewFullTurn(false);
             } catch (e) {
         if (e?.code === 'BILLING_REQUIRED' && isManagerMode) {
           router.replace('/billing');
@@ -858,7 +832,44 @@ export default function Review() {
   }, [photos]);
 
   // Build the same sections structure the cleaner page uses
-  const sections = useMemo(() => buildSections(photos, templateShots), [photos, templateShots]);
+  // For a resubmission, review ONLY the latest correction for each outstanding task.
+  // An initial submission still displays the complete turn.
+  const isCorrectionReview = isManagerMode && status === 'submitted' && activeFindings.length > 0;
+  const taskIds = useMemo(() => new Set(activeFindings.map(f => f.correction_task_id).filter(Boolean)), [activeFindings]);
+  const latestCorrections = useMemo(() => {
+    if (!isCorrectionReview) return [];
+    const byTask = new Map();
+    const ordered = [...photos].filter(p => p.is_fix).sort((a,b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+    for (const photo of ordered) {
+      if (photo.correction_task_id && taskIds.has(photo.correction_task_id) && !byTask.has(photo.correction_task_id)) {
+        byTask.set(photo.correction_task_id, photo);
+      }
+    }
+    // Legacy photos have no task ID. Match by shot ONLY if there is exactly
+    // one outstanding issue in that shot; otherwise require an explicit link.
+    const byId = new Map(photos.map(p => [String(p.id), p]));
+    for (const finding of activeFindings) {
+      const taskId = finding.correction_task_id;
+      if (!taskId || byTask.has(taskId)) continue;
+      const original = byId.get(String(finding.photo_id));
+      if (!original?.shot_id) continue;
+      const sameShotTasks = activeFindings.filter(f => byId.get(String(f.photo_id))?.shot_id === original.shot_id);
+      if (sameShotTasks.length !== 1) continue;
+      const legacy = ordered.find(p => !p.correction_task_id && p.shot_id === original.shot_id);
+      if (legacy) byTask.set(taskId, { ...legacy, correction_task_id: taskId });
+    }
+    return [...byTask.values()];
+  }, [photos, activeFindings, isCorrectionReview, taskIds]);
+  const unresolvedTaskCount = isCorrectionReview ? taskIds.size - latestCorrections.length : 0;
+  const visiblePhotos = isCorrectionReview && !viewFullTurn ? latestCorrections : photos;
+  const sections = useMemo(() => buildSections(visiblePhotos, templateShots), [visiblePhotos, templateShots]);
+  // Only task-linked corrections are eligible for an accepted badge. A photo
+  // is accepted when its task no longer appears in the active round, and the
+  // turn has been approved or another review round has been submitted.
+  const acceptedTaskIds = useMemo(() => {
+    if (status !== 'approved') return new Set();
+    return new Set(photos.filter(p => p.is_fix && p.correction_task_id).map(p => p.correction_task_id));
+  }, [photos, status]);
 
   // --- Stable callbacks so children don't remount during typing ---
   const toggleKey = useCallback((p) => {
@@ -951,7 +962,11 @@ export default function Review() {
     if (!turnId) return;
     setActing(true);
     try {
-      const ok = window.confirm('Approve this turn?');
+             if (isCorrectionReview && unresolvedTaskCount > 0) {
+         alert('Some outstanding correction tasks have no identifiable replacement photo. Cannot approve until they are resolved.');
+         return;
+       }
+       const ok = window.confirm('Approve this turn?');
       if (!ok) return;
 
       const manager_note = String(summaryNote.original || '').trim();
@@ -983,7 +998,8 @@ export default function Review() {
     try {
       const payloadNotes = [];
 
-      photos.forEach((p) => {
+             visiblePhotos.forEach((p) => {
+         if (isCorrectionReview && !latestCorrections.some(x => x.path === p.path)) return;
         const k = keyFor(p);
         const selected = selectedKeys.has(k);
         const obj = normalizeNote(notesByKey[k]);
@@ -995,7 +1011,8 @@ export default function Review() {
 
         if (selected) {
           payloadNotes.push({
-            photo_id: p.id || null,
+                         photo_id: p.id || null,
+             correction_task_id: p.correction_task_id || null,
             path: p.path || '',
             note: note_to_cleaner,
 
@@ -1014,7 +1031,15 @@ export default function Review() {
       const summaryTranslated = String(summaryNote.translated || '').trim();
       const summarySent = (summaryTranslated || summaryOriginal || '').trim();
 
-      if (payloadNotes.length === 0 && !summarySent) {
+             if (isCorrectionReview && unresolvedTaskCount > 0) {
+         alert('Some outstanding tasks have no identifiable correction photo. Refresh or link the missing corrections before reviewing.');
+         return;
+       }
+       if (isCorrectionReview && payloadNotes.some(n => !n.correction_task_id)) {
+         alert('One or more selected photos are not linked to a correction task. Please review the latest correction photo for each task.');
+         return;
+       }
+       if (payloadNotes.length === 0 && !summarySent) {
         alert('Select at least one photo or add a summary note before sending “Needs fix”.');
         setActing(false);
         return;
@@ -1396,11 +1421,23 @@ export default function Review() {
             </div>
           )}
 
-          <div style={{ ...ui.subtle, marginTop: 10 }}>Click any photo to open full-size in a new tab.</div>
+                     {isCorrectionReview && (
+             <div style={{ marginTop: 14, padding: 12, border: '1px solid #334155', borderRadius: 10 }}>
+               <b>Correction review</b> — {latestCorrections.length} latest replacement photo(s) for {taskIds.size} outstanding task(s).
+               {unresolvedTaskCount > 0 && <div style={{ color: '#fca5a5', marginTop: 6 }}>{unresolvedTaskCount} task(s) have no identifiable correction photo. Approval and rejection are blocked until resolved.</div>}
+               <div style={{ marginTop: 10 }}>
+                 <button type="button" style={ui.btnSecondary} onClick={() => setViewFullTurn(v => !v)}>
+                   {viewFullTurn ? 'Show Corrections Only' : 'View Full Turn'}
+                 </button>
+               </div>
+               <div style={{ marginTop: 8, color: '#94a3b8', fontSize: 12 }}>Check “Needs fix” only on corrections that still need work. Leave accepted corrections unchecked. Full Turn is for reference.</div>
+             </div>
+           )}
+           <div style={{ ...ui.subtle, marginTop: 10 }}>Click any photo to open full-size in a new tab.</div>
         </div>
 
         <div style={ui.card}>
-          {loading ? (
+                     {loading ? (
             <div>Loading photos…</div>
           ) : sections && sections.length > 0 ? (
             sections.map((sec) => (
@@ -1432,15 +1469,17 @@ export default function Review() {
                       toggleKey={toggleKey}
                       onTranslate={onTranslate}
                       translateBusyByKey={translateBusyByKey}
+                      allowSelection={!isCorrectionReview || latestCorrections.some(x => x.path === p.path)}
+                      acceptedTaskIds={acceptedTaskIds}
                     />
                   ))}
                 </div>
               </div>
             ))
-          ) : photos && photos.length > 0 ? (
+                     ) : visiblePhotos && visiblePhotos.length > 0 ? (
             (() => {
               // Fallback: group by area_key so managers still see everything
-              const byArea = (photos || []).reduce((acc, p) => {
+                             const byArea = (visiblePhotos || []).reduce((acc, p) => {
                 const k = (p.area_key || '').trim() || '__UNCAT__';
                 (acc[k] ||= []).push(p);
                 return acc;
@@ -1482,6 +1521,8 @@ export default function Review() {
                         toggleKey={toggleKey}
                         onTranslate={onTranslate}
                         translateBusyByKey={translateBusyByKey}
+                       allowSelection={!isCorrectionReview || latestCorrections.some(x => x.path === p.path)}
+                       acceptedTaskIds={acceptedTaskIds}
                       />
                     ))}
                   </div>
