@@ -102,10 +102,22 @@ function payoutText(row) {
 
 function TurnCard({ turn }) {
   const isInProgress = turn.status === 'in_progress';
+  const needsFix = turn.status === 'needs_fix';
+  const requiresAction = isInProgress || needsFix;
 
-  const destination = isInProgress
-    ? `/turns/${turn.id}/capture?from=capture`
-    : `/turns/${turn.id}/review`;
+  // Needs Fix must open the cleaner's task-focused correction workflow,
+  // not the read-only review page.
+  const destination = needsFix
+    ? `/turns/${turn.id}/capture?tab=needs-fix`
+    : isInProgress
+      ? `/turns/${turn.id}/capture?from=capture`
+      : `/turns/${turn.id}/review`;
+
+  const actionLabel = needsFix
+    ? 'Fix & Resubmit'
+    : isInProgress
+      ? 'Resume Turn'
+      : 'View Turn';
 
   return (
     <article
@@ -213,18 +225,18 @@ function TurnCard({ turn }) {
           marginTop: 16,
           padding: '12px 16px',
           borderRadius: 12,
-          background: isInProgress ? '#0ea5e9' : '#172338',
-          border: isInProgress
+          background: requiresAction ? '#0ea5e9' : '#172338',
+          border: requiresAction
             ? '1px solid #38bdf8'
             : '1px solid #334155',
-          color: isInProgress ? '#06121f' : '#f8fafc',
+          color: requiresAction ? '#06121f' : '#f8fafc',
           fontSize: 16,
           fontWeight: 800,
           textDecoration: 'none',
           textAlign: 'center',
         }}
       >
-        {isInProgress ? 'Resume Turn' : 'View Turn'}
+        {actionLabel}
       </a>
     </article>
   );
@@ -339,7 +351,7 @@ export default function CleanerTurns() {
               lineHeight: 1.5,
             }}
           >
-            Track your turnovers, resume unfinished work,
+            Find your turnovers, complete requested corrections,
             and review submitted jobs.
           </p>
 
@@ -434,16 +446,7 @@ export default function CleanerTurns() {
             boxSizing: 'border-box',
           }}
         >
-          <a
-            href="/capture"
-            style={{
-              color: '#93c5fd',
-              textDecoration: 'none',
-              fontWeight: 600,
-            }}
-          >
-            ← Back to capture
-          </a>
+          Select a turn above to resume work, fix requested photos, or view its history.
         </div>
       </section>
     </ChromeDark>
