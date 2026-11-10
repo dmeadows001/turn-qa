@@ -27,6 +27,7 @@ type FixPhoto = {
   translated: string | null;
   originalLang: string | null;
   translatedLang: string | null;
+  correctionTaskId: string | null;
 };
 
 function normalizePhotos(turnId: string, photos: any[]): FixPhoto[] {
@@ -44,8 +45,11 @@ function normalizePhotos(turnId: string, photos: any[]): FixPhoto[] {
     const originalLang = stringValue(p.note_original_lang || p.cleaner_note_original_lang);
     const translatedLang = stringValue(p.note_translated_lang || p.cleaner_note_translated_lang);
     const legacyNote = stringValue(p.note || p.cleaner_note);
+    const rawTaskId = stringValue(p.correction_task_id || p.correctionTaskId || p.task_id);
+    if (rawTaskId && !UUID.test(rawTaskId)) throw new Error('Invalid correction task ID');
     result.set(path, {
       path, shotId,
+      correctionTaskId: rawTaskId || null,
       areaKey: stringValue(p.area_key),
       cleanerNote: translated || legacyNote || original || null,
       original: original || null,
@@ -65,6 +69,7 @@ function isMissingColumn(error: any): boolean {
 function photoFields(p: FixPhoto) {
   return {
     is_fix: true,
+    correction_task_id: p.correctionTaskId,
     cleaner_note: p.cleanerNote,
     cleaner_note_original: p.original,
     cleaner_note_translated: p.translated,
@@ -87,14 +92,12 @@ async function saveFixPhoto(supa: any, turnId: string, p: FixPhoto) {
   const base = photoFields(p);
   const updateShapes: any[] = [
     base,
-    { is_fix: true, cleaner_note: p.cleanerNote },
-    { is_fix: true },
+    { is_fix: true, correction_task_id: p.correctionTaskId, cleaner_note: p.cleanerNote },
   ];
   const insertShapes: any[] = [
     { turn_id: turnId, storage_path: p.path, shot_id: p.shotId, area_key: p.areaKey, ...base, created_at: nowIso() },
-    { turn_id: turnId, storage_path: p.path, shot_id: p.shotId, area_key: p.areaKey, is_fix: true, cleaner_note: p.cleanerNote, created_at: nowIso() },
-    { turn_id: turnId, storage_path: p.path, shot_id: p.shotId, is_fix: true, cleaner_note: p.cleanerNote },
-    { turn_id: turnId, storage_path: p.path, is_fix: true },
+    { turn_id: turnId, storage_path: p.path, shot_id: p.shotId, area_key: p.areaKey, is_fix: true, correction_task_id: p.correctionTaskId, cleaner_note: p.cleanerNote, created_at: nowIso() },
+    { turn_id: turnId, storage_path: p.path, shot_id: p.shotId, is_fix: true, correction_task_id: p.correctionTaskId, cleaner_note: p.cleanerNote },
   ];
 
   let lastError: any = null;
@@ -150,6 +153,70 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let photos: FixPhoto[];
     try { photos = normalizePhotos(turnId, body.photos || []); }
     catch (e: any) { return res.status(400).json({ error: e.message }); }
+
+    // The active findings define the outstanding tasks for this review round.
+    // Never infer a task from shot_id: several issues may share one checklist item.
+    const { data: activeFindings, error: findingsErr } = await supa
+      .from('qa_findings')
+      .select('id, correction_task_id, photo_id, evidence_url, review_round')
+      .eq('turn_id', turnId)
+      .eq('is_active', true);
+    if (findingsErr) throw findingsErr;
+
+    const activeTasks = new Set<string>();
+    for (const f of activeFindings || []) {
+      const taskId = stringValue(f.correction_task_id || f.id);
+      if (UUID.test(taskId)) activeTasks.add(taskId);
+    }
+    if (!activeTasks.size) {
+      return res.status(409).json({ error: 'No active correction tasks found. Refresh the turn and try again.' });
+    }
+    if (!photos.length) {
+      return res.status(400).json({ error: 'Upload a correction photo for each outstanding task before submitting.' });
+    }
+
+    // Legacy cleaner UI does not yet send task IDs. It is safe to infer the
+    // sole active task, but NEVER guess if multiple tasks remain outstanding.
+    if (activeTasks.size === 1) {
+      const onlyTask = [...activeTasks][0];
+      for (const p of photos) {
+        if (!p.correctionTaskId) p.correctionTaskId = onlyTask;
+      }
+    }
+    const submittedTasks = new Set<string>();
+    for (const p of photos) {
+      if (!p.correctionTaskId) {
+        return res.status(400).json({
+          error: 'This turn has multiple correction tasks. Refresh the cleaner screen so each photo is linked to the correct task.',
+        });
+      }
+      if (!activeTasks.has(p.correctionTaskId)) {
+        return res.status(409).json({ error: 'Correction task is no longer active. Refresh and try again.' });
+      }
+      submittedTasks.add(p.correctionTaskId);
+    }
+    const missingTasks = [...activeTasks].filter(id => !submittedTasks.has(id));
+    if (missingTasks.length) {
+      return res.status(400).json({
+        error: `A correction photo is still required for ${missingTasks.length} outstanding task(s).`,
+        missingTasks,
+      });
+    }
+
+    // An existing photo may not be reassigned from one task to another.
+    const { data: registeredPhotos, error: registeredErr } = await supa
+      .from('turn_photos')
+      .select('id, storage_path, correction_task_id')
+      .eq('turn_id', turnId)
+      .in('storage_path', photos.map(p => p.path));
+    if (registeredErr) throw registeredErr;
+    const registeredByPath = new Map((registeredPhotos || []).map((p: any) => [p.storage_path, p]));
+    for (const p of photos) {
+      const existing: any = registeredByPath.get(p.path);
+      if (existing?.correction_task_id && existing.correction_task_id !== p.correctionTaskId) {
+        return res.status(409).json({ error: 'Photo is already linked to another correction task.' });
+      }
+    }
 
     const legacyReply = stringValue(body.reply || body.cleaner_reply);
     const original = stringValue(body.reply_original);
