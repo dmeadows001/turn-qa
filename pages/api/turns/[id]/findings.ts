@@ -12,13 +12,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!turnId) return res.status(400).json({ error: 'Missing turn id' });
 
     const supa = typeof supabaseAdmin === 'function' ? supabaseAdmin() : supabaseAdmin;
-    // Only the latest active round is returned to the manager and cleaner UI.
-    // Inactive findings remain stored for historical review.
+    // Active findings are the only outstanding corrections; old rounds remain in history.
     const { data, error } = await supa
       .from('qa_findings')
       .select([
-        'photo_id', 'evidence_url', 'note', 'note_original', 'note_translated',
-        'note_original_lang', 'note_translated_lang', 'note_sent', 'note_sent_lang',
+        'id', 'correction_task_id', 'photo_id', 'evidence_url', 'area_key', 'label',
+        'note', 'note_original', 'note_translated', 'note_original_lang',
+        'note_translated_lang', 'note_sent', 'note_sent_lang',
         'severity', 'created_at', 'review_round',
       ].join(', '))
       .eq('turn_id', turnId)
@@ -27,8 +27,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (error) throw error;
 
     const findings = (data || []).map((r: any) => ({
+      id: r.id,
+      // Older active findings predate correction_task_id. Their finding ID is
+      // the stable legacy identifier used by the submit-fix endpoint.
+      correction_task_id: r.correction_task_id || r.id,
       photo_id: r.photo_id || null,
       path: r.evidence_url || '',
+      area_key: r.area_key || '',
+      label: r.label || '',
       note: r.note || '',
       note_original: r.note_original || '',
       note_translated: r.note_translated || '',
