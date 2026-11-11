@@ -316,6 +316,20 @@ export default async function handler(req, res) {
       });
     }
 
+    // This endpoint creates the INITIAL correction requests only. Subsequent
+    // rejections are recorded by correction-decision; never create a second
+    // qa_findings row for the same photo (unique turn_id/photo_id).
+    const { data: reviewTurn, error: reviewTurnErr } = await supa.from('turns')
+      .select('status').eq('id',turnId).maybeSingle();
+    if (reviewTurnErr) throw reviewTurnErr;
+    if (!reviewTurn || reviewTurn.status !== 'submitted')
+      return res.status(409).json({error:'Only submitted turns can be reviewed'});
+    const { data: priorReview, error: priorReviewErr } = await supa.from('qa_findings')
+      .select('id').eq('turn_id',turnId).limit(1);
+    if (priorReviewErr) throw priorReviewErr;
+    if (priorReview?.length)
+      return res.status(409).json({error:'This turn already has correction tasks. Use individual correction decisions.'});
+
     // Support BOTH payload shapes the UI may send:
     //  - { notes: [{ path, note, photo_id? }], summary?, send_sms? }
     //  - { photos: [{ id?, path?, note? }], overall_note?, notify? }
