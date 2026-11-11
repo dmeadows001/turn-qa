@@ -375,6 +375,7 @@ const PhotoCard = memo(
     translateBusyByKey,
     allowSelection = true,
     acceptedTaskIds,
+    showDecisionEditor = false,
   }) {
     const k = keyFor(p);
     const selected = selectedKeys.has(k);
@@ -484,7 +485,7 @@ const PhotoCard = memo(
           </div>
 
           {/* Show note + translation UI for selected original OR correction photos */}
-          {isManagerMode && selected && (
+          {isManagerMode && (selected || showDecisionEditor) && (
             <div style={{ marginTop: 10 }}>
               <div
                 style={{
@@ -628,7 +629,7 @@ const PhotoCard = memo(
     const prevBusy = !!(prev.translateBusyByKey && prev.translateBusyByKey[pk]);
     const nextBusy = !!(next.translateBusyByKey && next.translateBusyByKey[nk]);
          if (prevBusy !== nextBusy) return false;
-     if (prev.allowSelection !== next.allowSelection) return false;
+     if (prev.allowSelection !== next.allowSelection || prev.showDecisionEditor !== next.showDecisionEditor) return false;
      if (!!prev.acceptedTaskIds?.has(prev.p.correction_task_id) !== !!next.acceptedTaskIds?.has(next.p.correction_task_id)) return false;
      if (prev.p.needs_fix !== next.p.needs_fix || prev.p.correction_task_id !== next.p.correction_task_id) return false;
 
@@ -751,6 +752,8 @@ export default function Review() {
   const [findingsByKey, setFindingsByKey] = useState({});
   const [activeFindings, setActiveFindings] = useState([]);
   const [viewFullTurn, setViewFullTurn] = useState(false);
+  const [correctionDecisions, setCorrectionDecisions] = useState([]);
+  const [decisionBusy, setDecisionBusy] = useState(false);
 
   // Translate busy per-photo
   const [translateBusyByKey, setTranslateBusyByKey] = useState({});
@@ -808,6 +811,11 @@ export default function Review() {
         // Never pre-select old findings: doing so would re-reject accepted corrections.
         const f = await fetchFindings(turnId);
         setActiveFindings(f);
+        const decisionHeaders = await authHeadersAsync();
+        const decisionResponse = await fetch(`/api/turns/${turnId}/correction-decision`, { headers: decisionHeaders });
+        if (!decisionResponse.ok) throw new Error('Could not load correction decisions');
+        const decisionData = await decisionResponse.json();
+        setCorrectionDecisions(decisionData.decisions || []);
         setFindingsByKey(Object.fromEntries(f.filter(x => x.path).map(x => [x.path, x])));
         setSelectedKeys(new Set());
         setNotesByKey({});
@@ -860,16 +868,40 @@ export default function Review() {
     }
     return [...byTask.values()];
   }, [photos, activeFindings, isCorrectionReview, taskIds]);
+  const decidedPhotoIds = useMemo(() => new Set(correctionDecisions.map(d => String(d.photo_id))), [correctionDecisions]);
+  const pendingDecisionCount = isCorrectionReview ? latestCorrections.filter(p => !decidedPhotoIds.has(String(p.id))).length : 0;
   const unresolvedTaskCount = isCorrectionReview ? taskIds.size - latestCorrections.length : 0;
+  const rejectedCount = isCorrectionReview ? latestCorrections.filter(p => correctionDecisions.some(d => String(d.photo_id) === String(p.id) && d.decision === 'rejected')).length : 0;
   const visiblePhotos = isCorrectionReview && !viewFullTurn ? latestCorrections : photos;
   const sections = useMemo(() => buildSections(visiblePhotos, templateShots), [visiblePhotos, templateShots]);
   // Only task-linked corrections are eligible for an accepted badge. A photo
   // is accepted when its task no longer appears in the active round, and the
   // turn has been approved or another review round has been submitted.
-  const acceptedTaskIds = useMemo(() => {
-    if (status !== 'approved') return new Set();
-    return new Set(photos.filter(p => p.is_fix && p.correction_task_id).map(p => p.correction_task_id));
-  }, [photos, status]);
+  const acceptedTaskIds = useMemo(() => new Set(correctionDecisions.filter(d => d.decision === 'accepted').map(d => d.correction_task_id)), [correctionDecisions]);
+
+  async function decideCorrection(p, decision) {
+    if (!p.correction_task_id || !p.id || decisionBusy) return;
+    const noteObj = normalizeNote(notesByKey[keyFor(p)]);
+    if (decision === 'rejected' && !String(noteObj.translated || noteObj.original || '').trim()) {
+      alert('Enter a reason for requesting another fix. Translate to Spanish when appropriate.');
+      return;
+    }
+    if (!window.confirm(decision === 'accepted' ? 'Accept this correction permanently?' : 'Request another correction for this task?')) return;
+    setDecisionBusy(true);
+    try {
+      const headers = await authHeadersAsync();
+      const response = await fetch(`/api/turns/${turnId}/correction-decision`, {
+        method:'POST',headers:{'Content-Type':'application/json',...headers},
+        body:JSON.stringify({photo_id:p.id,correction_task_id:p.correction_task_id,decision,
+          note_original:noteObj.original || '',note_translated:noteObj.translated || ''})
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || 'Could not record decision');
+      window.location.reload();
+    } catch(e) { alert(e.message || 'Could not record correction decision'); }
+    finally { setDecisionBusy(false); }
+  }
+
 
   // --- Stable callbacks so children don't remount during typing ---
   const toggleKey = useCallback((p) => {
@@ -948,7 +980,16 @@ export default function Review() {
     setHistoryErr('');
     try {
       const data = await fetchTurnHistory(turnId);
-      setHistoryItems(Array.isArray(data.items) ? data.items : []);
+      const existing = Array.isArray(data.items) ? data.items : [];
+      const decisions = correctionDecisions.map(d => ({
+        id: `decision:${d.id}`, type: 'message', actor: 'manager',
+        event: d.decision === 'accepted' ? 'Accepted correction' : 'Requested another fix',
+        at: d.created_at, text: d.note_sent || d.note || '',
+        meta: {sent:d.note_sent || d.note || '',sent_lang:d.note_sent_lang,
+          original:d.note_original,original_lang:d.note_original_lang,
+          translated:d.note_translated,translated_lang:d.note_translated_lang},
+      }));
+      setHistoryItems([...existing, ...decisions].sort((a,b) => new Date(a.at || 0) - new Date(b.at || 0)));
     } catch (e) {
       setHistoryErr(e?.message || 'Could not load history');
       setHistoryItems([]);
@@ -966,6 +1007,7 @@ export default function Review() {
          alert('Some outstanding correction tasks have no identifiable replacement photo. Cannot approve until they are resolved.');
          return;
        }
+       if (isCorrectionReview && (pendingDecisionCount > 0 || rejectedCount > 0 || taskIds.size > 0)) { alert('Every correction must be explicitly accepted before approving.'); return; }
        const ok = window.confirm('Approve this turn?');
       if (!ok) return;
 
@@ -1397,7 +1439,7 @@ export default function Review() {
               </div>
 
               <div style={{ display: 'flex', gap: 10, marginTop: 12, flexWrap: 'wrap' }}>
-                <button
+                {!isCorrectionReview && status === 'submitted' && <button
                   onClick={sendNeedsFix}
                   disabled={acting || !turnId}
                   style={{
@@ -1408,9 +1450,9 @@ export default function Review() {
                   }}
                 >
                   {acting ? '…' : '🛠️ Send Needs Fix (with notes)'}
-                </button>
+                </button>}
 
-                <button onClick={markApproved} disabled={acting || !turnId} style={ui.btnPrimary}>
+                <button onClick={markApproved} disabled={acting || !turnId || status !== 'submitted' || (isCorrectionReview && (pendingDecisionCount > 0 || rejectedCount > 0 || taskIds.size > 0))} style={ui.btnPrimary}>
                   {acting ? '…' : '✅ Approve'}
                 </button>
 
@@ -1458,6 +1500,7 @@ export default function Review() {
 
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px,1fr))', gap: 12 }}>
                   {sec.photos.map((p) => (
+                    <div key={keyFor(p)}>
                     <PhotoCard
                       key={keyFor(p)}
                       p={p}
@@ -1471,7 +1514,23 @@ export default function Review() {
                       translateBusyByKey={translateBusyByKey}
                       allowSelection={!isCorrectionReview || latestCorrections.some(x => x.path === p.path)}
                       acceptedTaskIds={acceptedTaskIds}
+                      showDecisionEditor={isCorrectionReview && latestCorrections.some(x => x.id === p.id) && !decidedPhotoIds.has(String(p.id))}
                     />
+                    {isCorrectionReview && latestCorrections.some(x => x.id === p.id) && (
+                      <div style={{marginTop:8,display:'flex',gap:8,flexWrap:'wrap'}}>
+                        {decidedPhotoIds.has(String(p.id)) ? (
+                          <strong style={{color:correctionDecisions.some(d => String(d.photo_id) === String(p.id) && d.decision === 'accepted') ? '#86efac' : '#fcd34d'}}>
+                            {correctionDecisions.some(d => String(d.photo_id) === String(p.id) && d.decision === 'accepted') ? '✓ Accepted' : '↻ Another fix requested'}
+                          </strong>
+                        ) : (
+                          <>
+                            <button type="button" disabled={decisionBusy || acting} onClick={() => decideCorrection(p,'accepted')} style={ui.btnPrimary}>✓ Accept Fix</button>
+                            <button type="button" disabled={decisionBusy || acting} onClick={() => decideCorrection(p,'rejected')} style={ui.btnSecondary}>↻ Request Another Fix</button>
+                          </>
+                        )}
+                      </div>
+                    )}
+                    </div>
                   ))}
                 </div>
               </div>
@@ -1510,7 +1569,7 @@ export default function Review() {
 
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px,1fr))', gap: 12 }}>
                     {byArea[areaKey].map((p) => (
-                      <PhotoCard
+                      <div key={keyFor(p)}><PhotoCard
                         key={keyFor(p)}
                         p={p}
                         isManagerMode={isManagerMode}
@@ -1523,7 +1582,10 @@ export default function Review() {
                         translateBusyByKey={translateBusyByKey}
                        allowSelection={!isCorrectionReview || latestCorrections.some(x => x.path === p.path)}
                        acceptedTaskIds={acceptedTaskIds}
+                       showDecisionEditor={isCorrectionReview && latestCorrections.some(x => x.id === p.id) && !decidedPhotoIds.has(String(p.id))}
                       />
+                      {isCorrectionReview && latestCorrections.some(x => x.id === p.id) && !decidedPhotoIds.has(String(p.id)) && <div style={{display:'flex',gap:8,marginTop:8}}><button type="button" disabled={decisionBusy} onClick={() => decideCorrection(p,'accepted')} style={ui.btnPrimary}>✓ Accept Fix</button><button type="button" disabled={decisionBusy} onClick={() => decideCorrection(p,'rejected')} style={ui.btnSecondary}>↻ Request Another Fix</button></div>}
+                      </div>
                     ))}
                   </div>
                 </div>
