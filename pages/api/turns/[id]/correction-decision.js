@@ -16,6 +16,53 @@ async function managerFor(req,res,turn) {
   if (!prop) { res.status(403).json({error:'Property access denied'}); return null; }
   return manager;
 }
+
+// Notify only the cleaner assigned to this turnover. Never fall back to another cleaner.
+function normalizeE164(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const digits = raw.replace(/\D/g, '');
+  if (digits.length === 10) return `+1${digits}`;
+  if (digits.length >= 11 && digits.length <= 15 && raw.startsWith('+')) return `+${digits}`;
+  if (digits.length === 11 && digits.startsWith('1')) return `+${digits}`;
+  return null;
+}
+async function notifyAssignedCleaner(turn) {
+  try {
+    if (!turn.cleaner_id) {
+      console.warn('[correction-decision sms] skipped: turnover has no assigned cleaner', { turnId: turn.id });
+      return;
+    }
+    const { data: cleaner, error: ce } = await supa.from('cleaners')
+      .select('phone').eq('id', turn.cleaner_id).maybeSingle();
+    if (ce) throw ce;
+    const to = normalizeE164(cleaner?.phone);
+    if (!to) {
+      console.warn('[correction-decision sms] skipped: assigned cleaner has no valid phone', { turnId: turn.id });
+      return;
+    }
+    if (!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_FROM_NUMBER)) {
+      console.warn('[correction-decision sms] skipped: Twilio configuration missing', { turnId: turn.id });
+      return;
+    }
+    const { data: property, error: pe } = await supa.from('properties')
+      .select('name').eq('id', turn.property_id).maybeSingle();
+    if (pe) throw pe;
+    const base = process.env.APP_BASE_URL || process.env.NEXT_PUBLIC_APP_BASE_URL ||
+      process.env.NEXT_PUBLIC_SITE_URL || 'https://www.turnqa.com';
+    const url = `${base.replace(/\/+$/, '')}/turns/${encodeURIComponent(turn.id)}/capture?tab=needs-fix`;
+    const body = `TurnQA: Another correction is needed${property?.name ? ` at ${property.name}` : ''}.\nReview the manager's note and upload a new photo.\nResume here: ${url}`;
+    const twilio = require('twilio')(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+    const result = await twilio.messages.create({ to, from: process.env.TWILIO_FROM_NUMBER, body });
+    console.log('[correction-decision sms] accepted by provider', { turnId: turn.id, sid: result?.sid });
+  } catch (error) {
+    // The correction decision has already committed; an SMS failure must not turn it into a 500.
+    console.error('[correction-decision sms] notification failed after decision saved', {
+      turnId: turn.id, message: error?.message || String(error)
+    });
+  }
+}
+
 export default async function handler(req,res) {
   if (!['GET','POST'].includes(req.method)) { res.setHeader('Allow',['GET','POST']); return res.status(405).json({error:'Method Not Allowed'}); }
   const turnId = String(req.query.id || '');
@@ -60,8 +107,11 @@ export default async function handler(req,res) {
       if (code) return res.status(409).json({error:code});
       throw error;
     }
-    // The final rejection returns the turn to needs_fix. Existing manager
-    // notifications remain unchanged; do not send SMS to any other cleaner.
+    // Only the final rejection moves a submitted turn back to needs_fix.
+    // Do not notify on intermediate rejections, acceptances, or duplicate requests.
+    if (decision === 'rejected' && data?.status === 'needs_fix' && turn.status === 'submitted') {
+      await notifyAssignedCleaner(turn);
+    }
     return res.status(200).json(data);
   } catch(e) { console.error('[correction-decision]',e); return res.status(500).json({error:'Unable to process correction decision'}); }
 }
