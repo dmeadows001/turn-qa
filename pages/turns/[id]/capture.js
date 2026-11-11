@@ -890,7 +890,21 @@ export default function Capture() {
           key: r.correction_task_id || r.id || `legacy-${index}`,
           managerText: r.note_sent || r.note_translated || r.note_original || r.note || '',
         }));
-        if (!cancelled) setActiveTasks(tasks);
+        // Rejection feedback is stored separately from the original finding.
+        // Overlay the newest rejected decision so the cleaner sees the current
+        // instruction without losing the original finding's audit trail.
+        const decisionResponse = await fetch(`/api/turns/${encodeURIComponent(turnId)}/correction-decision`);
+        if (!decisionResponse.ok) throw new Error('Could not load correction feedback');
+        const decisionPayload = await decisionResponse.json();
+        const latestByTask = new Map();
+        for (const d of (decisionPayload.decisions || [])) latestByTask.set(d.correction_task_id, d);
+        const updatedTasks = tasks.map(t => {
+          const d = latestByTask.get(t.correction_task_id);
+          return d?.decision === 'rejected' ? {
+            ...t, managerText: d.note_sent || d.note_translated || d.note_original || d.note || t.managerText,
+          } : t;
+        });
+        if (!cancelled) setActiveTasks(updatedTasks);
       } catch (error) {
         if (!cancelled) setTasksError(error.message || 'Unable to load correction tasks');
       } finally {
@@ -1530,7 +1544,7 @@ export default function Capture() {
   return (
     <ChromeDark title="Start Taking Photos">
       <div style={{ padding: '8px 16px 12px', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12 }}>
-        <a href="/cleaner/turns" style={{ color: '#93c5fd', fontWeight: 700, textDecoration: 'underline' }}>← Back to My Turns</a>
+        <a href="/turns" style={{ color: '#93c5fd', fontWeight: 700, textDecoration: 'underline' }}>← Back to My Turns</a>
         <span style={{ color: '#cbd5e1', fontSize: 13 }}>
           {templateRules?.property ? `Property: ${templateRules.property} · ` : ''}
           {isFixMode ? 'Correction review' : 'Photo capture'}
