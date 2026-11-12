@@ -131,7 +131,6 @@ async function requireManagerBillingActive(userId) {
   return { ok: true, profile: prof };
 }
 
-
 export default async function handler(req, res) {
   try {
     if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
@@ -146,7 +145,6 @@ export default async function handler(req, res) {
     let userId = null;
     let managerId = null;
     let cleanerId = null;
-
 
     if (token) {
       const role = await resolveRoleFromBearer(token);
@@ -169,25 +167,23 @@ export default async function handler(req, res) {
     const authz = await authorizeForTurn({ turnId, managerId, cleanerId });
     if (!authz.ok) return res.status(403).json({ error: authz.error || 'Not authorized' });
 
-    // ✅ Billing gate: only for managers (cleaners are not blocked)
+    // Billing gate: only for managers (cleaners are not blocked)
     if (authz.mode === 'manager') {
-    if (!userId) return res.status(401).json({ error: 'Missing user context' });
+      if (!userId) return res.status(401).json({ error: 'Missing user context' });
 
-  const bill = await requireManagerBillingActive(userId);
-  if (!bill.ok) {
-    return res.status(402).json({
-      error: bill.error || 'Subscription required',
-      code: bill.code || 'BILLING_REQUIRED',
-      active_until: bill.active_until || null,
-      subscription_status: bill.subscription_status || null,
-    });
-  }
-}
+      const bill = await requireManagerBillingActive(userId);
+      if (!bill.ok) {
+        return res.status(402).json({
+          error: bill.error || 'Subscription required',
+          code: bill.code || 'BILLING_REQUIRED',
+          active_until: bill.active_until || null,
+          subscription_status: bill.subscription_status || null,
+        });
+      }
+    }
 
-
-    // Query strategy:
-    // - If Bearer token is present, read via RLS client
-    // - If cleaner cookie session, use admin AFTER explicit authorization
+    // If Bearer token is present, read turn via RLS client.
+    // If cleaner cookie session, use admin AFTER explicit authorization.
     const useRls = !!token;
     const db = useRls ? createRlsClient(token) : admin;
 
@@ -195,6 +191,26 @@ export default async function handler(req, res) {
 
     if (error) return res.status(500).json({ error: error.message });
     if (!turn) return res.status(404).json({ error: 'Not found' });
+
+    // Property display data is loaded only AFTER turn authorization and billing.
+    // Use admin to avoid property-table RLS differences; expose only display fields.
+    // Selecting * avoids assuming optional display columns exist in every schema.
+    if (turn.property_id) {
+      const { data: property, error: propertyError } = await admin
+        .from('properties')
+        .select('*')
+        .eq('id', turn.property_id)
+        .maybeSingle();
+      if (propertyError) {
+        console.error('[get-turn] property lookup failed', propertyError);
+      } else if (property) {
+        const name = property.name || property.property_name || property.title || property.nickname || null;
+        const address = property.address || property.street_address || null;
+        turn.property = { name, address, street_address: property.street_address || null };
+        turn.property_name = name;
+        turn.property_address = address;
+      }
+    }
 
     return res.status(200).json({ turn });
   } catch (e) {
