@@ -440,6 +440,8 @@ const PhotoCard = memo(
     acceptedTaskIds,
     correctionDecisionByPhotoId,
     showDecisionEditor = false,
+    originalFlagged = false,
+    readOnly = false,
   }) {
     const k = keyFor(p);
     const selected = selectedKeys.has(k);
@@ -456,13 +458,15 @@ const PhotoCard = memo(
     const flaggedFromRow = false; // legacy flags may remain true after a later round
     // Only ORIGINAL photos can be “needs fix”
     const flagged = !acceptedTaskIds?.has(p.correction_task_id) && (flaggedFromFindings || flaggedFromRow);
+    const isOriginalNeedsFix = !isFix && (originalFlagged || !!p.needs_fix || flaggedFromFindings);
     // Per-photo decisions, not task-level acceptance: earlier rejected attempts
     // must remain red even when a later attempt resolves the same task.
     const fixDecision = isFix ? correctionDecisionByPhotoId?.get(String(p.id)) : null;
     const accepted = isFix && fixDecision === 'accepted';
     const rejected = isFix && fixDecision === 'rejected';
 
-    const styleCard = accepted ? { border: '1px solid #065f46' } : rejected ? { border: '1px solid #991b1b' } : flagged ? flaggedCardStyle : isFix ? fixCardStyle : null;
+    // One neutral border for all photos; badges alone communicate the audit status.
+    const styleCard = null;
 
     const busy = !!(translateBusyByKey && translateBusyByKey[k]);
 
@@ -498,19 +502,19 @@ const PhotoCard = memo(
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <b>{p.area_key || '—'}</b>
 
-              {flagged && (
+              {isOriginalNeedsFix && (
                 <span
                   style={{
                     padding: '2px 8px',
                     borderRadius: 999,
                     fontSize: 11,
                     fontWeight: 700,
-                    color: '#fcd34d',
-                    background: '#4a2f04',
-                    border: '1px solid #d97706',
+                    color: '#bfdbfe',
+                    background: '#172554',
+                    border: '1px solid #3b82f6',
                   }}
                 >
-                  needs fix
+                  Original Needs Fix
                 </span>
               )}
 
@@ -537,7 +541,7 @@ const PhotoCard = memo(
               )}
             </div>
 
-             {isManagerMode && allowSelection && !isFix && (
+             {isManagerMode && !readOnly && allowSelection && !isFix && (
               <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', userSelect: 'none' }}>
                 <input
                   type="checkbox"
@@ -552,7 +556,7 @@ const PhotoCard = memo(
 
           <div style={{ color: '#9ca3af' }}>{new Date(p.created_at).toLocaleString()}</div>
           {/* Show note + translation UI for selected original OR correction photos */}
-          {isManagerMode && (selected || showDecisionEditor) && (
+          {isManagerMode && !readOnly && (selected || showDecisionEditor) && (
             <div style={{ marginTop: 10 }}>
               <div
                 style={{
@@ -699,6 +703,8 @@ const PhotoCard = memo(
      if (prev.allowSelection !== next.allowSelection || prev.showDecisionEditor !== next.showDecisionEditor) return false;
      if (!!prev.acceptedTaskIds?.has(prev.p.correction_task_id) !== !!next.acceptedTaskIds?.has(next.p.correction_task_id)) return false;
      if (prev.p.needs_fix !== next.p.needs_fix || prev.p.correction_task_id !== next.p.correction_task_id) return false;
+    if (prev.originalFlagged !== next.originalFlagged || prev.readOnly !== next.readOnly) return false;
+    if (prev.correctionDecisionByPhotoId?.get(String(prev.p.id)) !== next.correctionDecisionByPhotoId?.get(String(next.p.id))) return false;
 
     return true; // unchanged → skip render
   }
@@ -945,6 +951,7 @@ export default function Review() {
   const visiblePhotos = isCorrectionReview && !viewFullTurn ? latestCorrections : photos;
   const sections = useMemo(() => buildSections(visiblePhotos, templateShots), [visiblePhotos, templateShots]);
   const acceptedTaskIds = useMemo(() => new Set(correctionDecisions.filter(d => d.decision === 'accepted').map(d => d.correction_task_id)), [correctionDecisions]);
+  const readOnly = status === 'approved';
   // Match the actual decision to each individual correction photo.
   const correctionDecisionByPhotoId = useMemo(() => {
     const byPhoto = new Map();
@@ -1027,11 +1034,17 @@ export default function Review() {
     });
   }, [photos, activeFindings, correctionHistory, latestByTask, templateShots]);
 
+  // Original photos remain identifiable even after the task has been accepted.
+  const originalFlaggedPhotoIds = useMemo(() => new Set([
+    ...activeFindings.map(f => String(f.photo_id || '')),
+    ...correctionGroups.map(g => String(g.original?.id || '')),
+  ].filter(Boolean)), [activeFindings, correctionGroups]);
+
   // Display property information when supplied by get-turn, without changing the API.
   const propertyLabel = turn?.property?.name || turn?.property_name || turn?.property?.address || turn?.property_address || turn?.property?.street_address || '';
 
   async function decideCorrection(p, decision) {
-    if (!p.correction_task_id || !p.id || decisionBusy) return;
+    if (readOnly || !p.correction_task_id || !p.id || decisionBusy) return;
     const noteObj = normalizeNote(notesByKey[keyFor(p)]);
     if (decision === 'rejected' && !String(noteObj.translated || noteObj.original || '').trim()) {
       alert('Enter a reason for requesting another fix. Translate to Spanish when appropriate.');
@@ -1151,6 +1164,7 @@ export default function Review() {
 
   // --- Approve ---
   async function markApproved() {
+    if (readOnly) return;
     if (activeFindings.length > 0 && !allCorrectionsAccepted) { alert('Accept every outstanding correction first.'); return; }
     if (!turnId) return;
     setActing(true);
@@ -1187,7 +1201,7 @@ export default function Review() {
 
   // --- Needs Fix (with notes) ---
   async function sendNeedsFix() {
-    if (!turnId) return;
+    if (readOnly || !turnId) return;
     setActing(true);
     try {
       const payloadNotes = [];
@@ -1331,7 +1345,7 @@ export default function Review() {
   return (
     <ChromeDark title="Turn Review">
       {/* ✅ Manager Getting Started popup */}
-      <GettingStartedModal enabled={isManagerMode} storageKey="turnqa_gs_manager_review_v1">
+      <GettingStartedModal enabled={isManagerMode && !readOnly} storageKey="turnqa_gs_manager_review_v1">
         <div style={{ marginBottom: 10 }}>
           For any photo that needs fixing, check <b>Needs fix</b>. Then type your note in <b>English</b>.
         </div>
@@ -1554,6 +1568,8 @@ export default function Review() {
                                  <div style={{ marginTop: 10, padding: 0, background: 'transparent' }}>
                                    <PhotoCard
                                      p={photo}
+                                     readOnly={readOnly}
+                                     originalFlagged={originalFlaggedPhotoIds.has(String(photo.id))}
                                      isManagerMode={isManagerMode}
                                      selectedKeys={selectedKeys}
                                      notesByKey={notesByKey}
@@ -1623,6 +1639,8 @@ export default function Review() {
                     <PhotoCard
                       key={keyFor(p)}
                       p={p}
+                      readOnly={readOnly}
+                      originalFlagged={originalFlaggedPhotoIds.has(String(p.id))}
                       isManagerMode={isManagerMode}
                       selectedKeys={selectedKeys}
                       notesByKey={notesByKey}
@@ -1631,7 +1649,7 @@ export default function Review() {
                       toggleKey={toggleKey}
                       onTranslate={onTranslate}
                       translateBusyByKey={translateBusyByKey}
-                      allowSelection={!isCorrectionReview && !p.is_fix}
+                      allowSelection={!readOnly && !isCorrectionReview && !p.is_fix}
                       acceptedTaskIds={acceptedTaskIds}
                       correctionDecisionByPhotoId={correctionDecisionByPhotoId}
                       showDecisionEditor={false}
@@ -1692,6 +1710,8 @@ export default function Review() {
                       <div key={keyFor(p)}><PhotoCard
                         key={keyFor(p)}
                         p={p}
+                      readOnly={readOnly}
+                      originalFlagged={originalFlaggedPhotoIds.has(String(p.id))}
                         isManagerMode={isManagerMode}
                         selectedKeys={selectedKeys}
                         notesByKey={notesByKey}
@@ -1700,7 +1720,7 @@ export default function Review() {
                         toggleKey={toggleKey}
                         onTranslate={onTranslate}
                         translateBusyByKey={translateBusyByKey}
-                       allowSelection={!isCorrectionReview && !p.is_fix}
+                       allowSelection={!readOnly && !isCorrectionReview && !p.is_fix}
                        acceptedTaskIds={acceptedTaskIds}
                        correctionDecisionByPhotoId={correctionDecisionByPhotoId}
                        showDecisionEditor={false}
@@ -1759,7 +1779,7 @@ export default function Review() {
                 </div>
               )}
 
-              <div style={{ marginTop: 10 }}>
+              {!readOnly ? <div style={{ marginTop: 10 }}>
                 <div
                   style={{
                     display: 'flex',
@@ -1828,6 +1848,12 @@ export default function Review() {
                 </div>
               </div>
 
+              : <div style={{ marginTop: 12, color: '#94a3b8', fontSize: 13 }}>
+                  This approved turnover is read-only. Its photos, notes, and correction history are preserved.
+                  {!!summaryNote.original && <div style={{ marginTop: 10, whiteSpace: 'pre-wrap', color: '#cbd5e1' }}><b>Manager summary (EN):</b> {summaryNote.original}</div>}
+                  {!!summaryNote.translated && <div style={{ marginTop: 8, whiteSpace: 'pre-wrap', color: '#cbd5e1' }}><b>Manager summary (ES):</b> {summaryNote.translated}</div>}
+                </div>}
+
               <div style={{ display: 'flex', gap: 10, marginTop: 12, flexWrap: 'wrap' }}>
                 {!isCorrectionReview && status === 'submitted' && <button
                   onClick={sendNeedsFix}
@@ -1851,7 +1877,7 @@ export default function Review() {
             </div>
           )}
 
-        {isManagerMode && (
+        {isManagerMode && !readOnly && (
           <div style={{ ...ui.card, marginTop: 16, border: '1px solid #334155' }}>
             <h3 style={{ margin: '0 0 8px', fontSize: 19 }}>Final Turn Approval</h3>
             <p style={{ color: '#94a3b8', fontSize: 13, marginTop: 0 }}>Approve the entire turnover after all required corrections have been accepted.</p>
