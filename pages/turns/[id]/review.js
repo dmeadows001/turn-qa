@@ -480,10 +480,6 @@ const PhotoCard = memo(
           </div>
 
           <div style={{ color: '#9ca3af' }}>{new Date(p.created_at).toLocaleString()}</div>
-          <div style={{ color: '#64748b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {p.path}
-          </div>
-
           {/* Show note + translation UI for selected original OR correction photos */}
           {isManagerMode && (selected || showDecisionEditor) && (
             <div style={{ marginTop: 10 }}>
@@ -878,6 +874,24 @@ export default function Review() {
   // is accepted when its task no longer appears in the active round, and the
   // turn has been approved or another review round has been submitted.
   const acceptedTaskIds = useMemo(() => new Set(correctionDecisions.filter(d => d.decision === 'accepted').map(d => d.correction_task_id)), [correctionDecisions]);
+
+  // Historical correction attempts are sourced from persisted photos and decisions.
+  // Do not infer a decision from a photo's age or the current turn status.
+  const correctionHistory = useMemo(() => {
+    const decisionsByPhoto = new Map(correctionDecisions.map(d => [String(d.photo_id), d]));
+    const groups = new Map();
+    for (const photo of photos) {
+      if (!photo.is_fix || !photo.correction_task_id) continue;
+      const key = String(photo.correction_task_id);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push({ photo, decision: decisionsByPhoto.get(String(photo.id)) || null });
+    }
+    return [...groups.entries()].map(([taskId, attempts]) => ({
+      taskId,
+      attempts: attempts.sort((a,b) => new Date(a.photo.created_at || 0) - new Date(b.photo.created_at || 0)),
+    }));
+  }, [photos, correctionDecisions]);
+  const hasCorrectionHistory = isManagerMode && (correctionHistory.length > 0 || activeFindings.some(f => f.correction_task_id));
 
   // Display property information when supplied by get-turn, without changing the API.
   const propertyLabel = turn?.property?.name || turn?.property_name || turn?.property?.address || turn?.property_address || turn?.property?.street_address || '';
@@ -1305,6 +1319,16 @@ export default function Review() {
             </div>
           </div>
 
+          {isManagerMode && (
+            <div style={{ marginTop: 16 }}>
+              <h2 style={{ margin: 0, fontSize: 25, color: '#f8fafc' }}>
+                {propertyLabel || 'Property review'}
+              </h2>
+              <div style={{ color: '#94a3b8', fontSize: 12, marginTop: 4 }}>
+                {propertyLabel ? 'Turn review' : 'Property name unavailable from current turn response'}
+              </div>
+            </div>
+          )}
           <h2 style={{ marginTop: 12, marginBottom: 6 }}>
             Review Photos
             <span style={{ marginLeft: 10, verticalAlign: 'middle' }}>
@@ -1466,26 +1490,56 @@ export default function Review() {
             </div>
           )}
 
-           {isCorrectionReview && (
+           {hasCorrectionHistory && (
              <div style={{ marginTop: 18, padding: '18px 20px', border: '1px solid #3b82f6', borderRadius: 14, background: 'rgba(30, 64, 120, 0.28)', boxShadow: 'inset 0 0 0 1px rgba(147,197,253,0.08)' }}>
                <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:12,flexWrap:'wrap'}}>
                  <div>
-                   <div style={{fontSize:12,color:'#93c5fd',fontWeight:800,letterSpacing:'.07em',textTransform:'uppercase'}}>Manager action required</div>
+                   <div style={{fontSize:12,color:'#93c5fd',fontWeight:800,letterSpacing:'.07em',textTransform:'uppercase'}}>{isCorrectionReview ? 'Manager action required' : status === 'needs_fix' ? 'Awaiting cleaner' : 'Correction history'}</div>
                    <h3 style={{margin:'5px 0 7px',fontSize:20,color:'#f8fafc'}}>Correction Review</h3>
                    <div style={{color:'#cbd5e1',lineHeight:1.5}}>
-                     Review the latest replacement photo for each outstanding issue. Accept a satisfactory fix, or request another photo with specific feedback.
+                     {isCorrectionReview ? 'Review the latest replacement photo for each outstanding issue. Accept a satisfactory fix, or request another photo with specific feedback.' : status === 'needs_fix' ? 'The cleaner has been asked to submit another correction. Previous attempts and feedback are below.' : 'Review the recorded correction attempts and decisions below.'}
                    </div>
                  </div>
                  <span style={{background:'#172554',border:'1px solid #3b82f6',color:'#bfdbfe',padding:'6px 10px',borderRadius:999,fontSize:12,fontWeight:800}}>
                    {taskIds.size} outstanding {taskIds.size === 1 ? 'issue' : 'issues'}
                  </span>
                </div>
-               {unresolvedTaskCount > 0 && <div style={{color:'#fca5a5',marginTop:12}}>{unresolvedTaskCount} issue(s) have no identifiable replacement photo. Approval is blocked until resolved.</div>}
+               {isCorrectionReview && unresolvedTaskCount > 0 && <div style={{color:'#fca5a5',marginTop:12}}>{unresolvedTaskCount} issue(s) have no identifiable replacement photo. Approval is blocked until resolved.</div>}
+               <div style={{ marginTop: 18, display: 'grid', gap: 12 }}>
+                 {correctionHistory.map(group => (
+                   <div key={group.taskId} style={{ border: '1px solid #475569', borderRadius: 12, background: '#0b1220', padding: 12 }}>
+                     <div style={{ fontWeight: 800, color: '#e2e8f0', marginBottom: 10 }}>Correction attempts ({group.attempts.length})</div>
+                     {group.attempts.map(({photo,decision}, index) => {
+                       const isLatest = index === group.attempts.length - 1;
+                       const state = decision?.decision === 'accepted' ? 'Accepted' : decision?.decision === 'rejected' ? 'Rejected' : isCorrectionReview && isLatest ? 'Awaiting review' : 'Submitted';
+                       const stateColor = state === 'Accepted' ? '#86efac' : state === 'Rejected' ? '#fca5a5' : '#93c5fd';
+                       return (
+                         <details key={photo.id} open={isLatest} style={{ marginTop: 8, border: '1px solid #334155', borderRadius: 10, padding: 10 }}>
+                           <summary style={{ cursor: 'pointer', fontWeight: 700, color: '#f8fafc' }}>
+                             Attempt {index + 1} <span style={{ color: stateColor, marginLeft: 10 }}>{state}</span>
+                           </summary>
+                           <div style={{ marginTop: 10, display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                             <a href={photo.url} target="_blank" rel="noreferrer"><img src={photo.url} alt={'Correction attempt ' + (index + 1)} style={{ width: 180, maxWidth: '100%', borderRadius: 8 }} /></a>
+                             <div style={{ flex: 1, minWidth: 180, fontSize: 13, lineHeight: 1.5 }}>
+                               <div style={{ color: '#94a3b8' }}>{photo.created_at ? new Date(photo.created_at).toLocaleString() : ''}</div>
+                               {photo.cleaner_note && <div style={{ marginTop: 6 }}><b>Cleaner note:</b> {photo.cleaner_note}</div>}
+                               {decision?.note && <div style={{ marginTop: 6, color: '#fde68a' }}><b>Manager feedback:</b> {decision.note}</div>}
+                             </div>
+                           </div>
+                         </details>
+                       );
+                     })}
+                     {status === 'needs_fix' && activeFindings.some(f => String(f.correction_task_id) === group.taskId) && (
+                       <div style={{ color: '#fcd34d', marginTop: 12, fontWeight: 700 }}>Next attempt — awaiting cleaner upload</div>
+                     )}
+                   </div>
+                 ))}
+               </div>
                <div style={{marginTop:14,display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
-                 <button type="button" style={{...ui.btnSecondary,background:'#172554',border:'1px solid #60a5fa',color:'#dbeafe',fontWeight:700}} onClick={() => setViewFullTurn(v => !v)}>
-                   {viewFullTurn ? '← Show Latest Corrections' : 'View Full Turn & Photo History'}
-                 </button>
-                 <span style={{color:'#94a3b8',fontSize:12}}>{viewFullTurn ? 'Showing original photos and previous attempts for reference.' : 'Showing only the latest submitted correction for each issue.'}</span>
+                 {isCorrectionReview && <button type="button" style={{...ui.btnSecondary,background:'#172554',border:'1px solid #60a5fa',color:'#dbeafe',fontWeight:700}} onClick={() => setViewFullTurn(v => !v)}>
+                   {viewFullTurn ? '← Show Standard Photo View' : 'View Full Turn & Photo History'}
+                 </button>}
+                 <span style={{color:'#94a3b8',fontSize:12}}>{viewFullTurn ? 'Showing all photos for reference.' : isCorrectionReview ? 'Showing latest submitted corrections below.' : 'Full photo set shown below; expand attempts above for history.'}</span>
                </div>
              </div>
            )}
