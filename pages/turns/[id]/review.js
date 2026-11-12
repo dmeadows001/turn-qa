@@ -1063,7 +1063,28 @@ export default function Review() {
       const finding = findingsByTask.get(taskId) || null;
       const attempts = historyByTask.get(taskId) || [];
       const latest = latestByTask.get(taskId) || null;
-      const original = finding?.photo_id ? photosById.get(String(finding.photo_id)) : null;
+      // Some findings API responses omit photo_id even though qa_findings stores it.
+      // Recover the original using the finding's exact storage path first.
+      // Only use shot_id as a fallback when there is exactly ONE eligible
+      // original in that shot, so separate required photos never get merged.
+      let original = finding?.photo_id ? photosById.get(String(finding.photo_id)) : null;
+      if (!original && finding) {
+        const rawPaths = [finding.path, finding.storage_path, finding.evidence_url]
+          .filter(Boolean).map(v => String(v).split('?')[0]);
+        const exactMatches = photos.filter(p => !p.is_fix && rawPaths.some(path =>
+          path === p.path || path.endsWith('/' + p.path) ||
+          (p.path && path.includes(encodeURIComponent(p.path)))
+        ));
+        if (exactMatches.length === 1) original = exactMatches[0];
+      }
+      if (!original && attempts.length) {
+        const attemptShotIds = [...new Set(attempts.map(a => a.photo?.shot_id).filter(Boolean))];
+        if (attemptShotIds.length === 1) {
+          const candidates = photos.filter(p => !p.is_fix && p.shot_id === attemptShotIds[0]);
+          // Never infer by room/area: a room can contain many required photos.
+          if (candidates.length === 1) original = candidates[0];
+        }
+      }
       const representative = original || latest || attempts[0]?.photo;
       const area = representative?.area_key || templateShots.find(t => t.shot_id === representative?.shot_id)?.label || 'Correction issue';
       return { taskId, index, finding, attempts, latest, original, area };
@@ -1084,8 +1105,11 @@ export default function Review() {
 
     for (const group of correctionGroups) {
       const original = group.original;
-      if (!original?.id || !registeredIds.has(String(original.id))) continue;
-      const attempts = group.attempts.map(a => a.photo).filter(p => p?.id && registeredIds.has(String(p.id)));
+      if (!original?.id || !registeredIds.has(String(original.id))) {
+        if (group.attempts.length) console.warn('[review] Cannot link correction history to a unique original photo:', group.taskId);
+        continue;
+      }
+      const attempts = group.attempts.map(a => a.photo).filter(p => p?.id && registeredIds.has(String(p.id)) && String(p.id) !== String(original.id));
       if (!attempts.length) continue;
       // Prefer the latest accepted attempt, otherwise the latest attempt.
       // A rejected latest attempt remains visible until a new fix arrives.
