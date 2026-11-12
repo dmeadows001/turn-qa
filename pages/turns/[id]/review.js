@@ -878,13 +878,23 @@ export default function Review() {
   // Historical correction attempts are sourced from persisted photos and decisions.
   // Do not infer a decision from a photo's age or the current turn status.
   const correctionHistory = useMemo(() => {
-    const decisionsByPhoto = new Map(correctionDecisions.map(d => [String(d.photo_id), d]));
+    const byPhotoId = new Map(photos.map(p => [String(p.id), p]));
     const groups = new Map();
+    const recorded = new Set();
+    for (const d of correctionDecisions) {
+      const photo = byPhotoId.get(String(d.photo_id));
+      if (!photo) continue;
+      const taskId = String(d.correction_task_id || photo.correction_task_id || '');
+      if (!taskId) continue;
+      if (!groups.has(taskId)) groups.set(taskId, []);
+      groups.get(taskId).push({ photo, decision: d });
+      recorded.add(String(photo.id));
+    }
     for (const photo of photos) {
-      if (!photo.is_fix || !photo.correction_task_id) continue;
-      const key = String(photo.correction_task_id);
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key).push({ photo, decision: decisionsByPhoto.get(String(photo.id)) || null });
+      if (!photo.is_fix || !photo.correction_task_id || recorded.has(String(photo.id))) continue;
+      const taskId = String(photo.correction_task_id);
+      if (!groups.has(taskId)) groups.set(taskId, []);
+      groups.get(taskId).push({ photo, decision: null });
     }
     return [...groups.entries()].map(([taskId, attempts]) => ({
       taskId,
@@ -1352,144 +1362,6 @@ export default function Review() {
             </div>
           )}
 
-          {isManagerMode && (
-            <div
-              style={{
-                margin: '12px 0 6px',
-                padding: 12,
-                border: '1px solid #334155',
-                borderRadius: 12,
-                background: '#0f172a',
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                <div style={{ fontWeight: 700 }}>Status:</div>
-                <span style={badgeStyle(status)}>{status || '—'}</span>
-                {loadErr && <span style={{ color: '#fca5a5' }}>({loadErr})</span>}
-              </div>
-
-              {lastCleanerNote && (
-                <div
-                  style={{
-                    marginTop: 10,
-                    padding: 12,
-                    borderRadius: 8,
-                    border: '1px solid #065f46',
-                    background: '#052e2b',
-                    color: '#86efac',
-                    boxShadow: '0 0 0 3px rgba(5,150,105,0.20) inset',
-                  }}
-                >
-                  <div
-                    style={{
-                      fontSize: 12,
-                      fontWeight: 700,
-                      color: '#bbf7d0',
-                      marginBottom: 6,
-                      textTransform: 'uppercase',
-                      letterSpacing: 0.03,
-                    }}
-                  >
-                    Cleaner note
-                  </div>
-                  <div style={{ whiteSpace: 'pre-wrap' }}>{lastCleanerNote}</div>
-                </div>
-              )}
-
-              <div style={{ marginTop: 10 }}>
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: 10,
-                    marginBottom: 6,
-                  }}
-                >
-                  <div style={{ fontSize: 12, fontWeight: 700, color: '#9ca3af' }}>
-                    Optional overall note to cleaner (summary) — Original (EN)
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={translateSummaryToEs}
-                    disabled={summaryBusy || !String(summaryNote.original || '').trim()}
-                    style={{
-                      ...ui.btnSecondary,
-                      padding: '6px 10px',
-                      border: '1px solid #334155',
-                      background: '#0b1220',
-                      color: '#cbd5e1',
-                      opacity: summaryBusy || !String(summaryNote.original || '').trim() ? 0.6 : 1,
-                    }}
-                    title="Translate English → Spanish"
-                  >
-                    {summaryBusy ? 'Translating…' : 'Translate → ES'}
-                  </button>
-                </div>
-
-                <textarea
-                  value={summaryNote.original}
-                  onChange={(e) => setSummaryNote((prev) => ({ ...prev, original: e.target.value, sourceLang: 'en' }))}
-                  rows={3}
-                  placeholder="Write your summary in English…"
-                  style={{
-                    ...ui.input,
-                    width: '100%',
-                    padding: '10px 12px',
-                    resize: 'vertical',
-                    background: '#0b1220',
-                  }}
-                />
-
-                <div style={{ fontSize: 12, fontWeight: 700, color: '#9ca3af', margin: '10px 0 6px' }}>
-                  Translated (ES) — sent to cleaner
-                </div>
-
-                <textarea
-                  value={summaryNote.translated}
-                  onChange={(e) => setSummaryNote((prev) => ({ ...prev, translated: e.target.value, targetLang: 'es' }))}
-                  rows={3}
-                  placeholder="Spanish will appear here… (editable)"
-                  style={{
-                    ...ui.input,
-                    width: '100%',
-                    padding: '10px 12px',
-                    resize: 'vertical',
-                    background: '#0b1220',
-                  }}
-                />
-
-                <div style={{ marginTop: 6, fontSize: 11, color: '#64748b' }}>
-                  Tip: If you change the English above, click Translate again to refresh the Spanish.
-                </div>
-              </div>
-
-              <div style={{ display: 'flex', gap: 10, marginTop: 12, flexWrap: 'wrap' }}>
-                {!isCorrectionReview && status === 'submitted' && <button
-                  onClick={sendNeedsFix}
-                  disabled={acting || !turnId}
-                  style={{
-                    ...ui.btnSecondary,
-                    border: '1px solid #d97706',
-                    background: '#4a2f04',
-                    color: '#fcd34d',
-                  }}
-                >
-                  {acting ? '…' : '🛠️ Send Needs Fix (with notes)'}
-                </button>}
-
-                <button onClick={markApproved} disabled={acting || !turnId || status !== 'submitted' || (isCorrectionReview && (pendingDecisionCount > 0 || rejectedCount > 0 || taskIds.size > 0))} style={ui.btnPrimary}>
-                  {acting ? '…' : '✅ Approve Turn'}
-                </button>
-
-                <button type="button" onClick={openHistory} disabled={!turnId} style={ui.btnSecondary}>
-                  🕘 View History
-                </button>
-              </div>
-            </div>
-          )}
-
            {hasCorrectionHistory && (
              <div style={{ marginTop: 18, padding: '18px 20px', border: '1px solid #3b82f6', borderRadius: 14, background: 'rgba(30, 64, 120, 0.28)', boxShadow: 'inset 0 0 0 1px rgba(147,197,253,0.08)' }}>
                <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:12,flexWrap:'wrap'}}>
@@ -1664,6 +1536,149 @@ export default function Review() {
           )}
         </div>
 
+          {isManagerMode && (
+            <div
+              style={{
+                margin: '12px 0 6px',
+                padding: 12,
+                border: '1px solid #334155',
+                borderRadius: 12,
+                background: '#0f172a',
+              }}
+            >
+              <h3 style={{ margin: 0, fontSize: 19, color: '#f8fafc' }}>Overall Turn Conversation</h3>
+              <p style={{ margin: '6px 0 12px', color: '#94a3b8', fontSize: 13 }}>General messages about this turnover. Notes about an individual photo belong with that photo.</p>
+              {loadErr && <div style={{ color: '#fca5a5' }}>{loadErr}</div>}
+
+              {lastCleanerNote && (
+                <div
+                  style={{
+                    marginTop: 10,
+                    padding: 12,
+                    borderRadius: 8,
+                    border: '1px solid #065f46',
+                    background: '#052e2b',
+                    color: '#86efac',
+                    boxShadow: '0 0 0 3px rgba(5,150,105,0.20) inset',
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: 12,
+                      fontWeight: 700,
+                      color: '#bbf7d0',
+                      marginBottom: 6,
+                      textTransform: 'uppercase',
+                      letterSpacing: 0.03,
+                    }}
+                  >
+                    Cleaner note
+                  </div>
+                  <div style={{ whiteSpace: 'pre-wrap' }}>{lastCleanerNote}</div>
+                </div>
+              )}
+
+              <div style={{ marginTop: 10 }}>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 10,
+                    marginBottom: 6,
+                  }}
+                >
+                  <div style={{ fontSize: 12, fontWeight: 700, color: '#9ca3af' }}>
+                    Optional overall note to cleaner (summary) — Original (EN)
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={translateSummaryToEs}
+                    disabled={summaryBusy || !String(summaryNote.original || '').trim()}
+                    style={{
+                      ...ui.btnSecondary,
+                      padding: '6px 10px',
+                      border: '1px solid #334155',
+                      background: '#0b1220',
+                      color: '#cbd5e1',
+                      opacity: summaryBusy || !String(summaryNote.original || '').trim() ? 0.6 : 1,
+                    }}
+                    title="Translate English → Spanish"
+                  >
+                    {summaryBusy ? 'Translating…' : 'Translate → ES'}
+                  </button>
+                </div>
+
+                <textarea
+                  value={summaryNote.original}
+                  onChange={(e) => setSummaryNote((prev) => ({ ...prev, original: e.target.value, sourceLang: 'en' }))}
+                  rows={3}
+                  placeholder="Write your summary in English…"
+                  style={{
+                    ...ui.input,
+                    width: '100%',
+                    padding: '10px 12px',
+                    resize: 'vertical',
+                    background: '#0b1220',
+                  }}
+                />
+
+                <div style={{ fontSize: 12, fontWeight: 700, color: '#9ca3af', margin: '10px 0 6px' }}>
+                  Translated (ES) — sent to cleaner
+                </div>
+
+                <textarea
+                  value={summaryNote.translated}
+                  onChange={(e) => setSummaryNote((prev) => ({ ...prev, translated: e.target.value, targetLang: 'es' }))}
+                  rows={3}
+                  placeholder="Spanish will appear here… (editable)"
+                  style={{
+                    ...ui.input,
+                    width: '100%',
+                    padding: '10px 12px',
+                    resize: 'vertical',
+                    background: '#0b1220',
+                  }}
+                />
+
+                <div style={{ marginTop: 6, fontSize: 11, color: '#64748b' }}>
+                  Tip: If you change the English above, click Translate again to refresh the Spanish.
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', gap: 10, marginTop: 12, flexWrap: 'wrap' }}>
+                {!isCorrectionReview && status === 'submitted' && <button
+                  onClick={sendNeedsFix}
+                  disabled={acting || !turnId}
+                  style={{
+                    ...ui.btnSecondary,
+                    border: '1px solid #d97706',
+                    background: '#4a2f04',
+                    color: '#fcd34d',
+                  }}
+                >
+                  {acting ? '…' : '🛠️ Send Needs Fix (with notes)'}
+                </button>}
+
+
+
+                <button type="button" onClick={openHistory} disabled={!turnId} style={ui.btnSecondary}>
+                  🕘 View History
+                </button>
+              </div>
+            </div>
+          )}
+
+        {isManagerMode && (
+          <div style={{ ...ui.card, marginTop: 16, border: '1px solid #334155' }}>
+            <h3 style={{ margin: '0 0 8px', fontSize: 19 }}>Final Turn Approval</h3>
+            <p style={{ color: '#94a3b8', fontSize: 13, marginTop: 0 }}>Approve the entire turnover after all required corrections have been accepted.</p>
+            <button onClick={markApproved} disabled={acting || !turnId || status !== 'submitted' || (isCorrectionReview && (pendingDecisionCount > 0 || rejectedCount > 0 || taskIds.size > 0))} style={ui.btnPrimary}>
+              {acting ? '…' : '✅ Approve Turn'}
+            </button>
+          </div>
+        )}
         {uniqueAreas.length > 1 && <div style={{ ...ui.subtle }}>Areas in this turn: {uniqueAreas.join(' • ')}</div>}
       </section>
     </ChromeDark>
