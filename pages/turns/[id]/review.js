@@ -1350,7 +1350,7 @@ export default function Review() {
             <div style={{ fontSize: 12, color: '#94a3b8' }}>
               Turn ID: <code style={{ userSelect: 'all' }}>{turnId}</code>
             </div>
-          </div>}
+          </div>
 
           {isManagerMode && (
             <div style={{ marginTop: 16 }}>
@@ -1611,7 +1611,7 @@ export default function Review() {
           ) : (
             <div style={ui.muted}>No photos yet.</div>
           )}
-        </div>
+        </div>}
 
           {isManagerMode && (
             <div
