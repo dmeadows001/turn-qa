@@ -190,6 +190,7 @@ export default function Capture() {
   // Needs-fix (manager) notes to show to cleaner, by storage path
   const [fixNotes, setFixNotes] = useState({ byPath: {}, overall: '', count: 0 });
   const [activeTasks, setActiveTasks] = useState([]);
+  const [correctionDecisions, setCorrectionDecisions] = useState([]);
   const [tasksLoading, setTasksLoading] = useState(true);
   const [tasksError, setTasksError] = useState('');
   const [pickerTaskId, setPickerTaskId] = useState(null);
@@ -742,6 +743,7 @@ export default function Capture() {
 
           const file = {
             isNewFixDraft: isFixRow && readFixDrafts().includes(path),
+            photoId: it.id || it.photo_id || null,
             correctionTaskId: it.correction_task_id || readFixTaskLinks()[path] || null,
             name: path.split('/').pop() || 'photo.jpg',
             url: path,
@@ -896,6 +898,7 @@ export default function Capture() {
         const decisionResponse = await fetch(`/api/turns/${encodeURIComponent(turnId)}/correction-decision`);
         if (!decisionResponse.ok) throw new Error('Could not load correction feedback');
         const decisionPayload = await decisionResponse.json();
+        if (!cancelled) setCorrectionDecisions(Array.isArray(decisionPayload.decisions) ? decisionPayload.decisions : []);
         const latestByTask = new Map();
         for (const d of (decisionPayload.decisions || [])) latestByTask.set(d.correction_task_id, d);
         const updatedTasks = tasks.map(t => {
@@ -1747,6 +1750,15 @@ export default function Capture() {
                   (f.correctionTaskId === task.correction_task_id ||
                     (activeTasks.length === 1 && !f.correctionTaskId))
                 );
+                // Historical correction attempts are read-only. Match by stable task ID or
+                // the photo IDs recorded in correction decisions; never treat them as drafts.
+                const taskDecisions = correctionDecisions.filter(d => d.correction_task_id === task.correction_task_id);
+                const decisionPhotoIds = new Set(taskDecisions.map(d => d.photo_id).filter(Boolean));
+                const historyPhotos = Object.values(uploadsByShot).flat()
+                  .filter(f => f.isFix && !f.preview && !f.isNewFixDraft &&
+                    (f.correctionTaskId === task.correction_task_id || (f.photoId && decisionPhotoIds.has(f.photoId))))
+                  .sort((a, b) => new Date(a.capturedAt || 0) - new Date(b.capturedAt || 0));
+                const decisionsForPhoto = f => taskDecisions.filter(d => d.photo_id && d.photo_id === f.photoId);
                 // Flagged photos load on demand, so an unavailable thumbnail cannot silently fail.
                 return (
                   <div key={task.key} style={{ padding: 14, marginBottom: 14, border: '1px solid #d97706', borderRadius: 12, background: '#171b25' }}>
@@ -1763,6 +1775,26 @@ export default function Capture() {
                         <div><ThemedButton kind="secondary" onClick={() => viewFlaggedPhoto(task.path)}>View flagged photo</ThemedButton></div>
                       </div>
                     )}
+                    <div style={{ marginBottom: 14, padding: 12, background: '#101d30', border: '1px solid #334155', borderRadius: 12 }}>
+                      <div style={{ fontWeight: 800, color: '#bfdbfe', marginBottom: 8 }}>Previous correction attempts ({historyPhotos.length})</div>
+                      {historyPhotos.length === 0 && <div style={{ fontSize: 13, color: '#cbd5e1' }}>No earlier correction photos linked to this task were returned. The original photo remains above.</div>}
+                      {historyPhotos.map((f, historyIndex) => {
+                        const decisions = decisionsForPhoto(f);
+                        const latestDecision = decisions[decisions.length - 1];
+                        if (!thumbByPath[f.url] && f.url?.startsWith('turns/')) ensureThumb(f.url);
+                        return (
+                          <div key={f.photoId || f.url} style={{ padding: 10, marginBottom: 10, borderRadius: 10, border: '1px solid #475569', background: '#0b1220' }}>
+                            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 7 }}>Attempt {historyIndex + 1} · {latestDecision?.decision === 'rejected' ? 'Requested another fix' : latestDecision?.decision === 'accepted' ? 'Accepted' : 'Previously submitted'}</div>
+                            {thumbByPath[f.url] && <img src={thumbByPath[f.url]} alt={`Previous correction attempt ${historyIndex + 1}`} style={{ width: 180, maxWidth: '100%', borderRadius: 8 }} />}
+                            <div style={{ marginTop: 6 }}><ThemedButton kind="secondary" onClick={() => viewFlaggedPhoto(f.url)}>View correction photo</ThemedButton></div>
+                            {f.capturedAt && <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 6 }}>{formatCapturedAt(f.capturedAt)}</div>}
+                            {f.cleanerNote && <div style={{ fontSize: 13, marginTop: 8, whiteSpace: 'pre-wrap' }}><strong>Cleaner note:</strong> {typeof f.cleanerNote === 'string' ? f.cleanerNote : String(f.cleanerNote.note_sent || f.cleanerNote.note || '')}</div>}
+                            {latestDecision?.decision === 'rejected' && <div style={{ fontSize: 13, marginTop: 8, whiteSpace: 'pre-wrap', color: '#fde68a' }}><strong>Manager feedback:</strong> {latestDecision.note_sent || latestDecision.note_translated || latestDecision.note_original || latestDecision.note || 'Another correction requested'}</div>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div style={{ fontWeight: 800, color: '#fde68a', marginBottom: 8 }}>Next correction — upload a new photo</div>
                     <ThemedButton kind="secondary" onClick={() => openPicker(shotId, task.correction_task_id)}
                       disabled={!task.correction_task_id}>
                       ➕ Add Correction Photo
