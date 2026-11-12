@@ -57,10 +57,30 @@ export default async function handler(req, res) {
     // 3) Authorization checks based on what the path refers to
 
     // ---- A) Turn photos (stored in turn_photos.storage_path)
+    // Turn thumbnails use the same relative path under turn-thumbs/ as their
+    // original under turns/. Never authorize a thumbnail without a registered
+    // original and permission to view its turn.
+    const isTurnThumb = path.startsWith("turn-thumbs/");
+    let registeredTurnPath = path;
+
+    if (isTurnThumb) {
+      const suffix = path.slice("turn-thumbs/".length);
+      const segments = suffix.split("/");
+      if (
+        !suffix ||
+        segments.some((segment) => !segment || segment === "." || segment === "..") ||
+        suffix.includes("\\") ||
+        suffix.includes("%")
+      ) {
+        return res.status(403).json({ error: "Not authorized (bad turn thumbnail path)" });
+      }
+      registeredTurnPath = `turns/${suffix}`;
+    }
+
     const { data: tp } = await supabaseAdmin
       .from("turn_photos")
       .select("turn_id, storage_path")
-      .eq("storage_path", path)
+      .eq("storage_path", registeredTurnPath)
       .maybeSingle();
 
     if (tp?.turn_id) {
@@ -83,14 +103,19 @@ export default async function handler(req, res) {
       return res.status(200).json({ url: data.signedUrl });
     }
 
+    // Do not let an unregistered thumbnail fall through to another path type.
+    if (isTurnThumb) {
+      return res.status(403).json({ error: "Not authorized (unregistered turn thumbnail)" });
+    }
+
     // ---- B) Reference photos and optimized thumbnails
     const isOriginalRef = path.startsWith("refs/");
     const isRefThumb = path.startsWith("ref-thumbs/");
-    
+
     if (isOriginalRef || isRefThumb) {
       const parts = path.split("/");
       const shotId = parts[1];
-    
+
       // Require exactly: refs/<shotId>/<filename>
       // or ref-thumbs/<shotId>/<filename>
       if (
@@ -102,25 +127,25 @@ export default async function handler(req, res) {
       ) {
         return res.status(403).json({ error: "Not authorized (bad refs path)" });
       }
-    
+
       // A thumbnail must correspond to an existing registered reference.
       if (isRefThumb) {
         const originalPath = `refs/${shotId}/${parts[2]}`;
-    
+
         const { data: registeredShot, error: registeredErr } = await supabaseAdmin
           .from("template_shots")
           .select("reference_paths")
           .eq("id", shotId)
           .single();
-    
+
         if (registeredErr || !registeredShot) {
           return res.status(403).json({ error: "Not authorized (thumbnail shot)" });
         }
-    
+
         const registeredPaths = Array.isArray(registeredShot.reference_paths)
           ? registeredShot.reference_paths
           : [];
-    
+
         if (!registeredPaths.includes(originalPath)) {
           return res.status(403).json({ error: "Not authorized (unregistered thumbnail)" });
         }
