@@ -710,6 +710,43 @@ const PhotoCard = memo(
   }
 );
 
+// A required photo and its earlier attempts remain together in one card.
+// History images mount only when expanded, avoiding unnecessary downloads.
+function RequiredPhotoWithHistory({ photo, history = [], cardProps }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div>
+      <PhotoCard p={photo} {...cardProps} />
+      {history.length > 0 && (
+        <div style={{ marginTop: 6, border: '1px solid #334155', borderRadius: 10, overflow: 'hidden', background: '#0b1220' }}>
+          <button
+            type="button"
+            onClick={() => setExpanded(v => !v)}
+            aria-expanded={expanded}
+            style={{ width: '100%', textAlign: 'left', padding: '10px 12px', border: 0, color: '#bfdbfe', background: '#17243a', fontWeight: 700, cursor: 'pointer', fontSize: 12 }}
+          >
+            {expanded ? '▾' : '▸'} View Photo History ({history.length})
+          </button>
+          {expanded && (
+            <div style={{ display: 'grid', gap: 10, padding: 10 }}>
+              {history.map(oldPhoto => (
+                <PhotoCard
+                  key={keyFor(oldPhoto)}
+                  p={oldPhoto}
+                  {...cardProps}
+                  readOnly={true}
+                  allowSelection={false}
+                  showDecisionEditor={false}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ---------- NEW: History helpers (safe, non-breaking) ----------
 function nonEmpty(s) {
   const t = String(s ?? '').trim();
@@ -949,7 +986,6 @@ export default function Review() {
   const unresolvedTaskCount = isCorrectionReview ? Math.max(0, taskIds.size - latestByTask.size) : 0;
   const rejectedCount = isCorrectionReview ? latestCorrections.filter(p => correctionDecisions.some(d => String(d.photo_id) === String(p.id) && d.decision === 'rejected')).length : 0;
   const visiblePhotos = isCorrectionReview && !viewFullTurn ? latestCorrections : photos;
-  const sections = useMemo(() => buildSections(visiblePhotos, templateShots), [visiblePhotos, templateShots]);
   const acceptedTaskIds = useMemo(() => new Set(correctionDecisions.filter(d => d.decision === 'accepted').map(d => d.correction_task_id)), [correctionDecisions]);
   const readOnly = status === 'approved';
   // Match the actual decision to each individual correction photo.
@@ -1033,6 +1069,49 @@ export default function Review() {
       return { taskId, index, finding, attempts, latest, original, area };
     });
   }, [photos, activeFindings, correctionHistory, latestByTask, templateShots]);
+
+  // Gallery: one current image per required photo. Link correction attempts
+  // only by the recorded correction task and its ORIGINAL photo ID; never
+  // collapse other required photos just because they share a room or shot.
+  const { galleryPhotos, galleryHistoryByPhotoId } = useMemo(() => {
+    if (isCorrectionReview && !viewFullTurn) {
+      return { galleryPhotos: visiblePhotos, galleryHistoryByPhotoId: new Map() };
+    }
+    const replacements = new Map();
+    const historyByCurrent = new Map();
+    const suppressedIds = new Set();
+    const registeredIds = new Set(photos.map(p => String(p.id)));
+
+    for (const group of correctionGroups) {
+      const original = group.original;
+      if (!original?.id || !registeredIds.has(String(original.id))) continue;
+      const attempts = group.attempts.map(a => a.photo).filter(p => p?.id && registeredIds.has(String(p.id)));
+      if (!attempts.length) continue;
+      // Prefer the latest accepted attempt, otherwise the latest attempt.
+      // A rejected latest attempt remains visible until a new fix arrives.
+      const accepted = attempts.filter(p => correctionDecisionByPhotoId.get(String(p.id)) === 'accepted');
+      const current = accepted.length ? accepted[accepted.length - 1] : attempts[attempts.length - 1];
+      if (!current?.id || replacements.has(String(original.id))) continue;
+      const previous = [original, ...attempts.filter(p => String(p.id) !== String(current.id))];
+      replacements.set(String(original.id), current);
+      historyByCurrent.set(String(current.id), previous);
+      for (const p of attempts) suppressedIds.add(String(p.id));
+    }
+
+    const result = [];
+    const seen = new Set();
+    for (const p of visiblePhotos) {
+      const id = String(p.id);
+      if (suppressedIds.has(id)) continue;
+      const chosen = replacements.get(id) || p;
+      const chosenId = String(chosen.id);
+      if (seen.has(chosenId)) continue;
+      result.push(chosen);
+      seen.add(chosenId);
+    }
+    return { galleryPhotos: result, galleryHistoryByPhotoId: historyByCurrent };
+  }, [visiblePhotos, photos, correctionGroups, correctionDecisionByPhotoId, isCorrectionReview, viewFullTurn]);
+  const sections = useMemo(() => buildSections(galleryPhotos, templateShots), [galleryPhotos, templateShots]);
 
   // Original photos remain identifiable even after the task has been accepted.
   const originalFlaggedPhotoIds = useMemo(() => new Set([
@@ -1636,23 +1715,26 @@ export default function Review() {
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px,1fr))', gap: 12 }}>
                   {sec.photos.map((p) => (
                     <div key={keyFor(p)}>
-                    <PhotoCard
+                    <RequiredPhotoWithHistory
                       key={keyFor(p)}
-                      p={p}
-                      readOnly={readOnly}
-                      originalFlagged={originalFlaggedPhotoIds.has(String(p.id))}
-                      isManagerMode={isManagerMode}
-                      selectedKeys={selectedKeys}
-                      notesByKey={notesByKey}
-                      findingsByKey={findingsByKey}
-                      setNoteFor={setNoteFor}
-                      toggleKey={toggleKey}
-                      onTranslate={onTranslate}
-                      translateBusyByKey={translateBusyByKey}
-                      allowSelection={!readOnly && !isCorrectionReview && !p.is_fix}
-                      acceptedTaskIds={acceptedTaskIds}
-                      correctionDecisionByPhotoId={correctionDecisionByPhotoId}
-                      showDecisionEditor={false}
+                      photo={p}
+                      history={galleryHistoryByPhotoId.get(String(p.id)) || []}
+                      cardProps={{
+                      readOnly: readOnly,
+                      originalFlagged: originalFlaggedPhotoIds.has(String(p.id)),
+                      isManagerMode: isManagerMode,
+                      selectedKeys: selectedKeys,
+                      notesByKey: notesByKey,
+                      findingsByKey: findingsByKey,
+                      setNoteFor: setNoteFor,
+                      toggleKey: toggleKey,
+                      onTranslate: onTranslate,
+                      translateBusyByKey: translateBusyByKey,
+                      allowSelection: !readOnly && !isCorrectionReview && !p.is_fix,
+                      acceptedTaskIds: acceptedTaskIds,
+                      correctionDecisionByPhotoId: correctionDecisionByPhotoId,
+                      showDecisionEditor:false
+                      }}
                     />
                     {false && isCorrectionReview && latestCorrections.some(x => x.id === p.id) && (
                       <div style={{marginTop:10,padding:10,border:'1px solid #334155',borderRadius:10,background:'rgba(15,23,42,.8)',display:'flex',gap:8,flexWrap:'wrap'}}>
@@ -1673,10 +1755,10 @@ export default function Review() {
                 </div>
               </div>
             ))
-                     ) : visiblePhotos && visiblePhotos.length > 0 ? (
+                     ) : galleryPhotos && galleryPhotos.length > 0 ? (
             (() => {
               // Fallback: group by area_key so managers still see everything
-                             const byArea = (visiblePhotos || []).reduce((acc, p) => {
+                             const byArea = (galleryPhotos || []).reduce((acc, p) => {
                 const k = (p.area_key || '').trim() || '__UNCAT__';
                 (acc[k] ||= []).push(p);
                 return acc;
@@ -1707,23 +1789,26 @@ export default function Review() {
 
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px,1fr))', gap: 12 }}>
                     {byArea[areaKey].map((p) => (
-                      <div key={keyFor(p)}><PhotoCard
+                      <div key={keyFor(p)}><RequiredPhotoWithHistory
                         key={keyFor(p)}
-                        p={p}
-                      readOnly={readOnly}
-                      originalFlagged={originalFlaggedPhotoIds.has(String(p.id))}
-                        isManagerMode={isManagerMode}
-                        selectedKeys={selectedKeys}
-                        notesByKey={notesByKey}
-                        findingsByKey={findingsByKey}
-                        setNoteFor={setNoteFor}
-                        toggleKey={toggleKey}
-                        onTranslate={onTranslate}
-                        translateBusyByKey={translateBusyByKey}
-                       allowSelection={!readOnly && !isCorrectionReview && !p.is_fix}
-                       acceptedTaskIds={acceptedTaskIds}
-                       correctionDecisionByPhotoId={correctionDecisionByPhotoId}
-                       showDecisionEditor={false}
+                        photo={p}
+                        history={galleryHistoryByPhotoId.get(String(p.id)) || []}
+                        cardProps={{
+                      readOnly: readOnly,
+                      originalFlagged: originalFlaggedPhotoIds.has(String(p.id)),
+                        isManagerMode: isManagerMode,
+                        selectedKeys: selectedKeys,
+                        notesByKey: notesByKey,
+                        findingsByKey: findingsByKey,
+                        setNoteFor: setNoteFor,
+                        toggleKey: toggleKey,
+                        onTranslate: onTranslate,
+                        translateBusyByKey: translateBusyByKey,
+                       allowSelection: !readOnly && !isCorrectionReview && !p.is_fix,
+                       acceptedTaskIds: acceptedTaskIds,
+                       correctionDecisionByPhotoId: correctionDecisionByPhotoId,
+                       showDecisionEditor:false
+                       }}
                       />
                       {false && isCorrectionReview && latestCorrections.some(x => x.id === p.id) && !decidedPhotoIds.has(String(p.id)) && <div style={{display:'flex',gap:8,marginTop:8}}><button type="button" disabled={decisionBusy} onClick={() => decideCorrection(p,'accepted')} style={{...ui.btnPrimary,background:'#065f46',border:'1px solid #10b981',color:'#ecfdf5',fontWeight:800}}>✓ Accept Fix</button><button type="button" disabled={decisionBusy} onClick={() => decideCorrection(p,'rejected')} style={{...ui.btnSecondary,border:'1px solid #d97706',color:'#fde68a',background:'#422006',fontWeight:800}}>↻ Request Another Fix</button></div>}
                       </div>
