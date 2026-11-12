@@ -438,6 +438,7 @@ const PhotoCard = memo(
     translateBusyByKey,
     allowSelection = true,
     acceptedTaskIds,
+    correctionDecisionByPhotoId,
     showDecisionEditor = false,
   }) {
     const k = keyFor(p);
@@ -455,9 +456,13 @@ const PhotoCard = memo(
     const flaggedFromRow = false; // legacy flags may remain true after a later round
     // Only ORIGINAL photos can be “needs fix”
     const flagged = !acceptedTaskIds?.has(p.correction_task_id) && (flaggedFromFindings || flaggedFromRow);
-    const accepted = !!p.correction_task_id && acceptedTaskIds?.has(p.correction_task_id);
+    // Per-photo decisions, not task-level acceptance: earlier rejected attempts
+    // must remain red even when a later attempt resolves the same task.
+    const fixDecision = isFix ? correctionDecisionByPhotoId?.get(String(p.id)) : null;
+    const accepted = isFix && fixDecision === 'accepted';
+    const rejected = isFix && fixDecision === 'rejected';
 
-    const styleCard = accepted ? { border: '1px solid #065f46' } : flagged ? flaggedCardStyle : isFix ? fixCardStyle : null;
+    const styleCard = accepted ? { border: '1px solid #065f46' } : rejected ? { border: '1px solid #991b1b' } : flagged ? flaggedCardStyle : isFix ? fixCardStyle : null;
 
     const busy = !!(translateBusyByKey && translateBusyByKey[k]);
 
@@ -510,9 +515,12 @@ const PhotoCard = memo(
               )}
 
                {accepted && (
-                <span style={{ padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 700, color: '#86efac', background: '#064e3b', border: '1px solid #065f46' }}>Accepted</span>
+                <span style={{ padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 700, color: '#86efac', background: '#064e3b', border: '1px solid #065f46' }}>Accepted Fix</span>
                )}
-               {isFix && !accepted && (
+               {rejected && (
+                 <span style={{ padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 700, color: '#fca5a5', background: '#450a0a', border: '1px solid #b91c1c' }}>Rejected Fix</span>
+               )}
+               {isFix && !accepted && !rejected && (
                 <span
                   style={{
                     padding: '2px 8px',
@@ -937,6 +945,16 @@ export default function Review() {
   const visiblePhotos = isCorrectionReview && !viewFullTurn ? latestCorrections : photos;
   const sections = useMemo(() => buildSections(visiblePhotos, templateShots), [visiblePhotos, templateShots]);
   const acceptedTaskIds = useMemo(() => new Set(correctionDecisions.filter(d => d.decision === 'accepted').map(d => d.correction_task_id)), [correctionDecisions]);
+  // Match the actual decision to each individual correction photo.
+  const correctionDecisionByPhotoId = useMemo(() => {
+    const byPhoto = new Map();
+    for (const decision of correctionDecisions) {
+      if (decision.photo_id && (decision.decision === 'accepted' || decision.decision === 'rejected')) {
+        byPhoto.set(String(decision.photo_id), decision.decision);
+      }
+    }
+    return byPhoto;
+  }, [correctionDecisions]);
 
   // The approval button is gated by the latest photo for EVERY active task,
   // not by whether an old rejected decision exists in the audit history.
@@ -1546,6 +1564,7 @@ export default function Review() {
                                      translateBusyByKey={translateBusyByKey}
                                      allowSelection={false}
                                      acceptedTaskIds={acceptedTaskIds}
+                                     correctionDecisionByPhotoId={correctionDecisionByPhotoId}
                                      showDecisionEditor={true}
                                    />
                                    <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -1614,6 +1633,7 @@ export default function Review() {
                       translateBusyByKey={translateBusyByKey}
                       allowSelection={!isCorrectionReview && !p.is_fix}
                       acceptedTaskIds={acceptedTaskIds}
+                      correctionDecisionByPhotoId={correctionDecisionByPhotoId}
                       showDecisionEditor={false}
                     />
                     {false && isCorrectionReview && latestCorrections.some(x => x.id === p.id) && (
@@ -1682,6 +1702,7 @@ export default function Review() {
                         translateBusyByKey={translateBusyByKey}
                        allowSelection={!isCorrectionReview && !p.is_fix}
                        acceptedTaskIds={acceptedTaskIds}
+                       correctionDecisionByPhotoId={correctionDecisionByPhotoId}
                        showDecisionEditor={false}
                       />
                       {false && isCorrectionReview && latestCorrections.some(x => x.id === p.id) && !decidedPhotoIds.has(String(p.id)) && <div style={{display:'flex',gap:8,marginTop:8}}><button type="button" disabled={decisionBusy} onClick={() => decideCorrection(p,'accepted')} style={{...ui.btnPrimary,background:'#065f46',border:'1px solid #10b981',color:'#ecfdf5',fontWeight:800}}>✓ Accept Fix</button><button type="button" disabled={decisionBusy} onClick={() => decideCorrection(p,'rejected')} style={{...ui.btnSecondary,border:'1px solid #d97706',color:'#fde68a',background:'#422006',fontWeight:800}}>↻ Request Another Fix</button></div>}
