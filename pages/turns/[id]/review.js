@@ -466,7 +466,7 @@ const PhotoCard = memo(
               )}
             </div>
 
-             {isManagerMode && allowSelection && (
+             {isManagerMode && allowSelection && !isFix && (
               <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', userSelect: 'none' }}>
                 <input
                   type="checkbox"
@@ -878,6 +878,9 @@ export default function Review() {
   // is accepted when its task no longer appears in the active round, and the
   // turn has been approved or another review round has been submitted.
   const acceptedTaskIds = useMemo(() => new Set(correctionDecisions.filter(d => d.decision === 'accepted').map(d => d.correction_task_id)), [correctionDecisions]);
+
+  // Display property information when supplied by get-turn, without changing the API.
+  const propertyLabel = turn?.property?.name || turn?.property_name || turn?.property?.address || turn?.property_address || turn?.property?.street_address || '';
 
   async function decideCorrection(p, decision) {
     if (!p.correction_task_id || !p.id || decisionBusy) return;
@@ -1453,7 +1456,7 @@ export default function Review() {
                 </button>}
 
                 <button onClick={markApproved} disabled={acting || !turnId || status !== 'submitted' || (isCorrectionReview && (pendingDecisionCount > 0 || rejectedCount > 0 || taskIds.size > 0))} style={ui.btnPrimary}>
-                  {acting ? '…' : '✅ Approve'}
+                  {acting ? '…' : '✅ Approve Turn'}
                 </button>
 
                 <button type="button" onClick={openHistory} disabled={!turnId} style={ui.btnSecondary}>
@@ -1463,16 +1466,27 @@ export default function Review() {
             </div>
           )}
 
-                     {isCorrectionReview && (
-             <div style={{ marginTop: 14, padding: 12, border: '1px solid #334155', borderRadius: 10 }}>
-               <b>Correction review</b> — {latestCorrections.length} latest replacement photo(s) for {taskIds.size} outstanding task(s).
-               {unresolvedTaskCount > 0 && <div style={{ color: '#fca5a5', marginTop: 6 }}>{unresolvedTaskCount} task(s) have no identifiable correction photo. Approval and rejection are blocked until resolved.</div>}
-               <div style={{ marginTop: 10 }}>
-                 <button type="button" style={ui.btnSecondary} onClick={() => setViewFullTurn(v => !v)}>
-                   {viewFullTurn ? 'Show Corrections Only' : 'View Full Turn'}
-                 </button>
+           {isCorrectionReview && (
+             <div style={{ marginTop: 18, padding: '18px 20px', border: '1px solid #3b82f6', borderRadius: 14, background: 'rgba(30, 64, 120, 0.28)', boxShadow: 'inset 0 0 0 1px rgba(147,197,253,0.08)' }}>
+               <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:12,flexWrap:'wrap'}}>
+                 <div>
+                   <div style={{fontSize:12,color:'#93c5fd',fontWeight:800,letterSpacing:'.07em',textTransform:'uppercase'}}>Manager action required</div>
+                   <h3 style={{margin:'5px 0 7px',fontSize:20,color:'#f8fafc'}}>Correction Review</h3>
+                   <div style={{color:'#cbd5e1',lineHeight:1.5}}>
+                     Review the latest replacement photo for each outstanding issue. Accept a satisfactory fix, or request another photo with specific feedback.
+                   </div>
+                 </div>
+                 <span style={{background:'#172554',border:'1px solid #3b82f6',color:'#bfdbfe',padding:'6px 10px',borderRadius:999,fontSize:12,fontWeight:800}}>
+                   {taskIds.size} outstanding {taskIds.size === 1 ? 'issue' : 'issues'}
+                 </span>
                </div>
-               <div style={{ marginTop: 8, color: '#94a3b8', fontSize: 12 }}>Check “Needs fix” only on corrections that still need work. Leave accepted corrections unchecked. Full Turn is for reference.</div>
+               {unresolvedTaskCount > 0 && <div style={{color:'#fca5a5',marginTop:12}}>{unresolvedTaskCount} issue(s) have no identifiable replacement photo. Approval is blocked until resolved.</div>}
+               <div style={{marginTop:14,display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
+                 <button type="button" style={{...ui.btnSecondary,background:'#172554',border:'1px solid #60a5fa',color:'#dbeafe',fontWeight:700}} onClick={() => setViewFullTurn(v => !v)}>
+                   {viewFullTurn ? '← Show Latest Corrections' : 'View Full Turn & Photo History'}
+                 </button>
+                 <span style={{color:'#94a3b8',fontSize:12}}>{viewFullTurn ? 'Showing original photos and previous attempts for reference.' : 'Showing only the latest submitted correction for each issue.'}</span>
+               </div>
              </div>
            )}
            <div style={{ ...ui.subtle, marginTop: 10 }}>Click any photo to open full-size in a new tab.</div>
@@ -1512,20 +1526,20 @@ export default function Review() {
                       toggleKey={toggleKey}
                       onTranslate={onTranslate}
                       translateBusyByKey={translateBusyByKey}
-                      allowSelection={!isCorrectionReview || latestCorrections.some(x => x.path === p.path)}
+                      allowSelection={!isCorrectionReview && !p.is_fix}
                       acceptedTaskIds={acceptedTaskIds}
                       showDecisionEditor={isCorrectionReview && latestCorrections.some(x => x.id === p.id) && !decidedPhotoIds.has(String(p.id))}
                     />
                     {isCorrectionReview && latestCorrections.some(x => x.id === p.id) && (
-                      <div style={{marginTop:8,display:'flex',gap:8,flexWrap:'wrap'}}>
+                      <div style={{marginTop:10,padding:10,border:'1px solid #334155',borderRadius:10,background:'rgba(15,23,42,.8)',display:'flex',gap:8,flexWrap:'wrap'}}>
                         {decidedPhotoIds.has(String(p.id)) ? (
                           <strong style={{color:correctionDecisions.some(d => String(d.photo_id) === String(p.id) && d.decision === 'accepted') ? '#86efac' : '#fcd34d'}}>
                             {correctionDecisions.some(d => String(d.photo_id) === String(p.id) && d.decision === 'accepted') ? '✓ Accepted' : '↻ Another fix requested'}
                           </strong>
                         ) : (
                           <>
-                            <button type="button" disabled={decisionBusy || acting} onClick={() => decideCorrection(p,'accepted')} style={ui.btnPrimary}>✓ Accept Fix</button>
-                            <button type="button" disabled={decisionBusy || acting} onClick={() => decideCorrection(p,'rejected')} style={ui.btnSecondary}>↻ Request Another Fix</button>
+                            <button type="button" disabled={decisionBusy || acting} onClick={() => decideCorrection(p,'accepted')} style={{...ui.btnPrimary,background:'#065f46',border:'1px solid #10b981',color:'#ecfdf5',fontWeight:800}}>✓ Accept Fix</button>
+                            <button type="button" disabled={decisionBusy || acting} onClick={() => decideCorrection(p,'rejected')} style={{...ui.btnSecondary,border:'1px solid #d97706',color:'#fde68a',background:'#422006',fontWeight:800}}>↻ Request Another Fix</button>
                           </>
                         )}
                       </div>
@@ -1580,11 +1594,11 @@ export default function Review() {
                         toggleKey={toggleKey}
                         onTranslate={onTranslate}
                         translateBusyByKey={translateBusyByKey}
-                       allowSelection={!isCorrectionReview || latestCorrections.some(x => x.path === p.path)}
+                       allowSelection={!isCorrectionReview && !p.is_fix}
                        acceptedTaskIds={acceptedTaskIds}
                        showDecisionEditor={isCorrectionReview && latestCorrections.some(x => x.id === p.id) && !decidedPhotoIds.has(String(p.id))}
                       />
-                      {isCorrectionReview && latestCorrections.some(x => x.id === p.id) && !decidedPhotoIds.has(String(p.id)) && <div style={{display:'flex',gap:8,marginTop:8}}><button type="button" disabled={decisionBusy} onClick={() => decideCorrection(p,'accepted')} style={ui.btnPrimary}>✓ Accept Fix</button><button type="button" disabled={decisionBusy} onClick={() => decideCorrection(p,'rejected')} style={ui.btnSecondary}>↻ Request Another Fix</button></div>}
+                      {isCorrectionReview && latestCorrections.some(x => x.id === p.id) && !decidedPhotoIds.has(String(p.id)) && <div style={{display:'flex',gap:8,marginTop:8}}><button type="button" disabled={decisionBusy} onClick={() => decideCorrection(p,'accepted')} style={{...ui.btnPrimary,background:'#065f46',border:'1px solid #10b981',color:'#ecfdf5',fontWeight:800}}>✓ Accept Fix</button><button type="button" disabled={decisionBusy} onClick={() => decideCorrection(p,'rejected')} style={{...ui.btnSecondary,border:'1px solid #d97706',color:'#fde68a',background:'#422006',fontWeight:800}}>↻ Request Another Fix</button></div>}
                       </div>
                     ))}
                   </div>
