@@ -439,6 +439,7 @@ const PhotoCard = memo(
     allowSelection = true,
     acceptedTaskIds,
     correctionDecisionByPhotoId,
+    correctionAttemptByPhotoId,
     showDecisionEditor = false,
     originalFlagged = false,
     readOnly = false,
@@ -464,6 +465,7 @@ const PhotoCard = memo(
     const fixDecision = isFix ? correctionDecisionByPhotoId?.get(String(p.id)) : null;
     const accepted = isFix && fixDecision === 'accepted';
     const rejected = isFix && fixDecision === 'rejected';
+    const attemptNumber = isFix ? correctionAttemptByPhotoId?.get(String(p.id)) : null;
 
     // One neutral border for all photos; badges alone communicate the audit status.
     const styleCard = null;
@@ -519,10 +521,10 @@ const PhotoCard = memo(
               )}
 
                {accepted && (
-                <span style={{ padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 700, color: '#86efac', background: '#064e3b', border: '1px solid #065f46' }}>Accepted Fix</span>
+                <span style={{ padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 700, color: '#86efac', background: '#064e3b', border: '1px solid #065f46' }}>{`Accepted Fix${attemptNumber ? ` — Attempt ${attemptNumber}` : ''}`}</span>
                )}
                {rejected && (
-                 <span style={{ padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 700, color: '#fca5a5', background: '#450a0a', border: '1px solid #b91c1c' }}>Rejected Fix</span>
+                 <span style={{ padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 700, color: '#fca5a5', background: '#450a0a', border: '1px solid #b91c1c' }}>{`Rejected Fix${attemptNumber ? ` — Attempt ${attemptNumber}` : ''}`}</span>
                )}
                {isFix && !accepted && !rejected && (
                 <span
@@ -705,6 +707,7 @@ const PhotoCard = memo(
      if (prev.p.needs_fix !== next.p.needs_fix || prev.p.correction_task_id !== next.p.correction_task_id) return false;
     if (prev.originalFlagged !== next.originalFlagged || prev.readOnly !== next.readOnly) return false;
     if (prev.correctionDecisionByPhotoId?.get(String(prev.p.id)) !== next.correctionDecisionByPhotoId?.get(String(next.p.id))) return false;
+    if (prev.correctionAttemptByPhotoId?.get(String(prev.p.id)) !== next.correctionAttemptByPhotoId?.get(String(next.p.id))) return false;
 
     return true; // unchanged → skip render
   }
@@ -1047,6 +1050,17 @@ export default function Review() {
       attempts: attempts.sort((a,b) => new Date(a.photo.created_at || 0) - new Date(b.photo.created_at || 0)),
     }));
   }, [photos, correctionDecisions, latestCorrections]);
+  // Attempt numbers follow each correction task's chronological timeline.
+  // The original flagged photo is not counted as a correction attempt.
+  const correctionAttemptByPhotoId = useMemo(() => {
+    const numbers = new Map();
+    for (const group of correctionHistory) {
+      group.attempts.forEach(({ photo }, index) => {
+        if (photo?.id) numbers.set(String(photo.id), index + 1);
+      });
+    }
+    return numbers;
+  }, [correctionHistory]);
   const hasCorrectionHistory = isManagerMode && (correctionHistory.length > 0 || activeFindings.some(f => f.correction_task_id));
 
   const correctionGroups = useMemo(() => {
@@ -1684,6 +1698,7 @@ export default function Review() {
                                      allowSelection={false}
                                      acceptedTaskIds={acceptedTaskIds}
                                      correctionDecisionByPhotoId={correctionDecisionByPhotoId}
+                                     correctionAttemptByPhotoId={correctionAttemptByPhotoId}
                                      showDecisionEditor={true}
                                    />
                                    <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -1757,6 +1772,7 @@ export default function Review() {
                       allowSelection: !readOnly && !isCorrectionReview && !p.is_fix,
                       acceptedTaskIds: acceptedTaskIds,
                       correctionDecisionByPhotoId: correctionDecisionByPhotoId,
+                      correctionAttemptByPhotoId: correctionAttemptByPhotoId,
                       showDecisionEditor:false
                       }}
                     />
@@ -1831,6 +1847,7 @@ export default function Review() {
                        allowSelection: !readOnly && !isCorrectionReview && !p.is_fix,
                        acceptedTaskIds: acceptedTaskIds,
                        correctionDecisionByPhotoId: correctionDecisionByPhotoId,
+                      correctionAttemptByPhotoId: correctionAttemptByPhotoId,
                        showDecisionEditor:false
                        }}
                       />
