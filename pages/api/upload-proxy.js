@@ -68,6 +68,33 @@ function extractTurnIdFromPath(path) {
   return parts[1] || null;
 }
 
+// Thumbnail paths mirror the original path exactly, except for the prefix:
+// turns/<turnId>/<shotId>/<filename> -> turn-thumbs/<turnId>/<shotId>/<filename>
+function parseTurnThumbnailPath(path) {
+  const parts = safePath(path).split('/');
+  if (
+    parts.length !== 4 ||
+    parts[0] !== 'turn-thumbs' ||
+    parts.slice(1).some((part) => !part || part === '.' || part === '..')
+  ) return null;
+  return {
+    turnId: parts[1],
+    originalPath: `turns/${parts.slice(1).join('/')}`,
+  };
+}
+
+async function originalExistsInStorage(originalPath) {
+  const segments = originalPath.split('/');
+  const filename = segments.pop();
+  const folder = segments.join('/');
+  const { data, error } = await admin.storage.from(DEFAULT_BUCKET).list(folder, {
+    search: filename,
+    limit: 100,
+  });
+  if (error) throw error;
+  return (data || []).some((entry) => entry.name === filename);
+}
+
 async function authorizeUpload({ turnId, managerId, cleanerId }) {
   const { data: turn, error: tErr } = await admin
     .from('turns')
@@ -132,8 +159,9 @@ export default async function handler(req, res) {
       return res.status(403).json({ error: 'Not authorized (bucket)' });
     }
 
-    // Only allow uploads under turns/<turnId>/...
-    const turnId = extractTurnIdFromPath(path);
+    // Existing original photo paths remain unchanged. Also permit mirrored thumbnails.
+    const thumbnail = parseTurnThumbnailPath(path);
+    const turnId = thumbnail?.turnId || extractTurnIdFromPath(path);
     if (!turnId) {
       return res.status(403).json({ error: 'Not authorized (path)' });
     }
@@ -169,6 +197,23 @@ export default async function handler(req, res) {
 
     const contentType = req.headers['content-type'] || 'application/octet-stream';
     const body = await readRawBody(req);
+
+    if (thumbnail) {
+      // A thumbnail is only valid after its corresponding original has been uploaded.
+      if (!(await originalExistsInStorage(thumbnail.originalPath))) {
+        return res.status(403).json({ error: 'Not authorized (original photo missing)' });
+      }
+      if (!/^image\/jpeg(?:\s*;|$)/i.test(contentType)) {
+        return res.status(415).json({ error: 'Thumbnails must be JPEG images' });
+      }
+      // Browser-generated thumbnails should be small; reject unexpectedly large payloads.
+      if (body.length === 0 || body.length > 1024 * 1024) {
+        return res.status(413).json({ error: 'Invalid thumbnail size' });
+      }
+      if (body.length < 3 || body[0] !== 0xff || body[1] !== 0xd8 || body[2] !== 0xff) {
+        return res.status(415).json({ error: 'Invalid JPEG thumbnail' });
+      }
+    }
 
     const { error } = await admin.storage.from(bucket).upload(path, body, {
       contentType,
