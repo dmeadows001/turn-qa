@@ -1809,7 +1809,17 @@ export default function Capture() {
                         <div key={f.uploadId || f.url} style={{ marginTop: 12, padding: 10, border: '1px solid #475569', borderRadius: 10 }}>
                           {(f.preview || thumbByPath[f.url]) && <img src={f.preview || thumbByPath[f.url]} alt="Correction awaiting review" style={{ width: 160, maxWidth: '100%', borderRadius: 8 }} />}
                           <div style={{ fontSize: 12, marginTop: 5 }}>Correction uploaded — awaiting manager review</div>
-                          <div style={{ fontSize: 12 }}>{upload.status === 'uploaded' ? '✓ Uploaded' : upload.status === 'failed' ? '⚠ Upload failed' : `Uploading ${upload.percent}%`}</div>
+                          <div style={{ marginTop: 8, marginBottom: 10 }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 12, fontWeight: 600, marginBottom: 5, color: upload.status === 'uploaded' ? '#86efac' : upload.status === 'failed' ? '#fca5a5' : '#93c5fd' }}>
+                              <span>{upload.status === 'uploaded' ? '✓ Uploaded' : upload.status === 'failed' ? '⚠ Upload failed' : upload.status === 'registering' ? 'Finishing upload...' : 'Uploading...'}</span>
+                              {(upload.status === 'uploading' || upload.status === 'registering' || upload.status === 'uploaded') && <span>{upload.percent}%</span>}
+                            </div>
+                            {(upload.status === 'uploading' || upload.status === 'pending' || upload.status === 'registering') && (
+                              <div role="progressbar" aria-label="Correction photo upload" aria-valuemin={0} aria-valuemax={100} aria-valuenow={upload.percent} style={{ height: 8, background: '#1e293b', borderRadius: 999, overflow: 'hidden' }}>
+                                <div style={{ height: '100%', width: `${upload.percent}%`, background: '#3b82f6', borderRadius: 999, transition: 'width 150ms ease' }} />
+                              </div>
+                            )}
+                          </div>
                           {upload.status === 'failed' && f.uploadId && <ThemedButton kind="secondary" onClick={() => retryPhotoUpload(shotId, f)}>Retry upload</ThemedButton>}
                           <div style={{ fontSize: 12, marginTop: 8 }}>Note to manager (Spanish)</div>
                           <textarea rows={2} value={note.original || ''} onChange={e => setCleanerNoteByNewPath(prev => ({ ...prev, [noteKey]: { ...(prev[noteKey] || {}), original: e.target.value } }))}
