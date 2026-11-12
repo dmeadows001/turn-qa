@@ -1761,19 +1761,20 @@ export default function Capture() {
                 const decisionsForPhoto = f => taskDecisions.filter(d => d.photo_id && d.photo_id === f.photoId);
                 // Flagged photos load on demand, so an unavailable thumbnail cannot silently fail.
                 return (
-                  <div key={task.key} style={{ padding: 14, marginBottom: 14, border: '1px solid #d97706', borderRadius: 12, background: '#171b25' }}>
-                    <div style={{ color: '#fde68a', fontWeight: 800, marginBottom: 8 }}>
+                  <details key={task.key} open={true} style={{ padding: 14, marginBottom: 14, border: '1px solid #3b82f6', borderRadius: 12, background: '#111c2e' }}>
+                    <summary style={{ color: '#bfdbfe', fontWeight: 800, marginBottom: 12, cursor: 'pointer', padding: '4px 0', lineHeight: 1.5 }}>
                       Correction {index + 1} — {shot?.label || task.label || 'Photo correction'}
-                    </div>
+                      <span style={{ display: 'block', marginLeft: 20, fontSize: 12, color: '#fbbf24', fontWeight: 600 }}>Action needed · {historyPhotos.length} previous attempt(s)</span>
+                    </summary>
                     <div style={{ whiteSpace: 'pre-wrap', marginBottom: 12, color: '#fef3c7' }}>
                       {task.managerText || 'Manager requested a correction.'}
                     </div>
                     {task.path && (
-                      <div style={{ marginBottom: 12 }}>
-                        <div style={{ fontSize: 12, marginBottom: 5 }}>Photo flagged by manager</div>
+                      <details style={{ marginBottom: 12, padding: 10, background: '#0b1220', border: '1px solid #475569', borderRadius: 10 }}>
+                        <summary style={{ fontSize: 13, fontWeight: 700, cursor: 'pointer', marginBottom: 8, color: '#cbd5e1' }}>Original flagged photo · View</summary>
                         {thumbByPath[task.path] && <img src={thumbByPath[task.path]} alt="Photo needing correction" style={{ width: 180, maxWidth: '100%', borderRadius: 8 }} onError={() => setThumbByPath(prev => { const next = { ...prev }; delete next[task.path]; return next; })} />}
-                        <div><ThemedButton kind="secondary" onClick={() => viewFlaggedPhoto(task.path)}>View flagged photo</ThemedButton></div>
-                      </div>
+                        <div><ThemedButton kind="secondary" onClick={() => viewFlaggedPhoto(task.path)}>View full-size photo</ThemedButton></div>
+                      </details>
                     )}
                     <div style={{ marginBottom: 14, padding: 12, background: '#101d30', border: '1px solid #334155', borderRadius: 12 }}>
                       <div style={{ fontWeight: 800, color: '#bfdbfe', marginBottom: 8 }}>Previous correction attempts ({historyPhotos.length})</div>
@@ -1783,18 +1784,21 @@ export default function Capture() {
                         const latestDecision = decisions[decisions.length - 1];
                         if (!thumbByPath[f.url] && f.url?.startsWith('turns/')) ensureThumb(f.url);
                         return (
-                          <div key={f.photoId || f.url} style={{ padding: 10, marginBottom: 10, borderRadius: 10, border: '1px solid #475569', background: '#0b1220' }}>
-                            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 7 }}>Attempt {historyIndex + 1} · {latestDecision?.decision === 'rejected' ? 'Requested another fix' : latestDecision?.decision === 'accepted' ? 'Accepted' : 'Previously submitted'}</div>
+                          <details key={f.photoId || f.url} open={historyIndex === historyPhotos.length - 1} style={{ padding: 10, marginBottom: 10, borderRadius: 10, border: '1px solid #475569', background: '#0b1220' }}>
+                            <summary style={{ fontSize: 13, fontWeight: 700, marginBottom: 7, cursor: 'pointer', color: '#e2e8f0' }}>Attempt {historyIndex + 1} · {latestDecision?.decision === 'rejected' ? 'Rejected' : latestDecision?.decision === 'accepted' ? 'Accepted' : 'Previously submitted'} {historyIndex === historyPhotos.length - 1 ? '· Latest' : ''}</summary>
                             {thumbByPath[f.url] && <img src={thumbByPath[f.url]} alt={`Previous correction attempt ${historyIndex + 1}`} style={{ width: 180, maxWidth: '100%', borderRadius: 8 }} />}
                             <div style={{ marginTop: 6 }}><ThemedButton kind="secondary" onClick={() => viewFlaggedPhoto(f.url)}>View correction photo</ThemedButton></div>
                             {f.capturedAt && <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 6 }}>{formatCapturedAt(f.capturedAt)}</div>}
                             {f.cleanerNote && <div style={{ fontSize: 13, marginTop: 8, whiteSpace: 'pre-wrap' }}><strong>Cleaner note:</strong> {typeof f.cleanerNote === 'string' ? f.cleanerNote : String(f.cleanerNote.note_sent || f.cleanerNote.note || '')}</div>}
-                            {latestDecision?.decision === 'rejected' && <div style={{ fontSize: 13, marginTop: 8, whiteSpace: 'pre-wrap', color: '#fde68a' }}><strong>Manager feedback:</strong> {latestDecision.note_sent || latestDecision.note_translated || latestDecision.note_original || latestDecision.note || 'Another correction requested'}</div>}
-                          </div>
+                            {latestDecision?.decision === 'rejected' && <div style={{ fontSize: 13, marginTop: 8, padding: 10, borderRadius: 8, background: '#292111', whiteSpace: 'pre-wrap', color: '#fde68a' }}><strong>Manager feedback:</strong> {latestDecision.note_sent || latestDecision.note_translated || latestDecision.note_original || latestDecision.note || 'Another correction requested'}</div>}
+                          </details>
                         );
                       })}
                     </div>
-                    <div style={{ fontWeight: 800, color: '#fde68a', marginBottom: 8 }}>Next correction — upload a new photo</div>
+                    <div style={{ padding: '10px 12px', borderRadius: 10, border: '1px solid #3b82f6', background: '#102744', marginBottom: 10 }}>
+                      <div style={{ fontWeight: 800, color: '#bfdbfe', marginBottom: 6 }}>Next correction · Action needed</div>
+                      <div style={{ fontSize: 13, color: '#cbd5e1' }}>Review the manager's latest feedback above, then upload your next correction photo.</div>
+                    </div>
                     <ThemedButton kind="secondary" onClick={() => openPicker(shotId, task.correction_task_id)}
                       disabled={!task.correction_task_id}>
                       ➕ Add Correction Photo
@@ -1835,7 +1839,7 @@ export default function Capture() {
                     <div style={{ marginTop: 8, color: taskPhotoCounts[task.correction_task_id] ? '#93c5fd' : '#fbbf24', fontSize: 12 }}>
                       {taskPhotoCounts[task.correction_task_id] ? `${taskPhotoCounts[task.correction_task_id]} correction photo(s) ready` : 'Correction photo required'}
                     </div>
-                  </div>
+                  </details>
                 );
               })}
             </div>
