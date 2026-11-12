@@ -903,6 +903,29 @@ export default function Review() {
   }, [photos, correctionDecisions]);
   const hasCorrectionHistory = isManagerMode && (correctionHistory.length > 0 || activeFindings.some(f => f.correction_task_id));
 
+  // Each correction issue owns its complete history and latest review controls.
+  // Never group by room alone: multiple issues can exist in the same room.
+  const correctionGroups = useMemo(() => {
+    const photosById = new Map(photos.map(p => [String(p.id), p]));
+    const historyByTask = new Map(correctionHistory.map(g => [String(g.taskId), g.attempts]));
+    const findingsByTask = new Map();
+    for (const f of activeFindings) {
+      if (f.correction_task_id && !findingsByTask.has(String(f.correction_task_id))) {
+        findingsByTask.set(String(f.correction_task_id), f);
+      }
+    }
+    const ids = new Set([...findingsByTask.keys(), ...historyByTask.keys()]);
+    return [...ids].map((taskId, index) => {
+      const finding = findingsByTask.get(taskId) || null;
+      const attempts = historyByTask.get(taskId) || [];
+      const latest = latestCorrections.find(p => String(p.correction_task_id) === taskId) || null;
+      const original = finding?.photo_id ? photosById.get(String(finding.photo_id)) : null;
+      const representative = original || latest || attempts[0]?.photo;
+      const area = representative?.area_key || templateShots.find(t => t.shot_id === representative?.shot_id)?.label || 'Correction issue';
+      return { taskId, index, finding, attempts, latest, original, area };
+    });
+  }, [photos, activeFindings, correctionHistory, latestCorrections, templateShots]);
+
   // Display property information when supplied by get-turn, without changing the API.
   const propertyLabel = turn?.property?.name || turn?.property_name || turn?.property?.address || turn?.property_address || turn?.property?.street_address || '';
 
@@ -1327,7 +1350,7 @@ export default function Review() {
             <div style={{ fontSize: 12, color: '#94a3b8' }}>
               Turn ID: <code style={{ userSelect: 'all' }}>{turnId}</code>
             </div>
-          </div>
+          </div>}
 
           {isManagerMode && (
             <div style={{ marginTop: 16 }}>
@@ -1378,47 +1401,101 @@ export default function Review() {
                </div>
                {isCorrectionReview && unresolvedTaskCount > 0 && <div style={{color:'#fca5a5',marginTop:12}}>{unresolvedTaskCount} issue(s) have no identifiable replacement photo. Approval is blocked until resolved.</div>}
                <div style={{ marginTop: 18, display: 'grid', gap: 12 }}>
-                 {correctionHistory.map(group => (
-                   <div key={group.taskId} style={{ border: '1px solid #475569', borderRadius: 12, background: '#0b1220', padding: 12 }}>
-                     <div style={{ fontWeight: 800, color: '#e2e8f0', marginBottom: 10 }}>Correction attempts ({group.attempts.length})</div>
-                     {group.attempts.map(({photo,decision}, index) => {
-                       const isLatest = index === group.attempts.length - 1;
-                       const state = decision?.decision === 'accepted' ? 'Accepted' : decision?.decision === 'rejected' ? 'Rejected' : isCorrectionReview && isLatest ? 'Awaiting review' : 'Submitted';
-                       const stateColor = state === 'Accepted' ? '#86efac' : state === 'Rejected' ? '#fca5a5' : '#93c5fd';
-                       return (
-                         <details key={photo.id} open={isLatest} style={{ marginTop: 8, border: '1px solid #334155', borderRadius: 10, padding: 10 }}>
-                           <summary style={{ cursor: 'pointer', fontWeight: 700, color: '#f8fafc' }}>
-                             Attempt {index + 1} <span style={{ color: stateColor, marginLeft: 10 }}>{state}</span>
-                           </summary>
-                           <div style={{ marginTop: 10, display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-                             <a href={photo.url} target="_blank" rel="noreferrer"><img src={photo.url} alt={'Correction attempt ' + (index + 1)} style={{ width: 180, maxWidth: '100%', borderRadius: 8 }} /></a>
-                             <div style={{ flex: 1, minWidth: 180, fontSize: 13, lineHeight: 1.5 }}>
-                               <div style={{ color: '#94a3b8' }}>{photo.created_at ? new Date(photo.created_at).toLocaleString() : ''}</div>
-                               {photo.cleaner_note && <div style={{ marginTop: 6 }}><b>Cleaner note:</b> {photo.cleaner_note}</div>}
-                               {decision?.note && <div style={{ marginTop: 6, color: '#fde68a' }}><b>Manager feedback:</b> {decision.note}</div>}
-                             </div>
-                           </div>
-                         </details>
-                       );
-                     })}
-                     {status === 'needs_fix' && activeFindings.some(f => String(f.correction_task_id) === group.taskId) && (
-                       <div style={{ color: '#fcd34d', marginTop: 12, fontWeight: 700 }}>Next attempt — awaiting cleaner upload</div>
-                     )}
-                   </div>
-                 ))}
+                 {correctionGroups.map(group => {
+                   const latestAttempt = group.attempts[group.attempts.length - 1];
+                   const latestPhoto = group.latest || latestAttempt?.photo || null;
+                   const latestIsPending = isCorrectionReview && !!group.finding && !!group.latest && !decidedPhotoIds.has(String(group.latest.id));
+                   const latestDecision = latestAttempt?.decision;
+                   const groupStatus = latestIsPending ? 'Review needed' : status === 'needs_fix' && group.finding ? 'Awaiting cleaner' : latestDecision?.decision === 'accepted' ? 'Accepted' : group.finding ? 'Outstanding' : 'History';
+                   const groupColor = groupStatus === 'Accepted' ? '#86efac' : groupStatus === 'Review needed' ? '#93c5fd' : '#fcd34d';
+                   return (
+                     <details key={group.taskId} open={!!group.finding} style={{ border: '1px solid #475569', borderRadius: 12, background: '#0b1220', padding: 12 }}>
+                       <summary style={{ cursor: 'pointer', color: '#bfdbfe', fontWeight: 800, fontSize: 16 }}>
+                         Correction {group.index + 1} — {group.area}
+                         <span style={{ color: groupColor, fontSize: 12, marginLeft: 10 }}>{groupStatus}</span>
+                       </summary>
+                       <div style={{ marginTop: 14 }}>
+                         {group.original && (
+                           <details style={{ border: '1px solid #334155', borderRadius: 10, padding: 10, marginBottom: 12 }}>
+                             <summary style={{ cursor: 'pointer', color: '#cbd5e1', fontWeight: 700 }}>Original flagged photo · View</summary>
+                             <a href={group.original.url} target="_blank" rel="noreferrer">
+                               <img src={group.original.url} alt="Original flagged photo" style={{ width: 220, maxWidth: '100%', borderRadius: 8, marginTop: 10 }} />
+                             </a>
+                             {group.finding && pickEnglishForManager(group.finding) && (
+                               <div style={{ color: '#cbd5e1', marginTop: 8, whiteSpace: 'pre-wrap', fontSize: 13 }}>
+                                 <b>Original manager instructions:</b> {pickEnglishForManager(group.finding)}
+                               </div>
+                             )}
+                           </details>
+                         )}
+                         <div style={{ fontWeight: 800, color: '#e2e8f0', marginBottom: 10 }}>Correction attempts ({group.attempts.length})</div>
+                         {group.attempts.map(({photo,decision}, index) => {
+                           const isLatest = index === group.attempts.length - 1;
+                           const state = decision?.decision === 'accepted' ? 'Accepted' : decision?.decision === 'rejected' ? 'Rejected' : latestIsPending && isLatest ? 'Awaiting review' : 'Submitted';
+                           const stateColor = state === 'Accepted' ? '#86efac' : state === 'Rejected' ? '#fca5a5' : '#93c5fd';
+                           const showControls = latestIsPending && isLatest && String(group.latest?.id) === String(photo.id);
+                           return (
+                             <details key={photo.id} open={isLatest} style={{ marginTop: 8, border: '1px solid #334155', borderRadius: 10, padding: 10 }}>
+                               <summary style={{ cursor: 'pointer', fontWeight: 700, color: '#f8fafc' }}>
+                                 Attempt {index + 1} <span style={{ color: stateColor, marginLeft: 10 }}>{state}</span>
+                                 {isLatest && <span style={{ color: '#93c5fd', marginLeft: 8, fontSize: 12 }}>· Latest</span>}
+                               </summary>
+                               <div style={{ marginTop: 10, display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                                 {!showControls && <a href={photo.url} target="_blank" rel="noreferrer"><img src={photo.url} alt={'Correction attempt ' + (index + 1)} style={{ width: 220, maxWidth: '100%', borderRadius: 8 }} /></a>}
+                                 <div style={{ flex: 1, minWidth: 180, fontSize: 13, lineHeight: 1.5 }}>
+                                   <div style={{ color: '#94a3b8' }}>{photo.created_at ? new Date(photo.created_at).toLocaleString() : ''}</div>
+                                   {photo.cleaner_note && <div style={{ marginTop: 6 }}><b>Cleaner note:</b> {photo.cleaner_note}</div>}
+                                   {(decision?.note_sent || decision?.note) && <div style={{ marginTop: 6, color: '#fde68a' }}><b>Manager feedback:</b> {decision.note_sent || decision.note}</div>}
+                                 </div>
+                               </div>
+                               {showControls && (
+                                 <div style={{ marginTop: 14, padding: 12, border: '1px solid #3b82f6', borderRadius: 10, background: '#0f172a' }}>
+                                   <div style={{ fontWeight: 800, color: '#bfdbfe', marginBottom: 10 }}>Review this correction</div>
+                                   <PhotoCard
+                                     p={photo}
+                                     isManagerMode={isManagerMode}
+                                     selectedKeys={selectedKeys}
+                                     notesByKey={notesByKey}
+                                     findingsByKey={findingsByKey}
+                                     setNoteFor={setNoteFor}
+                                     toggleKey={toggleKey}
+                                     onTranslate={onTranslate}
+                                     translateBusyByKey={translateBusyByKey}
+                                     allowSelection={false}
+                                     acceptedTaskIds={acceptedTaskIds}
+                                     showDecisionEditor={true}
+                                   />
+                                   <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                                     <button type="button" disabled={decisionBusy || acting} onClick={() => decideCorrection(group.latest, 'accepted')} style={{ ...ui.btnPrimary, background: '#065f46', border: '1px solid #10b981', color: '#ecfdf5', fontWeight: 800 }}>✓ Accept Fix</button>
+                                     <button type="button" disabled={decisionBusy || acting} onClick={() => decideCorrection(group.latest, 'rejected')} style={{ ...ui.btnSecondary, border: '1px solid #d97706', color: '#fde68a', background: '#422006', fontWeight: 800 }}>↻ Request Another Fix</button>
+                                   </div>
+                                 </div>
+                               )}
+                             </details>
+                           );
+                         })}
+                         {latestIsPending && !group.attempts.some(a => String(a.photo.id) === String(group.latest.id)) && (
+                           <div style={{ marginTop: 12, color: '#fca5a5' }}>Latest correction photo is not yet linked to this history. Review is blocked until the photo appears in the correction timeline.</div>
+                         )}
+                         {status === 'needs_fix' && group.finding && <div style={{ color: '#fcd34d', marginTop: 12, fontWeight: 700 }}>Next attempt — awaiting cleaner upload</div>}
+                         {isCorrectionReview && group.finding && !latestPhoto && <div style={{ color: '#fca5a5', marginTop: 12 }}>No correction photo linked to this issue yet.</div>}
+                       </div>
+                     </details>
+                   );
+                 })}
                </div>
                <div style={{marginTop:14,display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
                  {isCorrectionReview && <button type="button" style={{...ui.btnSecondary,background:'#172554',border:'1px solid #60a5fa',color:'#dbeafe',fontWeight:700}} onClick={() => setViewFullTurn(v => !v)}>
-                   {viewFullTurn ? '← Show Standard Photo View' : 'View Full Turn & Photo History'}
+                   {viewFullTurn ? '← Hide Full Photo Gallery' : 'View Full Turn & Photo History'}
                  </button>}
-                 <span style={{color:'#94a3b8',fontSize:12}}>{viewFullTurn ? 'Showing all photos for reference.' : isCorrectionReview ? 'Showing latest submitted corrections below.' : 'Full photo set shown below; expand attempts above for history.'}</span>
+                 <span style={{color:'#94a3b8',fontSize:12}}>{viewFullTurn ? 'Showing all photos for reference.' : isCorrectionReview ? 'All correction photos and review actions are grouped above.' : 'Expand a correction above to view its history.'}</span>
                </div>
              </div>
            )}
            <div style={{ ...ui.subtle, marginTop: 10 }}>Click any photo to open full-size in a new tab.</div>
         </div>
 
-        <div style={ui.card}>
+        {(!isCorrectionReview || viewFullTurn) && <div style={ui.card}>
                      {loading ? (
             <div>Loading photos…</div>
           ) : sections && sections.length > 0 ? (
@@ -1454,9 +1531,9 @@ export default function Review() {
                       translateBusyByKey={translateBusyByKey}
                       allowSelection={!isCorrectionReview && !p.is_fix}
                       acceptedTaskIds={acceptedTaskIds}
-                      showDecisionEditor={isCorrectionReview && latestCorrections.some(x => x.id === p.id) && !decidedPhotoIds.has(String(p.id))}
+                      showDecisionEditor={false}
                     />
-                    {isCorrectionReview && latestCorrections.some(x => x.id === p.id) && (
+                    {false && isCorrectionReview && latestCorrections.some(x => x.id === p.id) && (
                       <div style={{marginTop:10,padding:10,border:'1px solid #334155',borderRadius:10,background:'rgba(15,23,42,.8)',display:'flex',gap:8,flexWrap:'wrap'}}>
                         {decidedPhotoIds.has(String(p.id)) ? (
                           <strong style={{color:correctionDecisions.some(d => String(d.photo_id) === String(p.id) && d.decision === 'accepted') ? '#86efac' : '#fcd34d'}}>
@@ -1522,9 +1599,9 @@ export default function Review() {
                         translateBusyByKey={translateBusyByKey}
                        allowSelection={!isCorrectionReview && !p.is_fix}
                        acceptedTaskIds={acceptedTaskIds}
-                       showDecisionEditor={isCorrectionReview && latestCorrections.some(x => x.id === p.id) && !decidedPhotoIds.has(String(p.id))}
+                       showDecisionEditor={false}
                       />
-                      {isCorrectionReview && latestCorrections.some(x => x.id === p.id) && !decidedPhotoIds.has(String(p.id)) && <div style={{display:'flex',gap:8,marginTop:8}}><button type="button" disabled={decisionBusy} onClick={() => decideCorrection(p,'accepted')} style={{...ui.btnPrimary,background:'#065f46',border:'1px solid #10b981',color:'#ecfdf5',fontWeight:800}}>✓ Accept Fix</button><button type="button" disabled={decisionBusy} onClick={() => decideCorrection(p,'rejected')} style={{...ui.btnSecondary,border:'1px solid #d97706',color:'#fde68a',background:'#422006',fontWeight:800}}>↻ Request Another Fix</button></div>}
+                      {false && isCorrectionReview && latestCorrections.some(x => x.id === p.id) && !decidedPhotoIds.has(String(p.id)) && <div style={{display:'flex',gap:8,marginTop:8}}><button type="button" disabled={decisionBusy} onClick={() => decideCorrection(p,'accepted')} style={{...ui.btnPrimary,background:'#065f46',border:'1px solid #10b981',color:'#ecfdf5',fontWeight:800}}>✓ Accept Fix</button><button type="button" disabled={decisionBusy} onClick={() => decideCorrection(p,'rejected')} style={{...ui.btnSecondary,border:'1px solid #d97706',color:'#fde68a',background:'#422006',fontWeight:800}}>↻ Request Another Fix</button></div>}
                       </div>
                     ))}
                   </div>
