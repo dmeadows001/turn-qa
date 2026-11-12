@@ -361,6 +361,69 @@ function GettingStartedModal({ enabled, storageKey, children }) {
   );
 }
 
+// Thumbnail previews are optional: existing photos without thumbnails still work.
+// Full-resolution URLs remain the destination of the surrounding photo links.
+const turnThumbnailCache = new Map();
+function TurnPhotoPreview({ photo, alt, style }) {
+  const originalUrl = photo?.url || '';
+  const originalPath = String(photo?.path || photo?.storage_path || '').replace(/^photos\//, '');
+  const thumbPath = originalPath.startsWith('turns/')
+    ? originalPath.replace(/^turns\//, 'turn-thumbs/')
+    : null;
+  const [previewUrl, setPreviewUrl] = useState(() => thumbPath ? '' : originalUrl);
+  const [usingThumb, setUsingThumb] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setPreviewUrl(thumbPath ? '' : originalUrl);
+    setUsingThumb(false);
+    if (!thumbPath || !originalUrl) return () => { cancelled = true; };
+
+    (async () => {
+      const cached = turnThumbnailCache.get(thumbPath);
+      if (cached && cached.expiresAt > Date.now()) {
+        if (!cancelled) { setPreviewUrl(cached.url); setUsingThumb(true); }
+        return;
+      }
+      try {
+        const headers = await authHeadersAsync();
+        const response = await fetch('/api/sign-photo', {
+          method: 'POST',
+          headers: { ...headers, 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ path: thumbPath, expires: 600 }),
+        });
+        if (!response.ok) { if (!cancelled) setPreviewUrl(originalUrl); return; }
+        const result = await response.json();
+        if (!result?.url) { if (!cancelled) setPreviewUrl(originalUrl); return; }
+        turnThumbnailCache.set(thumbPath, { url: result.url, expiresAt: Date.now() + 8 * 60 * 1000 });
+        if (!cancelled) { setPreviewUrl(result.url); setUsingThumb(true); }
+      } catch (e) {
+        // Thumbnail signing is best-effort; the original stays available.
+        if (!cancelled) setPreviewUrl(originalUrl);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [thumbPath, originalUrl]);
+
+  return (
+    <img
+      src={previewUrl || undefined}
+      alt={alt}
+      loading="lazy"
+      decoding="async"
+      onError={() => {
+        if (usingThumb) {
+          turnThumbnailCache.delete(thumbPath);
+          setUsingThumb(false);
+          setPreviewUrl(originalUrl);
+        }
+      }}
+      style={style}
+    />
+  );
+}
+
 // --- PhotoCard at module scope so it doesn't remount each render ---
 const PhotoCard = memo(
   function PhotoCard({
@@ -418,8 +481,8 @@ const PhotoCard = memo(
         }}
       >
         <a href={p.url} target="_blank" rel="noreferrer">
-          <img
-            src={p.url}
+          <TurnPhotoPreview
+            photo={p}
             alt={p.area_key || 'photo'}
             style={{ width: '100%', display: 'block', aspectRatio: showDecisionEditor ? 'auto' : '4/3', height: 'auto', objectFit: showDecisionEditor ? 'contain' : 'cover' }}
           />
@@ -1440,7 +1503,7 @@ export default function Review() {
                            <details style={{ border: '1px solid #334155', borderRadius: 10, padding: 10, marginBottom: 12 }}>
                              <summary style={{ cursor: 'pointer', color: '#cbd5e1', fontWeight: 700 }}>Original flagged photo · View</summary>
                              <a href={group.original.url} target="_blank" rel="noreferrer">
-                               <img src={group.original.url} alt="Original flagged photo" style={{ width: 220, maxWidth: '100%', borderRadius: 8, marginTop: 10 }} />
+                               <TurnPhotoPreview photo={group.original} alt="Original flagged photo" style={{ width: 220, maxWidth: '100%', borderRadius: 8, marginTop: 10 }} />
                              </a>
                              {group.finding && pickEnglishForManager(group.finding) && (
                                <div style={{ color: '#cbd5e1', marginTop: 8, whiteSpace: 'pre-wrap', fontSize: 13 }}>
@@ -1462,7 +1525,7 @@ export default function Review() {
                                  {isLatest && <span style={{ color: '#93c5fd', marginLeft: 8, fontSize: 12 }}>· Latest</span>}
                                </summary>
                                <div style={{ marginTop: 10, display: showControls ? 'none' : 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-                                 {!showControls && <a href={photo.url} target="_blank" rel="noreferrer"><img src={photo.url} alt={'Correction attempt ' + (index + 1)} style={{ width: 220, maxWidth: '100%', borderRadius: 8 }} /></a>}
+                                 {!showControls && <a href={photo.url} target="_blank" rel="noreferrer"><TurnPhotoPreview photo={photo} alt={'Correction attempt ' + (index + 1)} style={{ width: 220, maxWidth: '100%', borderRadius: 8 }} /></a>}
                                  <div style={{ flex: 1, minWidth: 180, fontSize: 13, lineHeight: 1.5 }}>
                                    <div style={{ color: '#94a3b8' }}>{photo.created_at ? new Date(photo.created_at).toLocaleString() : ''}</div>
                                    {photo.cleaner_note && <div style={{ marginTop: 6 }}><b>Cleaner note:</b> {photo.cleaner_note}</div>}
