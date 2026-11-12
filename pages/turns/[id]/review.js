@@ -421,7 +421,7 @@ const PhotoCard = memo(
           <img
             src={p.url}
             alt={p.area_key || 'photo'}
-            style={{ width: '100%', display: 'block', aspectRatio: '4/3', objectFit: 'cover' }}
+            style={{ width: '100%', display: 'block', aspectRatio: showDecisionEditor ? 'auto' : '4/3', height: 'auto', objectFit: showDecisionEditor ? 'contain' : 'cover' }}
           />
         </a>
 
@@ -1456,12 +1456,12 @@ export default function Review() {
                            const stateColor = state === 'Accepted' ? '#86efac' : state === 'Rejected' ? '#fca5a5' : '#93c5fd';
                            const showControls = latestIsPending && isLatest && String(group.latest?.id) === String(photo.id);
                            return (
-                             <details key={photo.id} open={isLatest} style={{ marginTop: 8, border: '1px solid #334155', borderRadius: 10, padding: 10 }}>
+                             <details key={photo.id} open={isLatest} style={{ marginTop: 8, border: showControls ? 'none' : '1px solid #334155', borderRadius: 10, padding: showControls ? 0 : 10 }}>
                                <summary style={{ cursor: 'pointer', fontWeight: 700, color: '#f8fafc' }}>
                                  Attempt {index + 1} <span style={{ color: stateColor, marginLeft: 10 }}>{state}</span>
                                  {isLatest && <span style={{ color: '#93c5fd', marginLeft: 8, fontSize: 12 }}>· Latest</span>}
                                </summary>
-                               <div style={{ marginTop: 10, display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                               <div style={{ marginTop: 10, display: showControls ? 'none' : 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-start' }}>
                                  {!showControls && <a href={photo.url} target="_blank" rel="noreferrer"><img src={photo.url} alt={'Correction attempt ' + (index + 1)} style={{ width: 220, maxWidth: '100%', borderRadius: 8 }} /></a>}
                                  <div style={{ flex: 1, minWidth: 180, fontSize: 13, lineHeight: 1.5 }}>
                                    <div style={{ color: '#94a3b8' }}>{photo.created_at ? new Date(photo.created_at).toLocaleString() : ''}</div>
@@ -1470,8 +1470,7 @@ export default function Review() {
                                  </div>
                                </div>
                                {showControls && (
-                                 <div style={{ marginTop: 14, padding: 12, border: '1px solid #3b82f6', borderRadius: 10, background: '#0f172a' }}>
-                                   <div style={{ fontWeight: 800, color: '#bfdbfe', marginBottom: 10 }}>Review this correction</div>
+                                 <div style={{ marginTop: 10, padding: 0, background: 'transparent' }}>
                                    <PhotoCard
                                      p={photo}
                                      isManagerMode={isManagerMode}
