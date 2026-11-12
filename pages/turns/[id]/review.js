@@ -865,18 +865,29 @@ export default function Review() {
     return [...byTask.values()];
   }, [photos, activeFindings, isCorrectionReview, taskIds]);
   const decidedPhotoIds = useMemo(() => new Set(correctionDecisions.map(d => String(d.photo_id))), [correctionDecisions]);
+  // Resolve the newest submitted photo to its task, including legacy photos
+  // that have no correction_task_id but unambiguously match a single issue.
+  const latestByTask = useMemo(() => new Map(latestCorrections.map(p => [String(p.correction_task_id), p])), [latestCorrections]);
   const pendingDecisionCount = isCorrectionReview ? latestCorrections.filter(p => !decidedPhotoIds.has(String(p.id))).length : 0;
-  const unresolvedTaskCount = isCorrectionReview ? taskIds.size - latestCorrections.length : 0;
+  const unresolvedTaskCount = isCorrectionReview ? Math.max(0, taskIds.size - latestByTask.size) : 0;
   const rejectedCount = isCorrectionReview ? latestCorrections.filter(p => correctionDecisions.some(d => String(d.photo_id) === String(p.id) && d.decision === 'rejected')).length : 0;
   const visiblePhotos = isCorrectionReview && !viewFullTurn ? latestCorrections : photos;
   const sections = useMemo(() => buildSections(visiblePhotos, templateShots), [visiblePhotos, templateShots]);
-  // Only task-linked corrections are eligible for an accepted badge. A photo
-  // is accepted when its task no longer appears in the active round, and the
-  // turn has been approved or another review round has been submitted.
   const acceptedTaskIds = useMemo(() => new Set(correctionDecisions.filter(d => d.decision === 'accepted').map(d => d.correction_task_id)), [correctionDecisions]);
 
-  // Historical correction attempts are sourced from persisted photos and decisions.
-  // Do not infer a decision from a photo's age or the current turn status.
+  // The approval button is gated by the latest photo for EVERY active task,
+  // not by whether an old rejected decision exists in the audit history.
+  const allCorrectionsAccepted = isCorrectionReview && taskIds.size > 0 &&
+    [...taskIds].every(taskId => {
+      const latest = latestByTask.get(String(taskId));
+      return !!latest && correctionDecisions.some(d =>
+        String(d.photo_id) === String(latest.id) &&
+        String(d.correction_task_id) === String(taskId) && d.decision === 'accepted'
+      );
+    });
+
+  // Historical attempts, including the current pending photo. Match legacy
+  // photos only via the conservative single-issue-per-shot fallback above.
   const correctionHistory = useMemo(() => {
     const byPhotoId = new Map(photos.map(p => [String(p.id), p]));
     const groups = new Map();
@@ -887,7 +898,7 @@ export default function Review() {
       const taskId = String(d.correction_task_id || photo.correction_task_id || '');
       if (!taskId) continue;
       if (!groups.has(taskId)) groups.set(taskId, []);
-      groups.get(taskId).push({ photo, decision: d });
+      groups.get(taskId).push({ photo: { ...photo, correction_task_id: taskId }, decision: d });
       recorded.add(String(photo.id));
     }
     for (const photo of photos) {
@@ -895,16 +906,25 @@ export default function Review() {
       const taskId = String(photo.correction_task_id);
       if (!groups.has(taskId)) groups.set(taskId, []);
       groups.get(taskId).push({ photo, decision: null });
+      recorded.add(String(photo.id));
+    }
+    // Critical: latestCorrections may contain a legacy photo whose task ID
+    // was inferred safely by shot. It must also appear in the timeline.
+    for (const photo of latestCorrections) {
+      if (recorded.has(String(photo.id))) continue;
+      const taskId = String(photo.correction_task_id || '');
+      if (!taskId) continue;
+      if (!groups.has(taskId)) groups.set(taskId, []);
+      groups.get(taskId).push({ photo, decision: null });
+      recorded.add(String(photo.id));
     }
     return [...groups.entries()].map(([taskId, attempts]) => ({
       taskId,
       attempts: attempts.sort((a,b) => new Date(a.photo.created_at || 0) - new Date(b.photo.created_at || 0)),
     }));
-  }, [photos, correctionDecisions]);
+  }, [photos, correctionDecisions, latestCorrections]);
   const hasCorrectionHistory = isManagerMode && (correctionHistory.length > 0 || activeFindings.some(f => f.correction_task_id));
 
-  // Each correction issue owns its complete history and latest review controls.
-  // Never group by room alone: multiple issues can exist in the same room.
   const correctionGroups = useMemo(() => {
     const photosById = new Map(photos.map(p => [String(p.id), p]));
     const historyByTask = new Map(correctionHistory.map(g => [String(g.taskId), g.attempts]));
@@ -918,13 +938,13 @@ export default function Review() {
     return [...ids].map((taskId, index) => {
       const finding = findingsByTask.get(taskId) || null;
       const attempts = historyByTask.get(taskId) || [];
-      const latest = latestCorrections.find(p => String(p.correction_task_id) === taskId) || null;
+      const latest = latestByTask.get(taskId) || null;
       const original = finding?.photo_id ? photosById.get(String(finding.photo_id)) : null;
       const representative = original || latest || attempts[0]?.photo;
       const area = representative?.area_key || templateShots.find(t => t.shot_id === representative?.shot_id)?.label || 'Correction issue';
       return { taskId, index, finding, attempts, latest, original, area };
     });
-  }, [photos, activeFindings, correctionHistory, latestCorrections, templateShots]);
+  }, [photos, activeFindings, correctionHistory, latestByTask, templateShots]);
 
   // Display property information when supplied by get-turn, without changing the API.
   const propertyLabel = turn?.property?.name || turn?.property_name || turn?.property?.address || turn?.property_address || turn?.property?.street_address || '';
@@ -1050,6 +1070,7 @@ export default function Review() {
 
   // --- Approve ---
   async function markApproved() {
+    if (activeFindings.length > 0 && !allCorrectionsAccepted) { alert('Accept every outstanding correction first.'); return; }
     if (!turnId) return;
     setActing(true);
     try {
@@ -1751,9 +1772,10 @@ export default function Review() {
           <div style={{ ...ui.card, marginTop: 16, border: '1px solid #334155' }}>
             <h3 style={{ margin: '0 0 8px', fontSize: 19 }}>Final Turn Approval</h3>
             <p style={{ color: '#94a3b8', fontSize: 13, marginTop: 0 }}>Approve the entire turnover after all required corrections have been accepted.</p>
-            <button onClick={markApproved} disabled={acting || !turnId || status !== 'submitted' || (isCorrectionReview && (pendingDecisionCount > 0 || rejectedCount > 0 || taskIds.size > 0))} style={ui.btnPrimary}>
+            <button onClick={markApproved} disabled={acting || !turnId || status !== 'submitted' || (activeFindings.length > 0 && !allCorrectionsAccepted)} style={{...ui.btnPrimary, opacity: (acting || !turnId || status !== 'submitted' || (activeFindings.length > 0 && !allCorrectionsAccepted)) ? 0.4 : 1, cursor: (acting || !turnId || status !== 'submitted' || (activeFindings.length > 0 && !allCorrectionsAccepted)) ? 'not-allowed' : 'pointer'}}>
               {acting ? '…' : '✅ Approve Turn'}
             </button>
+            {activeFindings.length > 0 && !allCorrectionsAccepted && <div style={{color:'#fcd34d',fontSize:12,marginTop:8}}>Accept every outstanding correction before approving the entire turn.</div>}
           </div>
         )}
         {uniqueAreas.length > 1 && <div style={{ ...ui.subtle }}>Areas in this turn: {uniqueAreas.join(' • ')}</div>}
