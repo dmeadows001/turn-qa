@@ -4,6 +4,31 @@ import { useEffect, useRef, useState } from 'react';
 import ChromeDark from '../../../components/ChromeDark';
 import { ui } from '../../../lib/theme';
 
+// Generate a lightweight preview without changing the original uploaded photo.
+// Mirrors the existing reference-photo thumbnail technique (240px JPEG, 72%).
+async function createTurnThumbnail(file) {
+  const image = await createImageBitmap(file);
+  try {
+    const maxSize = 240;
+    const scale = Math.min(1, maxSize / Math.max(image.width, image.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(image.width * scale));
+    canvas.height = Math.max(1, Math.round(image.height * scale));
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('Thumbnail canvas unavailable');
+    ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+    return await new Promise((resolve, reject) => {
+      canvas.toBlob(
+        (blob) => blob ? resolve(blob) : reject(new Error('Thumbnail encoding failed')),
+        'image/jpeg',
+        0.72
+      );
+    });
+  } finally {
+    image.close();
+  }
+}
+
 // Fallback default shots if no template is linked to this turn
 const DEFAULT_SHOTS = [
   { shot_id: 'fallback-entry_overall',  area_key: 'entry_overall',       label: 'Entry - Overall',           min_count: 1 },
@@ -1077,6 +1102,40 @@ export default function Capture() {
           correctionTaskId: uploadTaskRef.current.get(uploadId) || null,
         });
         updateUploadProgress(uploadId, 'uploaded', 100);
+
+        // Best-effort thumbnail upload AFTER the original is registered.
+        // Do not block cleaner submission, change progress, or mark the original as failed.
+        // The proxy checks that the matching original exists and that this cleaner is authorized.
+        if (finalPath.startsWith('turns/')) {
+          const thumbPath = finalPath.replace(/^turns\//, 'turn-thumbs/');
+          void (async () => {
+            try {
+              const thumbnail = await createTurnThumbnail(file);
+              if (thumbnail.size > 1024 * 1024) throw new Error('Thumbnail exceeds 1 MB');
+              const controller = new AbortController();
+              const timeout = setTimeout(() => controller.abort(), 10000);
+              try {
+                const response = await fetch(
+                  `/api/upload-proxy?path=${encodeURIComponent(thumbPath)}&bucket=${encodeURIComponent(meta.bucket || 'photos')}`,
+                  {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'image/jpeg', ...authHeaders() },
+                    body: thumbnail,
+                    signal: controller.signal,
+                  }
+                );
+                if (!response.ok) {
+                  throw new Error(`Thumbnail upload failed (${response.status})`);
+                }
+              } finally {
+                clearTimeout(timeout);
+              }
+            } catch (error) {
+              console.warn('[capture] Optional turnover thumbnail failed:', error?.message || error);
+            }
+          })();
+        }
+
         uploadFilesRef.current.delete(uploadId);
         uploadTaskRef.current.delete(uploadId);
       } catch (e) {
@@ -1785,7 +1844,7 @@ export default function Capture() {
                         if (!thumbByPath[f.url] && f.url?.startsWith('turns/')) ensureThumb(f.url);
                         return (
                           <details key={f.photoId || f.url} open={historyIndex === historyPhotos.length - 1} style={{ padding: 10, marginBottom: 10, borderRadius: 10, border: '1px solid #475569', background: '#0b1220' }}>
-                            <summary style={{ fontSize: 13, fontWeight: 700, marginBottom: 7, cursor: 'pointer', color: '#e2e8f0' }}>Attempt {historyIndex + 1} · <span style={{ color: latestDecision?.decision === 'rejected' ? '#f87171' : latestDecision?.decision === 'accepted' ? '#86efac' : '#e2e8f0' }}>{latestDecision?.decision === 'rejected' ? 'Rejected' : latestDecision?.decision === 'accepted' ? 'Accepted' : 'Previously submitted'}</span>{historyIndex === historyPhotos.length - 1 && <span style={{ color: '#93c5fd' }}> · Latest</span>}</summary>
+                            <summary style={{ fontSize: 13, fontWeight: 700, marginBottom: 7, cursor: 'pointer', color: '#e2e8f0' }}>Attempt {historyIndex + 1} · {latestDecision?.decision === 'rejected' ? 'Rejected' : latestDecision?.decision === 'accepted' ? 'Accepted' : 'Previously submitted'} {historyIndex === historyPhotos.length - 1 ? '· Latest' : ''}</summary>
                             {thumbByPath[f.url] && <img src={thumbByPath[f.url]} alt={`Previous correction attempt ${historyIndex + 1}`} style={{ width: 180, maxWidth: '100%', borderRadius: 8 }} />}
                             <div style={{ marginTop: 6 }}><ThemedButton kind="secondary" onClick={() => viewFlaggedPhoto(f.url)}>View correction photo</ThemedButton></div>
                             {f.capturedAt && <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 6 }}>{formatCapturedAt(f.capturedAt)}</div>}
