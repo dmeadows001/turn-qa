@@ -499,9 +499,9 @@ const PhotoCard = memo(
           />
         </a>
 
-        <div style={{ padding: 10, fontSize: 12 }}>
+        <div style={{ padding: 12, fontSize: 12 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', rowGap: 6 }}>
               <b>{p.area_key || '—'}</b>
 
               {isOriginalNeedsFix && (
@@ -1159,6 +1159,12 @@ export default function Review() {
 
   // Display property information when supplied by get-turn, without changing the API.
   const propertyLabel = turn?.property?.name || turn?.property_name || turn?.property?.address || turn?.property_address || turn?.property?.street_address || '';
+  // Turn-level date (not an individual photo timestamp).
+  const turnStartDate = turn?.started_at || turn?.startedAt || turn?.start_time || turn?.created_at || null;
+  const formattedTurnDate = turnStartDate && !Number.isNaN(new Date(turnStartDate).getTime())
+    ? new Date(turnStartDate).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })
+    : '';
+
 
   async function decideCorrection(p, decision) {
     if (readOnly || !p.correction_task_id || !p.id || decisionBusy) return;
@@ -1590,8 +1596,8 @@ export default function Review() {
               <h2 style={{ margin: 0, fontSize: 25, color: '#f8fafc' }}>
                 {propertyLabel || 'Property review'}
               </h2>
-              <div style={{ color: '#94a3b8', fontSize: 12, marginTop: 4 }}>
-                {propertyLabel ? 'Turn review' : 'Property name unavailable from current turn response'}
+              <div style={{ color: '#cbd5e1', fontSize: 13, marginTop: 6 }}>
+                {formattedTurnDate ? `Turn date: ${formattedTurnDate}` : (propertyLabel ? 'Turn review' : 'Property name unavailable from current turn response')}
               </div>
             </div>
           )}
@@ -1742,7 +1748,7 @@ export default function Review() {
                     display: 'flex',
                     alignItems: 'baseline',
                     justifyContent: 'space-between',
-                    margin: '2px 4px 10px',
+                    margin: '4px 4px 16px',
                   }}
                 >
                   <h3 style={{ margin: 0 }}>{sec.title || 'Section'}</h3>
