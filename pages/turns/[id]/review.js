@@ -556,7 +556,7 @@ const PhotoCard = memo(
             )}
           </div>
 
-          <div style={{ color: '#9ca3af' }}>{new Date(p.created_at).toLocaleString()}</div>
+          <div style={{ color: '#9ca3af', marginTop: 8 }}>{new Date(p.created_at).toLocaleString()}</div>
           {/* Show note + translation UI for selected original OR correction photos */}
           {isManagerMode && !readOnly && (selected || showDecisionEditor) && (
             <div style={{ marginTop: 10 }}>
