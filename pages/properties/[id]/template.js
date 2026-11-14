@@ -249,6 +249,11 @@ export default function TemplateBuilder() {
 
   // drag state
   const [draggingId, setDraggingId] = useState(null);
+  // UI-only: collapsed checklist cards. All cards start expanded for easy editing.
+  const [collapsedCards, setCollapsedCards] = useState({});
+  function toggleCard(id) {
+    setCollapsedCards((prev) => ({ ...prev, [id]: !prev[id] }));
+  }
 
   // thumbnail signing cache (for reference photos)
   const [thumbByPath, setThumbByPath] = useState({});
@@ -777,45 +782,33 @@ export default function TemplateBuilder() {
     <ChromeDark title={property.name}>
       <GettingStartedModal
         storageKey="turnqa_gs_manager_template_v1"
-        title="Build your TurnQA checklist (Sections + Photo Requests)"
+        title="Build your TurnQA photo checklist"
         open={showGettingStarted}
         setOpen={setShowGettingStarted}
       >
         <div style={{ marginBottom: 10 }}>
-          To get started, choose an area (like <b>Kitchen</b>) and enter what photo you want, like
+          To get started, choose an area (like <b>Kitchen</b>) and describe the photo you need, like
           “Overall kitchen shot” or “Photo of refrigerator”.
         </div>
         <div style={{ marginBottom: 10 }}>
-          Add as many shots as you need for that area, then move on to the next area (Master Bedroom, Bathroom, etc.).
+          Add as many photo requests as you need. Each request can include reference photos to show the cleaner the expected result.
         </div>
         <div style={ui.subtle}>
-          Tip: Use “Required” to enforce multiple angles (example: “Bathroom — Shower” required = 2).
+          Tip: Set “Minimum photos” to 2 when you need two different angles of the same space.
         </div>
       </GettingStartedModal>
 
       <section style={ui.sectionGrid}>
         {/* Builder */}
         <div style={ui.card}>
-          <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <h2 style={{ marginTop: 0, marginBottom: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, minWidth: 0 }}>
+            <h2 style={{ margin: 0, minWidth: 0, overflowWrap: 'anywhere', lineHeight: 1.3 }}>
               Checklist for <span style={{ color: '#cbd5e1' }}>{property.name}</span>
             </h2>
-
             <button
               type="button"
               onClick={openGettingStarted}
-              style={{
-                position: 'absolute',
-                right: 0,
-                top: '50%',
-                transform: 'translateY(-50%)',
-                ...ui.btnSecondary,
-                padding: '6px 10px',
-                borderRadius: 999,
-                border: '1px solid #334155',
-                background: '#0f172a',
-                color: '#cbd5e1',
-              }}
+              style={{ ...ui.btnSecondary, flexShrink: 0, padding: '7px 10px', borderRadius: 999, border: '1px solid #334155', background: '#0f172a', color: '#cbd5e1' }}
               title="Help / Getting Started"
               aria-label="Help / Getting Started"
             >
@@ -823,53 +816,31 @@ export default function TemplateBuilder() {
             </button>
           </div>
 
-          <div style={ui.subtle}>
-            Define the photos your cleaner must capture per area.
+          <div style={{ ...ui.subtle, marginTop: 10, lineHeight: 1.5 }}>
+            Create a photo checklist for your cleaner. Each item tells them what to photograph and how many photos to take.
           </div>
 
-          {/* Add new item */}
-          <form onSubmit={addShot} style={{ marginTop: 14 }}>
-            <label style={ui.label}>Add checklist item</label>
-            <div style={{ ...ui.row }}>
-              <input
-                type="text"
-                placeholder="e.g., Kitchen — Overall"
-                style={{ ...ui.input, flex: 2, minWidth: 240 }}
-                value={newLabel}
-                onChange={(e) => setNewLabel(e.target.value)}
-              />
-              <select
-                style={{
-                  ...ui.input,
-                  flex: 1,
-                  minWidth: 160,
-                  background: '#0b1220',
-                  cursor: 'pointer',
-                }}
-                value={newArea}
-                onChange={(e) => setNewArea(e.target.value)}
-              >
-                {AREAS.map(([v, label]) => (
-                  <option key={v} value={v}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-              <input
-                type="number"
-                min={1}
-                step={1}
-                style={{ ...ui.input, width: 120 }}
-                value={newRequired}
-                onChange={(e) => setNewRequired(e.target.value)}
-              />
-              <button type="submit" style={ui.btnPrimary}>
-                Add
-              </button>
+          {/* Add new item: labeled fields work on both mobile and desktop. */}
+          <form onSubmit={addShot} style={{ marginTop: 18, padding: 14, border: '1px solid #334155', borderRadius: 12, background: '#0b1220' }}>
+            <div style={{ fontWeight: 700, color: '#e2e8f0', marginBottom: 6 }}>Add a photo request</div>
+            <div style={{ ...ui.subtle, marginBottom: 14 }}>Example: Kitchen → Overall kitchen view → 2 photos.</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 210px), 1fr))', gap: 12, minWidth: 0 }}>
+              <div style={{ minWidth: 0 }}>
+                <label htmlFor="new-shot-area" style={{ ...ui.label, display: 'block', marginBottom: 6 }}>1. Area</label>
+                <select id="new-shot-area" style={{ ...ui.input, width: '100%', minWidth: 0, boxSizing: 'border-box', background: '#0b1220', cursor: 'pointer' }} value={newArea} onChange={(e) => setNewArea(e.target.value)}>
+                  {AREAS.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
+                </select>
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <label htmlFor="new-shot-label" style={{ ...ui.label, display: 'block', marginBottom: 6 }}>2. What should the cleaner photograph?</label>
+                <input id="new-shot-label" type="text" placeholder="e.g., Overall kitchen view" style={{ ...ui.input, width: '100%', minWidth: 0, boxSizing: 'border-box' }} value={newLabel} onChange={(e) => setNewLabel(e.target.value)} />
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <label htmlFor="new-shot-required" style={{ ...ui.label, display: 'block', marginBottom: 6 }}>3. Minimum photos</label>
+                <input id="new-shot-required" type="number" min={1} step={1} style={{ ...ui.input, width: '100%', minWidth: 0, boxSizing: 'border-box' }} value={newRequired} onChange={(e) => setNewRequired(e.target.value)} />
+              </div>
             </div>
-            <div style={{ ...ui.subtle, marginTop: 6 }}>
-              “Required” = minimum number of photos for this item.
-            </div>
+            <button type="submit" style={{ ...ui.btnPrimary, marginTop: 14 }}>+ Add photo request</button>
           </form>
 
           {msg && (
@@ -889,7 +860,7 @@ export default function TemplateBuilder() {
         <div style={{ marginTop: 18, minWidth: 0 }}>
           {shots.length === 0 ? (
             <div style={ui.muted}>
-              No items yet — add your first checklist item above.
+              No photo requests yet. Choose an area, describe the photo, and tap “Add photo request” above.
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -898,6 +869,8 @@ export default function TemplateBuilder() {
                   ? s.reference_paths.length
                   : 0;
                 const isDragging = draggingId === s.id;
+                const isCollapsed = !!collapsedCards[s.id];
+                const areaName = AREAS.find(([key]) => key === s.area_key)?.[1] || 'General';
         
                 return (
                   <div
@@ -913,66 +886,21 @@ export default function TemplateBuilder() {
                       opacity: isDragging ? 0.85 : 1,
                     }}
                   >
-                    <div
-                      style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        flexWrap: 'wrap',
-                        gap: 10,
-                        marginBottom: 14,
-                      }}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                        <span
-                          draggable
-                          onDragStart={() => handleDragStart(s.id)}
-                          onDragEnd={handleDragEnd}
-                          title="Drag to reorder"
-                          style={{
-                            cursor: 'grab',
-                            color: '#94a3b8',
-                            fontSize: 22,
-                            touchAction: 'none',
-                          }}
-                        >
-                          ⋮⋮
-                        </span>
-                        <strong style={{ color: '#e2e8f0' }}>
-                          Checklist item {idx + 1}
-                        </strong>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginBottom: isCollapsed ? 0 : 14 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: '1 1 180px' }}>
+                        <span draggable onDragStart={() => handleDragStart(s.id)} onDragEnd={handleDragEnd} title="Drag to reorder" style={{ cursor: 'grab', color: '#94a3b8', fontSize: 22, touchAction: 'none', flexShrink: 0 }}>⋮⋮</span>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontWeight: 700, color: '#e2e8f0', overflowWrap: 'anywhere' }}>{areaName} — {s.label || 'Unnamed photo request'}</div>
+                          <div style={{ ...ui.subtle, marginTop: 4 }}>{s.min_count || 1} required photo{(s.min_count || 1) === 1 ? '' : 's'} · {refCount} reference photo{refCount === 1 ? '' : 's'}</div>
+                        </div>
                       </div>
-        
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <button
-                          type="button"
-                          onClick={() => moveShot(s.id, -1)}
-                          disabled={idx === 0}
-                          style={{
-                            ...ui.btnSecondary,
-                            padding: '7px 12px',
-                            opacity: idx === 0 ? 0.4 : 1,
-                          }}
-                          title="Move up"
-                        >
-                          ▲
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => moveShot(s.id, 1)}
-                          disabled={idx === shots.length - 1}
-                          style={{
-                            ...ui.btnSecondary,
-                            padding: '7px 12px',
-                            opacity: idx === shots.length - 1 ? 0.4 : 1,
-                          }}
-                          title="Move down"
-                        >
-                          ▼
-                        </button>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                        <button type="button" onClick={() => moveShot(s.id, -1)} disabled={idx === 0} style={{ ...ui.btnSecondary, padding: '7px 10px', opacity: idx === 0 ? 0.4 : 1 }} title="Move up" aria-label="Move photo request up">▲</button>
+                        <button type="button" onClick={() => moveShot(s.id, 1)} disabled={idx === shots.length - 1} style={{ ...ui.btnSecondary, padding: '7px 10px', opacity: idx === shots.length - 1 ? 0.4 : 1 }} title="Move down" aria-label="Move photo request down">▼</button>
+                        <button type="button" onClick={() => toggleCard(s.id)} style={{ ...ui.btnSecondary, padding: '7px 10px' }} aria-expanded={!isCollapsed} aria-label={isCollapsed ? 'Expand photo request' : 'Collapse photo request'}>{isCollapsed ? 'Edit ▾' : 'Hide ▴'}</button>
                       </div>
                     </div>
-        
+                    {!isCollapsed && <>
                     <div
                       style={{
                         display: 'grid',
@@ -983,7 +911,7 @@ export default function TemplateBuilder() {
                     >
                       <div style={{ minWidth: 0 }}>
                         <label style={{ ...ui.label, display: 'block', marginBottom: 5 }}>
-                          Checklist label
+                          What should the cleaner photograph?
                         </label>
                         <input
                           type="text"
@@ -1017,7 +945,7 @@ export default function TemplateBuilder() {
         
                       <div style={{ minWidth: 0 }}>
                         <label style={{ ...ui.label, display: 'block', marginBottom: 5 }}>
-                          Required photos
+                          Minimum photos
                         </label>
                         <input
                           type="number"
@@ -1159,9 +1087,10 @@ export default function TemplateBuilder() {
                           borderColor: '#7f1d1d',
                         }}
                       >
-                        Delete item
+                        Delete photo request
                       </button>
                     </div>
+                    </>}
                   </div>
                 );
                            })}
