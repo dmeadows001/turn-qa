@@ -37,6 +37,7 @@ export default function Capture() {
   const [phone, setPhone] = useState('');
   const [code, setCode] = useState('');
   const [consent, setConsent] = useState(false); // <-- SMS consent
+  const [codeSent, setCodeSent] = useState(false);
 
   // start-turn
   const [properties, setProperties] = useState([]);
@@ -154,6 +155,8 @@ export default function Capture() {
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || 'Could not send code');
+      setCodeSent(true);
+      setCode('');
       setMsg('Code sent! Check your texts.');
     } catch (e) {
       setMsg(e.message || 'Send failed');
@@ -173,7 +176,10 @@ export default function Capture() {
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || 'Verify failed');
-      window.location.href = '/capture?tab=start';
+      // Preserve a requested turn or tab after OTP authentication.
+      const params = new URLSearchParams(window.location.search);
+      if (!params.get('turn') && !params.get('tab')) params.set('tab', 'start');
+      window.location.href = `/capture?${params.toString()}`;
     } catch (e) {
       setMsg(e.message || 'Verify failed');
     } finally {
@@ -275,12 +281,12 @@ export default function Capture() {
 
   if (phase === 'verify') {
     return (
-      <ChromeDark title="Capture">
+      <ChromeDark title="Welcome to TurnQA">
         <section style={{ ...ui.sectionGrid, ...shell }}>
 
      {/* === SMS Opt-In Branding (Twilio Compliance) === */}
         <div style={{ marginBottom: 14, textAlign: 'center' }}>
-          <h1 style={{ margin: 0, fontSize: 22 }}>TurnQA SMS Job Alerts</h1>
+          <h1 style={{ margin: 0, fontSize: 22 }}>Cleaner phone verification</h1>
           <p style={{ marginTop: 6, fontSize: 14, color: '#94a3b8' }}>
             TurnQA uses text messages to send verification codes and
             job-related updates for cleaning turns.  
@@ -294,11 +300,13 @@ export default function Capture() {
             consent={consent}
             loading={loading}
             msg={msg}
+            codeSent={codeSent}
             onChangePhone={setPhone}
             onChangeCode={setCode}
             onToggleConsent={() => setConsent((v) => !v)}
             onSend={sendCode}
             onVerify={verifyCode}
+            onChangeNumber={() => { setCodeSent(false); setCode(''); setMsg(null); }}
           />
         </section>
       </ChromeDark>
@@ -465,133 +473,138 @@ function VerifyForm({
   consent,
   loading,
   msg,
+  codeSent,
   onChangePhone,
   onChangeCode,
   onToggleConsent,
   onSend,
   onVerify,
+  onChangeNumber,
 }) {
   function noSubmit(e) {
-    e.preventDefault(); // avoid implicit submit that can blur inputs
+    e.preventDefault();
+    if (codeSent) {
+      if (code.length === 6 && !loading) onVerify();
+    } else if (!loading && consent && phone.replace(/[^\d]/g, '').length >= 10) {
+      onSend();
+    }
   }
 
   const digits = phone.replace(/[^\d]/g, '');
-  const hasPhone = digits.length >= 7;
-
-  // Keep the Resend button mounted; just toggle visibility/disabled
-  const showResend = !!phone && hasPhone;
+  const hasPhone = digits.length >= 10;
 
   return (
     <Card>
       <form onSubmit={noSubmit}>
-        <h2 style={{ marginTop: 0 }}>Verify your phone</h2>
+        <h2 style={{ marginTop: 0 }}>
+          {codeSent ? 'Enter your verification code' : 'Verify your phone'}
+        </h2>
+        <p style={{ color: '#94a3b8', fontSize: 14, marginTop: 0, lineHeight: 1.5 }}>
+          {codeSent
+            ? 'Enter the 6-digit code we just sent to your phone.'
+            : 'Enter your mobile number to securely access your assigned properties.'}
+        </p>
 
-        <label style={ui.label} htmlFor="phone">
-          Phone
-        </label>
-        <div style={{ display: 'flex', gap: 10 }}>
+        <label style={ui.label} htmlFor="phone">Phone number</label>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
           <input
             id="phone"
             type="tel"
             inputMode="tel"
             autoComplete="tel"
-            style={{ ...ui.input, flex: 1 }}
+            style={{ ...ui.input, flex: 1, minWidth: 0 }}
             placeholder="+1 555 123 4567"
             value={phone}
             onChange={(e) => onChangePhone(e.target.value)}
+            readOnly={codeSent}
           />
-          <div style={{ alignSelf: 'stretch', display: 'flex', alignItems: 'center' }}>
-            <div style={{ visibility: showResend ? 'visible' : 'hidden' }}>
-              <ResendOtpButton phone={e164(phone)} role="cleaner" />
+          {codeSent && (
+            <button type="button" style={ui.btnSecondary} onClick={onChangeNumber} disabled={loading}>
+              Change
+            </button>
+          )}
+        </div>
+
+        {!codeSent ? (
+          <>
+            {/* Explicit transactional SMS opt-in, retained for Twilio compliance. */}
+            <div style={{ marginTop: 16, display: 'flex', alignItems: 'flex-start', gap: 8,
+              fontSize: 13, lineHeight: 1.5, color: '#cbd5f5' }}>
+              <input
+                id="sms-consent-cleaner"
+                type="checkbox"
+                checked={consent}
+                onChange={onToggleConsent}
+                style={{ marginTop: 3 }}
+              />
+              <label htmlFor="sms-consent-cleaner">
+                I agree to receive transactional SMS from TurnQA at this number.
+                Message &amp; data rates may apply. Reply <strong>STOP</strong> to opt
+                out, <strong>HELP</strong> for help. Consent is not a condition of
+                purchase.
+              </label>
             </div>
+          </>
+        ) : (
+          <>
+            <label style={{ ...ui.label, display: 'block', marginTop: 18 }} htmlFor="code">
+              6-digit verification code
+            </label>
+            <input
+              id="code"
+              type="text"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              maxLength={6}
+              style={{ ...ui.input, letterSpacing: '0.14em' }}
+              placeholder="123456"
+              value={code}
+              onChange={(e) => onChangeCode(e.target.value.replace(/[^\d]/g, '').slice(0, 6))}
+            />
+          </>
+        )}
+
+        <div style={{ marginTop: 18 }}>
+          {!codeSent ? (
+            <button type="submit" style={{ ...ui.btnPrimary, width: '100%' }}
+              disabled={loading || !hasPhone || !consent}>
+              {loading ? 'Sending code…' : 'Text me a verification code'}
+            </button>
+          ) : (
+            <>
+              <button type="submit" style={{ ...ui.btnPrimary, width: '100%' }}
+                disabled={loading || code.length !== 6}>
+                {loading ? 'Verifying…' : 'Verify & Continue'}
+              </button>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center',
+                gap: 10, marginTop: 14, flexWrap: 'wrap', fontSize: 13, color: '#94a3b8' }}>
+                <span>Didn't get the code?</span>
+                <ResendOtpButton phone={e164(phone)} role="cleaner" />
+              </div>
+            </>
+          )}
+        </div>
+
+        {msg && (
+          <div role="status" aria-live="polite" style={{ marginTop: 12, fontSize: 13,
+            color: /failed|error|could not|please|invalid|expired/i.test(msg) ? '#fca5a5' : '#86efac' }}>
+            {msg}
           </div>
+        )}
+
+        {/* Keep support and legal links available in both steps. */}
+        <div style={{ marginTop: 18, fontSize: 12, color: '#94a3b8', lineHeight: 1.7 }}>
+          Need help?{' '}
+          <a href="mailto:support@turnqa.com" style={{ color: '#cbd5e1', textDecoration: 'underline' }}>
+            support@turnqa.com
+          </a>
+          {' '} · {' '}
+          <a href="/contact" style={{ color: '#cbd5e1', textDecoration: 'underline' }}>Contact</a>
+          {' '} · {' '}
+          <a href="/legal/sms-terms" style={{ color: '#cbd5e1', textDecoration: 'underline' }}>SMS Terms</a>
+          {' '} · {' '}
+          <a href="/legal/privacy" style={{ color: '#cbd5e1', textDecoration: 'underline' }}>Privacy Policy</a>
         </div>
-
-        <div style={{ height: 10 }} />
-
-        <label style={ui.label} htmlFor="code">
-          Enter 6-digit code
-        </label>
-        <input
-          id="code"
-          type="text"
-          inputMode="numeric"
-          autoComplete="one-time-code"
-          style={ui.input}
-          placeholder="123456"
-          value={code}
-          onChange={(e) =>
-            onChangeCode(e.target.value.replace(/[^\d]/g, '').slice(0, 6))
-          }
-        />
-
-        {/* SMS consent checkbox */}
-        <div
-          style={{
-            marginTop: 12,
-            display: 'flex',
-            alignItems: 'flex-start',
-            gap: 8,
-            fontSize: 13,
-            lineHeight: 1.5,
-            color: '#cbd5f5',
-          }}
-        >
-          <input
-            id="sms-consent-cleaner"
-            type="checkbox"
-            checked={consent}
-            onChange={onToggleConsent}
-            style={{ marginTop: 3 }}
-          />
-          <label htmlFor="sms-consent-cleaner">
-            I agree to receive transactional SMS from TurnQA at this number.
-            Message &amp; data rates may apply. Reply <strong>STOP</strong> to opt
-            out, <strong>HELP</strong> for help. Consent is not a condition of
-            purchase.
-          </label>
-        </div>
-              {/* Compliance links + contact (visible, branded, legible) */}
-<div style={{ marginTop: 10, fontSize: 12, color: '#94a3b8', lineHeight: 1.5 }}>
-  Need help?{' '}
-  <a href="mailto:support@turnqa.com" style={{ color: '#cbd5e1', textDecoration: 'underline' }}>
-    support@turnqa.com
-  </a>
-  {' '} · {' '}
-  <a href="/contact" style={{ color: '#cbd5e1', textDecoration: 'underline' }}>
-    Contact
-  </a>
-  {' '} · {' '}
-  <a href="/legal/sms-terms" style={{ color: '#cbd5e1', textDecoration: 'underline' }}>
-    SMS Terms
-  </a>
-  {' '} · {' '}
-  <a href="/legal/privacy" style={{ color: '#cbd5e1', textDecoration: 'underline' }}>
-    Privacy Policy
-  </a>
-</div>
-
-
-        <div style={{ display: 'flex', gap: 10, marginTop: 10 }}>
-          <button
-            type="button"
-            style={ui.btnPrimary}
-            onClick={onSend}
-            disabled={loading || !hasPhone || !consent}
-          >
-            {loading ? 'Sending…' : 'Text me a code'}
-          </button>
-          <button
-            type="button"
-            style={ui.btnSecondary}
-            onClick={onVerify}
-            disabled={loading || code.length < 6}
-          >
-            {loading ? 'Verifying…' : 'Verify'}
-          </button>
-        </div>
-
-        {msg && <div style={{ marginTop: 10 }}>{msg}</div>}
       </form>
     </Card>
   );
