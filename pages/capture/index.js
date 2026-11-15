@@ -4,7 +4,7 @@ import ChromeDark from '@/components/ChromeDark';
 import ResendOtpButton from '@/components/ResendOtpButton';
 import { ui } from '@/lib/theme';
 
-const SHELL_MAX = 420;
+const SHELL_MAX = 560;
 
 function e164(s = '') {
   const d = String(s || '').replace(/[^\d+]/g, '');
@@ -246,26 +246,6 @@ export default function Capture() {
   // ------------------------------------------------------------------
   const shell = { maxWidth: SHELL_MAX, margin: '0 auto' };
 
-  const Tabs = () => (
-    <div
-      style={{
-        ...ui.tabs,
-        width: '100%',
-        display: 'grid',
-        gridTemplateColumns: '1fr 1fr',
-        gap: 8,
-        marginBottom: 12,
-      }}
-    >
-      <div style={ui.tab(activeTab === 'fix')} onClick={() => setActiveTab('fix')}>
-        Needs fix
-      </div>
-      <div style={ui.tab(activeTab === 'start')} onClick={() => setActiveTab('start')}>
-        Start
-      </div>
-    </div>
-  );
-
   // ------------------------------------------------------------------
   // Render
   // ------------------------------------------------------------------
@@ -313,65 +293,33 @@ export default function Capture() {
     );
   }
 
-  // phase === 'start'
+  // phase === 'start' — cleaner home dashboard
+  const pendingFixCount = fixTurns.length;
+  const panelStyle = { ...ui.card, width: '100%' };
+  const actionCardStyle = {
+    display: 'flex', flexDirection: 'column', gap: 8, minHeight: 132,
+    padding: 18, borderRadius: 14, textDecoration: 'none',
+    background: '#111b30', border: '1px solid #334155', color: '#f1f5f9',
+  };
+
   return (
-    <ChromeDark title="Capture">
+    <ChromeDark title="Cleaner Home">
       <section style={{ ...ui.sectionGrid, ...shell }}>
-        {/* Tabs + Card share the SAME wrapper width */}
-        <Tabs />
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: '0.1em', color: '#94a3b8' }}>
+            TURNQA · CLEANER PORTAL
+          </div>
+          <h2 style={{ margin: '8px 0 4px', fontSize: 27 }}>Welcome back!</h2>
+          <p style={{ margin: 0, color: '#94a3b8', fontSize: 14 }}>
+            What would you like to do today?
+          </p>
+        </div>
 
-        {/* Needs fix panel */}
-        {activeTab === 'fix' && (
-          <Card>
-            <h2 style={{ marginTop: 0 }}>Needs fix</h2>
-            {!fixTurns.length ? (
-              <div style={ui.subtle}>Nothing to fix right now.</div>
-            ) : (
-              <div style={{ display: 'grid', gap: 12 }}>
-                {fixTurns.map((t) => (
-                  <div
-                    key={t.id}
-                    style={{
-                      border: '1px solid #334155',
-                      borderRadius: 12,
-                      padding: 12,
-                      background: '#0b1220',
-                      display: 'grid',
-                      gridTemplateColumns: '1fr auto',
-                      alignItems: 'center',
-                      gap: 12,
-                    }}
-                  >
-                    <div>
-                      <div style={{ fontWeight: 700, marginBottom: 4 }}>
-                        {t.property_name || 'Property'}
-                      </div>
-                      <div style={{ fontSize: 13, color: '#94a3b8', lineHeight: 1.35 }}>
-                        Turn <code>{t.id.slice(0, 8)}</code> &middot; status: {t.status}
-                      </div>
-                      <div style={{ fontSize: 13, color: '#94a3b8', marginTop: 5 }}>
-                        Started: {t.created_at ? new Date(t.created_at).toLocaleString() : 'Date unavailable'}
-                      </div>
-                    </div>
-                    <a
-                      href={`/turns/${t.id}/capture?tab=needs-fix`}
-                      style={{ ...ui.btnPrimary, display: 'inline-block' }}
-                    >
-                      Resume
-                    </a>
-
-                  </div>
-                ))}
-              </div>
-            )}
-          </Card>
-        )}
-
-        {/* Start turn panel */}
-        {activeTab === 'start' && (
-          <Card>
-            <h2 style={{ marginTop: 0 }}>Start turn</h2>
-
+        <div style={panelStyle}>
+          <h2 style={{ margin: '0 0 6px' }}>📷 Start a Cleaning</h2>
+          <p style={{ margin: '0 0 16px', color: '#94a3b8', fontSize: 14 }}>
+            Choose a property and begin taking photos.
+          </p>
             <label style={ui.label}>Choose a property</label>
             <div style={{ position: 'relative' }}>
               <select
@@ -411,10 +359,6 @@ export default function Capture() {
                 {propsLoading ? 'Starting…' : 'Start turn'}
               </button>
 
-              {/* Cleaner turn history */}
-              <a href="/cleaner/turns" style={ui.btnSecondary}>
-                View my turns
-              </a>
             </div>
 
             {unfinishedTurns !== null && (
@@ -459,7 +403,88 @@ export default function Capture() {
               </div>
             )}
             {msg && <div style={{ marginTop: 10, color: '#ef4444' }}>{msg}</div>}
-          </Card>
+
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12, marginTop: 14 }}>
+          <a href="/cleaner/turns" style={actionCardStyle}>
+            <span style={{ fontSize: 24 }} aria-hidden="true">📋</span>
+            <strong style={{ fontSize: 17 }}>My Turns</strong>
+            <span style={{ color: '#94a3b8', fontSize: 13, lineHeight: 1.4 }}>
+              Resume cleanings and view your history.
+            </span>
+            <span style={{ marginTop: 'auto', alignSelf: 'flex-end' }}>→</span>
+          </a>
+          <button
+            type="button"
+            onClick={() => setActiveTab(activeTab === 'fix' ? 'start' : 'fix')}
+            aria-expanded={activeTab === 'fix'}
+            aria-controls="cleaner-needs-fix-list"
+            style={{
+              ...actionCardStyle, textAlign: 'left', cursor: 'pointer', fontFamily: 'inherit',
+              ...(pendingFixCount ? {
+                background: '#302512', border: '1px solid #d49b35', color: '#fff1cc',
+              } : {}),
+            }}
+          >
+            <span style={{ fontSize: 24 }} aria-hidden="true">{pendingFixCount ? '⚠️' : '✓'}</span>
+            <strong style={{ fontSize: 17 }}>Needs Fix</strong>
+            <span style={{ color: pendingFixCount ? '#fcd994' : '#94a3b8', fontSize: 13, lineHeight: 1.4 }}>
+              {pendingFixCount
+                ? `${pendingFixCount} ${pendingFixCount === 1 ? 'turn needs' : 'turns need'} your attention`
+                : "You're all caught up"}
+            </span>
+            <span style={{ marginTop: 'auto', alignSelf: 'flex-end' }}>
+              {activeTab === 'fix' ? 'Hide ↑' : 'View →'}
+            </span>
+          </button>
+        </div>
+
+        {activeTab === 'fix' && (
+          <div id="cleaner-needs-fix-list" style={{ ...panelStyle, marginTop: 14 }}>
+            <h2 style={{ marginTop: 0 }}>Corrections to Complete</h2>
+            {!fixTurns.length ? (
+              <div style={ui.subtle}>Nothing to fix right now.</div>
+            ) : (
+              <div style={{ display: 'grid', gap: 12 }}>
+                {fixTurns.map((t) => (
+                  <div
+                    key={t.id}
+                    style={{
+                      border: '1px solid #334155',
+                      borderRadius: 12,
+                      padding: 12,
+                      background: '#0b1220',
+                      display: 'grid',
+                      gridTemplateColumns: '1fr auto',
+                      alignItems: 'center',
+                      gap: 12,
+                    }}
+                  >
+                    <div>
+                      <div style={{ fontWeight: 700, marginBottom: 4 }}>
+                        {t.property_name || 'Property'}
+                      </div>
+                      <div style={{ fontSize: 13, color: '#94a3b8', lineHeight: 1.35 }}>
+                        Turn <code>{t.id.slice(0, 8)}</code> &middot; status: {t.status}
+                      </div>
+                      <div style={{ fontSize: 13, color: '#94a3b8', marginTop: 5 }}>
+                        Started: {t.created_at ? new Date(t.created_at).toLocaleString() : 'Date unavailable'}
+                      </div>
+                    </div>
+                    <a
+                      href={`/turns/${t.id}/capture?tab=needs-fix`}
+                      style={{ ...ui.btnPrimary, display: 'inline-block' }}
+                    >
+                      Resume
+                    </a>
+
+                  </div>
+                ))}
+              </div>
+            )}
+
+          </div>
         )}
       </section>
     </ChromeDark>
