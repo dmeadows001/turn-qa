@@ -126,6 +126,7 @@ export default function Capture() {
   }, [turnId, tab]);
 
   // -------- State --------
+  const [cleanerMenuOpen, setCleanerMenuOpen] = useState(false);
   const [shots, setShots] = useState(null);
   // files we render per-shot; each file: {name, url (storage path), width, height, shotId, preview?, isFix?, cleanerNote?, capturedAt?}
   const [uploadsByShot, setUploadsByShot] = useState({});
@@ -1606,12 +1607,35 @@ export default function Capture() {
   return (
     <ChromeDark title="Start Taking Photos">
       <div style={{ padding: '8px 16px 12px', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12 }}>
-        <a href="/turns" style={{ color: '#93c5fd', fontWeight: 700, textDecoration: 'underline' }}>← Back to My Turns</a>
+        <a href="/cleaner/turns" style={{ color: '#93c5fd', fontWeight: 700, textDecoration: 'underline' }}>← Back to My Turns</a>
         <span style={{ color: '#cbd5e1', fontSize: 13 }}>
           {templateRules?.property ? `Property: ${templateRules.property} · ` : ''}
           {isFixMode ? 'Correction review' : 'Photo capture'}
           {turnId ? ` · Turn ${turnId.slice(0, 8)}` : ''}
         </span>
+        <div style={{ marginLeft: 'auto', position: 'relative' }}>
+          <button
+            type="button"
+            aria-label="Cleaner navigation menu"
+            aria-expanded={cleanerMenuOpen}
+            onClick={() => setCleanerMenuOpen(open => !open)}
+            style={{ ...ui.btnSecondary, padding: '10px 14px', borderRadius: 10, cursor: 'pointer' }}
+          >
+            ☰ Menu
+          </button>
+          {cleanerMenuOpen && (
+            <nav aria-label="Cleaner navigation" style={{ position: 'absolute', right: 0, top: 'calc(100% + 8px)', zIndex: 1000, width: 205, padding: 8, border: '1px solid #334155', borderRadius: 12, background: '#111c2e', boxShadow: '0 12px 24px rgba(0,0,0,0.35)' }}>
+              {[
+                ['Cleaner Home', '/capture'],
+                ['My Turns', '/cleaner/turns'],
+              ].map(([label, href]) => (
+                <a key={href} href={href} style={{ display: 'block', padding: '12px 14px', color: '#e2e8f0', textDecoration: 'none', fontWeight: 700, borderRadius: 8 }}>
+                  {label}
+                </a>
+              ))}
+            </nav>
+          )}
+        </div>
       </div>
       <section style={ui.sectionGrid}>
         <div style={ui.card}>
