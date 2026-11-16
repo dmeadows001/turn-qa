@@ -8,6 +8,7 @@ export default function ChromeDark({
   children,
   max = 1040,
   showBilling = false,
+  headerAction = null,
 }) {
   return (
     <div style={ui.page}>
@@ -59,7 +60,7 @@ export default function ChromeDark({
               </Link>
             )}
 
-            <UserMenu />
+            {headerAction || <UserMenu />}
           </div>
         </header>
         {children}
