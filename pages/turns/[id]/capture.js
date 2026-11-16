@@ -1904,7 +1904,7 @@ export default function Capture() {
             </div>
           )}
           {/* Shots: only shown during initial capture. */}
-          {!isFixMode && renderShots.map(s => {
+          {!isFixMode && renderShots.map((s, sectionIndex) => {
            const files = uploadsByShot[s.shot_id] || [];
             const required = getMinCount(s);
             
@@ -1926,19 +1926,58 @@ export default function Capture() {
               <div
                 key={s.shot_id}
                 style={{
-                  border: ui.card.border, borderRadius: 12, padding: 12, margin: '12px 0',
-                  background: ui.card.background
+                  border: '2px solid #425b7a',
+                  borderLeft: '5px solid #38bdf8',
+                  borderRadius: 16,
+                  padding: 16,
+                  margin: '22px 0',
+                  background: sectionIndex % 2 === 0 ? '#17263c' : '#1b2b42',
+                  boxShadow: '0 6px 20px rgba(0,0,0,0.22)'
                 }}
               >
+                {/* Clear section header: the room name stays above its reference and uploads. */}
+                <div style={{
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start',
+                  gap: 12, flexWrap: 'wrap', paddingBottom: 14, marginBottom: 14,
+                  borderBottom: '1px solid #506580'
+                }}>
+                  <div style={{ minWidth: 0, flex: '1 1 180px' }}>
+                    <div style={{
+                      fontSize: 12, fontWeight: 800, letterSpacing: '0.06em',
+                      color: '#93c5fd', marginBottom: 5
+                    }}>
+                      PHOTO SECTION {sectionIndex + 1} OF {renderShots.length}
+                    </div>
+                    <div style={{ fontSize: 22, lineHeight: 1.2, fontWeight: 800, color: '#f8fafc' }}>
+                      {s.label}
+                    </div>
+                    {s.notes ? <div style={{ ...smallMeta, marginTop: 5 }}>{s.notes}</div> : null}
+                    <div style={{
+                      fontSize: 13, marginTop: 8, fontWeight: 700,
+                      color: missing > 0 ? '#fbbf24' : '#86efac'
+                    }}>
+                      Required: {required} · Uploaded: {uploadedCount}
+                      {missing > 0 ? ` · Missing: ${missing}` : ' · ✓ Complete'}
+                    </div>
+                  </div>
+                  <ThemedButton
+                    kind="secondary"
+                    onClick={() => openPicker(s.shot_id)}
+                    ariaLabel={`Add photo for ${s.label}`}
+                  >
+                    ➕ Add photo
+                  </ThemedButton>
+                </div>
+
                 {/* Reference listing photo(s) for this area */}
                 {referencePaths.length > 0 && (
                   <div
                     style={{
-                      margin: '4px 0 10px',
-                      padding: '8px 10px',
-                      borderRadius: 8,
-                      border: '1px solid #334155',
-                      background: '#020617'
+                      margin: '0 0 14px',
+                      padding: '12px 14px',
+                      borderRadius: 12,
+                      border: '1px solid #506580',
+                      background: '#0b1729'
                     }}
                   >
                     <div
@@ -2045,31 +2084,27 @@ export default function Capture() {
                   </div>
                 )}
 
-                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:12 }}>
-                  <div>
-                    <b>{s.label}</b>
-                    {s.notes ? <div style={{ ...smallMeta }}>{s.notes}</div> : null}
-                    <div
-                      style={{
-                        fontSize: 12, marginTop: 4,
-                        color: missing > 0 ? '#f59e0b' : '#22c55e'
-                      }}
-                    >
-                      Required: {required} • Uploaded: {uploadedCount} {missing>0 ? `• Missing: ${missing}` : '• ✅'}
-                    </div>
+                <div style={{
+                  borderTop: '1px solid #506580',
+                  paddingTop: 14,
+                  marginTop: 4
+                }}>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: '#cbd5e1', marginBottom: 10 }}>
+                    YOUR PHOTOS · {uploadedCount} UPLOADED
                   </div>
-
-                  <ThemedButton
-                    kind="secondary"
-                    onClick={() => openPicker(s.shot_id)}
-                    ariaLabel={`${isFixMode ? 'Add correction photo' : 'Add photo'} for ${s.label}`}
-                  >
-                    {isFixMode ? '➕ Add Correction Photo' : '➕ Add photo'}
-                  </ThemedButton>
                 </div>
 
                 {/* File cards */}
-                <div style={{ marginTop:10, display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(260px,1fr))', gap:16 }}>
+                {files.length === 0 && (
+                  <div style={{
+                    padding: '18px 14px', border: '1px dashed #64748b',
+                    borderRadius: 12, color: '#cbd5e1', background: '#101d30',
+                    fontSize: 13, textAlign: 'center'
+                  }}>
+                    No photos uploaded for this section yet. Use “Add photo” above.
+                  </div>
+                )}
+                <div style={{ marginTop: 10, display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(260px,1fr))', gap:16 }}>
                   {files.map(f => {
                     if (!f.preview && !thumbByPath[f.url]) ensureThumb(f.url);
                     const thumb = f.preview || thumbByPath[f.url] || null;
