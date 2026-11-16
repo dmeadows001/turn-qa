@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
 import ChromeDark from '../../components/ChromeDark';
+import CleanerMenu from '../../components/CleanerMenu';
 import { ui } from '../../lib/theme';
 
 function niceDate(s) {
@@ -314,7 +315,7 @@ export default function CleanerTurns() {
   }, [phone]);
 
   return (
-    <ChromeDark title="My turns">
+    <ChromeDark title="My turns" headerAction={<CleanerMenu />}>
       <section
         style={{
           ...ui.sectionGrid,
