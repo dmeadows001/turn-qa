@@ -1,6 +1,7 @@
 // pages/capture/index.js
 import { useEffect, useMemo, useState } from 'react';
 import ChromeDark from '@/components/ChromeDark';
+import CleanerMenu from '@/components/CleanerMenu';
 import ResendOtpButton from '@/components/ResendOtpButton';
 import { ui } from '@/lib/theme';
 
@@ -303,7 +304,7 @@ export default function Capture() {
   };
 
   return (
-    <ChromeDark title="Cleaner Home">
+    <ChromeDark title="Cleaner Home" headerAction={<CleanerMenu />}>
       <section style={{ ...ui.sectionGrid, ...shell }}>
         <div style={{ marginBottom: 12 }}>
           <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: '0.1em', color: '#94a3b8' }}>
