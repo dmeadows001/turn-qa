@@ -479,9 +479,12 @@ export default function CleanerTurns() {
                 type="search"
                 value={search}
                 onChange={e => { setSearch(e.target.value); setVisibleCount(15); }}
-                placeholder="Property name, date, or status"
+                placeholder="Property name or date (e.g., 1460 Rifle, 11/16)"
                 style={{ ...ui.input, width: '100%', boxSizing: 'border-box', minWidth: 0 }}
               />
+              <p style={{ color: '#94a3b8', fontSize: 12, margin: '8px 0 0', lineHeight: 1.5 }}>
+                Results update as you type. Use the filters below to find turns by status.
+              </p>
               <div role="group" aria-label="Filter turns by status" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 14 }}>
                 {filters.map(filter => {
                   const selected = statusFilter === filter.value;
