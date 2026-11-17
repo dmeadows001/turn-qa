@@ -255,6 +255,46 @@ export default function CleanerTurns() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState('');
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [visibleCount, setVisibleCount] = useState(15);
+
+  const needsFixCount = rows.filter(turn => turn.status === 'needs_fix').length;
+  const filters = [
+    { value: 'all', label: 'All' },
+    { value: 'needs_fix', label: `Needs Fix (${needsFixCount})` },
+    { value: 'active', label: 'Active' },
+    { value: 'completed', label: 'Completed' },
+  ];
+
+  const filteredRows = rows
+    .filter(turn => {
+      if (statusFilter === 'needs_fix') return turn.status === 'needs_fix';
+      if (statusFilter === 'active') return ['in_progress', 'submitted', 'needs_fix'].includes(turn.status);
+      if (statusFilter === 'completed') return ['approved', 'cancelled'].includes(turn.status);
+      return true;
+    })
+    .filter(turn => {
+      const q = search.trim().toLowerCase();
+      if (!q) return true;
+      const dateText = [turn.created_at, turn.submitted_at, turn.approved_at]
+        .filter(Boolean)
+        .map(niceDate)
+        .join(' ');
+      const statusText = String(turn.status || '').replace(/_/g, ' ');
+      return `${turn.property_name || ''} ${dateText} ${statusText}`.toLowerCase().includes(q);
+    })
+    .sort((a, b) => {
+      // Bring actionable corrections to the top of the All/Active views.
+      if (statusFilter === 'all' || statusFilter === 'active') {
+        const priority = turn => turn.status === 'needs_fix' ? 0 : 1;
+        if (priority(a) !== priority(b)) return priority(a) - priority(b);
+      }
+      return new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime();
+    });
+
+  const visibleRows = filteredRows.slice(0, visibleCount);
+
 
   useEffect(() => {
     if (qPhone) {
@@ -295,6 +335,7 @@ export default function CleanerTurns() {
       }
 
       setRows(j.rows || []);
+      setVisibleCount(15);
 
       try {
         window.localStorage.setItem(
@@ -414,6 +455,61 @@ export default function CleanerTurns() {
             boxSizing: 'border-box',
           }}
         >
+          {rows.length > 0 && (
+            <div style={{ marginBottom: 20 }}>
+              {needsFixCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => { setStatusFilter('needs_fix'); setVisibleCount(15); }}
+                  style={{
+                    width: '100%', padding: '13px 14px', marginBottom: 16,
+                    textAlign: 'left', background: '#4a2f04', color: '#fde68a',
+                    border: '1px solid #d97706', borderRadius: 12,
+                    fontWeight: 700, cursor: 'pointer', fontSize: 14,
+                  }}
+                >
+                  ⚠ {needsFixCount} {needsFixCount === 1 ? 'turn needs' : 'turns need'} corrections — view now
+                </button>
+              )}
+              <label htmlFor="turn-search" style={{ display: 'block', color: '#cbd5e1', fontSize: 13, marginBottom: 7 }}>
+                Search your turns
+              </label>
+              <input
+                id="turn-search"
+                type="search"
+                value={search}
+                onChange={e => { setSearch(e.target.value); setVisibleCount(15); }}
+                placeholder="Property name, date, or status"
+                style={{ ...ui.input, width: '100%', boxSizing: 'border-box', minWidth: 0 }}
+              />
+              <div role="group" aria-label="Filter turns by status" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 14 }}>
+                {filters.map(filter => {
+                  const selected = statusFilter === filter.value;
+                  return (
+                    <button
+                      type="button"
+                      key={filter.value}
+                      aria-pressed={selected}
+                      onClick={() => { setStatusFilter(filter.value); setVisibleCount(15); }}
+                      style={{
+                        borderRadius: 999, padding: '9px 12px', fontSize: 13,
+                        fontWeight: 700, cursor: 'pointer',
+                        background: selected ? '#0ea5e9' : '#0b1220',
+                        color: selected ? '#06121f' : '#cbd5e1',
+                        border: selected ? '1px solid #38bdf8' : '1px solid #334155',
+                      }}
+                    >
+                      {filter.label}
+                    </button>
+                  );
+                })}
+              </div>
+              <div style={{ color: '#94a3b8', fontSize: 13, marginTop: 12 }}>
+                Showing {Math.min(visibleCount, filteredRows.length)} of {filteredRows.length} matching turns
+                {(statusFilter === 'all' || statusFilter === 'active') && needsFixCount > 0 ? ' · Needs Fix first' : ' · Newest first'}
+              </div>
+            </div>
+          )}
           {loading ? (
             <div>Loading turns…</div>
           ) : !phone ? (
@@ -424,6 +520,10 @@ export default function CleanerTurns() {
             <div style={ui.muted}>
               No turns found.
             </div>
+          ) : filteredRows.length === 0 ? (
+            <div style={ui.muted}>
+              No turns match your search or filter.
+            </div>
           ) : (
             <div
               style={{
@@ -433,9 +533,23 @@ export default function CleanerTurns() {
                 minWidth: 0,
               }}
             >
-              {rows.map(turn => (
+              {visibleRows.map(turn => (
                 <TurnCard key={turn.id} turn={turn} />
               ))}
+              {filteredRows.length > visibleCount && (
+                <button
+                  type="button"
+                  onClick={() => setVisibleCount(count => count + 15)}
+                  style={{
+                    ...ui.btnPrimary,
+                    minHeight: 48,
+                    cursor: 'pointer',
+                    width: '100%',
+                  }}
+                >
+                  Load 15 more turns
+                </button>
+              )}
             </div>
           )}
         </div>
