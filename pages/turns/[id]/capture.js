@@ -568,47 +568,44 @@ export default function Capture() {
     });
   }
 
-    function ensureThumb(path) {
+  // Prefer lightweight Storage thumbnails when displaying saved photos.
+  // Full-resolution originals remain available through the View action.
+  function ensureThumb(path) {
     if (!path || requestedThumbsRef.current.has(path) || thumbByPath[path]) return;
-
     requestedThumbsRef.current.add(path);
 
     (async () => {
       let url = null;
+      let thumbnailPath = null;
 
-      // Use optimized thumbnails for reference photos.
       if (path.startsWith('refs/')) {
-        const thumbPath = path.replace(/^refs\//, 'ref-thumbs/');
+        thumbnailPath = path.replace(/^refs\//, 'ref-thumbs/');
+      } else if (path.startsWith('turns/')) {
+        thumbnailPath = path.replace(/^turns\//, 'turn-thumbs/');
+      }
 
+      if (thumbnailPath) {
         try {
-          const thumbUrl = await signPath(thumbPath);
-
-          if (thumbUrl) {
-            // Verify the thumbnail exists and loads successfully.
+          const candidate = await signPath(thumbnailPath);
+          if (candidate) {
+            // A signed URL can be issued even if an older thumbnail is missing.
+            // Confirm it actually loads before choosing it over the original.
             await new Promise((resolve, reject) => {
               const img = new Image();
               img.onload = resolve;
               img.onerror = reject;
-              img.src = thumbUrl;
+              img.src = candidate;
             });
-
-            url = thumbUrl;
+            url = candidate;
           }
-        } catch (e) {
-          // Older references may not have thumbnails yet.
-          // Fall back to the original.
+        } catch {
+          // Older photos may predate thumbnail generation.
         }
       }
 
-      // Preserve original behavior for turn photos and older references.
-      if (!url) {
-        url = await signPath(path);
-      }
-
+      if (!url) url = await signPath(path);
       if (url) {
-        setThumbByPath(prev =>
-          prev[path] ? prev : { ...prev, [path]: url }
-        );
+        setThumbByPath(prev => prev[path] ? prev : { ...prev, [path]: url });
       }
     })().catch(error => {
       console.warn('Thumbnail loading failed:', error);
@@ -2147,6 +2144,8 @@ export default function Capture() {
                             <img
                               src={thumb}
                               alt={f.name}
+                              loading="lazy"
+                              decoding="async"
                               style={{ width:'100%', height:160, objectFit:'cover', borderRadius:8 }}
                               draggable={false}
                             />
