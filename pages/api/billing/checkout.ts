@@ -56,6 +56,14 @@ async function resolvePriceId(idFromEnv: string) {
   );
 }
 
+function isMissingStripeCustomer(err: any) {
+  return (
+    err?.statusCode === 404 &&
+    err?.code === 'resource_missing' &&
+    (err?.param === 'customer' || /no such customer/i.test(String(err?.message || '')))
+  );
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', ['POST']);
@@ -92,7 +100,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(401).json({ error: 'Please sign in to start checkout.' });
     }
 
-    // 2) Ensure we have a Stripe customer id
+    // Ensure the saved Stripe customer still exists before using it.
     const { data: profile, error: pErr } = await supaAdmin
       .from('profiles')
       .select('stripe_customer_id, stripe_subscription_id')
@@ -100,25 +108,63 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .maybeSingle();
 
     if (pErr) return res.status(500).json({ error: pErr.message || 'Could not load profile' });
+    if (!profile) return res.status(404).json({ error: 'Manager profile not found.' });
 
-    let customerId = profile?.stripe_customer_id || null;
+    let customerId: string | null = profile.stripe_customer_id || null;
+
+    if (customerId) {
+      try {
+        const customer = await stripe.customers.retrieve(customerId);
+        if (customer.deleted) {
+          console.warn('[billing/checkout] saved Stripe customer was deleted', { userId });
+          customerId = null;
+        }
+      } catch (err: any) {
+        if (isMissingStripeCustomer(err)) {
+          console.warn('[billing/checkout] saved Stripe customer no longer exists', { userId });
+          customerId = null;
+        } else {
+          // Do not create a replacement for network errors, wrong API keys,
+          // permissions, or other unexpected Stripe failures.
+          throw err;
+        }
+      }
+    }
 
     if (!customerId) {
       const cust = await stripe.customers.create({
         ...(email ? { email } : {}),
         metadata: { supabase_user_id: userId },
+      }, {
+        // Prevent duplicate Stripe customers when checkout is retried.
+        idempotencyKey: `turnqa-customer-recovery-${userId}-${profile.stripe_customer_id || 'new'}`,
       });
       customerId = cust.id;
 
-      const { error: uErr } = await supaAdmin
+      // Only replace the customer ID if it still matches what we originally read.
+      // This avoids overwriting another concurrent checkout's newer customer ID.
+      let updateQuery = supaAdmin
         .from('profiles')
         .update({ stripe_customer_id: customerId })
         .eq('id', userId);
 
+      updateQuery = profile.stripe_customer_id
+        ? updateQuery.eq('stripe_customer_id', profile.stripe_customer_id)
+        : updateQuery.is('stripe_customer_id', null);
+
+      const { data: updated, error: uErr } = await updateQuery
+        .select('stripe_customer_id')
+        .maybeSingle();
+
       if (uErr) return res.status(500).json({ error: uErr.message || 'Could not update profile' });
+      if (!updated) {
+        return res.status(409).json({
+          error: 'Your billing profile changed during checkout. Please try again.',
+        });
+      }
     }
 
-        // Prevent customers from purchasing another subscription
+    // Prevent customers from purchasing another subscription
     // when they already have an active or trialing subscription.
     const existingSubscriptions = await stripe.subscriptions.list({
       customer: customerId,
@@ -143,7 +189,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-        const priceId = await resolvePriceId(process.env.STRIPE_PRICE_ID!);
+    const priceId = await resolvePriceId(process.env.STRIPE_PRICE_ID!);
 
     // Reuse an unfinished subscription Checkout session for this customer.
     // This helps prevent multiple open checkout links for the same plan.
@@ -152,7 +198,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       limit: 100,
     });
 
-        let openSession: Stripe.Checkout.Session | undefined;
+    let openSession: Stripe.Checkout.Session | undefined;
 
     for (const session of existingSessions.data) {
       if (
@@ -189,7 +235,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const base = siteBase();
-       const session = await stripe.checkout.sessions.create(
+    const session = await stripe.checkout.sessions.create(
       {
         mode: 'subscription',
         customer: customerId,
@@ -199,7 +245,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         cancel_url: `${base}/billing?canceled=1`,
       },
       {
-       idempotencyKey: `turnqa-checkout-${customerId}-${priceId}-${profile?.stripe_subscription_id || 'new'}-${Math.floor(Date.now() / (30 * 60 * 1000))}`,
+        idempotencyKey: `turnqa-checkout-${customerId}-${priceId}-${profile?.stripe_subscription_id || 'new'}-${Math.floor(Date.now() / (30 * 60 * 1000))}`,
       }
     );
 
