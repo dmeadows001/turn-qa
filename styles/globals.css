@@ -21,7 +21,7 @@ button{cursor:pointer}
 .btn:hover{background:var(--hover);border-color:var(--focus)}
 .btn:active{transform:translateY(1px)}
 .btn-primary{background:linear-gradient(135deg,var(--accent),var(--accent-2));border:none;color:#0a0a0a;font-weight:600}
-.btn-primary:hover{filter:brightness(1.05)}
+.btn-primary:hover{background:#7655E8;color:#fff;filter:none}
 .muted{color:var(--muted)}
 .h1{font-size:28px;font-weight:700;margin:0 0 12px}
 .hint{font-size:12px;color:var(--muted)}
@@ -102,4 +102,3 @@ button{cursor:pointer}
     padding-bottom: 32px;
   }
 }
-
