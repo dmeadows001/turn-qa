@@ -557,6 +557,23 @@ const PhotoCard = memo(
           </div>
 
           <div style={{ color: '#9ca3af', marginTop: 8 }}>{new Date(p.created_at).toLocaleString()}</div>
+          {/* Fix photo: show cleaner note (assumed already EN for manager) */}
+          {isFix && !!p.cleaner_note && (
+            <div
+              style={{
+                marginTop: 8,
+                padding: '8px 10px',
+                background: '#052e2b',
+                border: '1px solid #065f46',
+                borderRadius: 8,
+                color: '#86efac',
+                whiteSpace: 'pre-wrap',
+              }}
+            >
+              {p.cleaner_note}
+            </div>
+          )}
+
           {/* Show note + translation UI for selected original OR correction photos */}
           {isManagerMode && !readOnly && (selected || showDecisionEditor) && (
             <div style={{ marginTop: 10 }}>
@@ -631,23 +648,6 @@ const PhotoCard = memo(
                 Manager note (original EN)
               </div>
               <div style={{ whiteSpace: 'pre-wrap' }}>{managerNoteEnglish}</div>
-            </div>
-          )}
-
-          {/* Fix photo: show cleaner note (assumed already EN for manager) */}
-          {isFix && !!p.cleaner_note && (
-            <div
-              style={{
-                marginTop: 8,
-                padding: '8px 10px',
-                background: '#052e2b',
-                border: '1px solid #065f46',
-                borderRadius: 8,
-                color: '#86efac',
-                whiteSpace: 'pre-wrap',
-              }}
-            >
-              {p.cleaner_note}
             </div>
           )}
 
