@@ -1002,6 +1002,8 @@ export default function Review() {
   const visiblePhotos = isCorrectionReview && !viewFullTurn ? latestCorrections : photos;
   const acceptedTaskIds = useMemo(() => new Set(correctionDecisions.filter(d => d.decision === 'accepted').map(d => d.correction_task_id)), [correctionDecisions]);
   const readOnly = status === 'approved';
+  // Additional issues can be selected only on original photos without an existing correction task.
+  const canFlagNewPhoto = (p) => !readOnly && status === 'submitted' && !p.is_fix && !originalFlaggedPhotoIds.has(String(p.id));
   // Match the actual decision to each individual correction photo.
   const correctionDecisionByPhotoId = useMemo(() => {
     const byPhoto = new Map();
@@ -1299,6 +1301,7 @@ export default function Review() {
   // --- Approve ---
   async function markApproved() {
     if (readOnly) return;
+    if (selectedKeys.size > 0) { alert('Send or clear newly selected Needs Fix requests before approving.'); return; }
     if (activeFindings.length > 0 && !allCorrectionsAccepted) { alert('Accept every outstanding correction first.'); return; }
     if (!turnId) return;
     setActing(true);
@@ -1340,8 +1343,10 @@ export default function Review() {
     try {
       const payloadNotes = [];
 
-             visiblePhotos.forEach((p) => {
-         if (isCorrectionReview && !latestCorrections.some(x => x.path === p.path)) return;
+      // Gather selected ORIGINAL photos from the entire turn, not just visible correction cards.
+      photos.forEach((p) => {
+        if (p.is_fix || !selectedKeys.has(keyFor(p))) return;
+        if (originalFlaggedPhotoIds.has(String(p.id))) return;
         const k = keyFor(p);
         const selected = selectedKeys.has(k);
         const obj = normalizeNote(notesByKey[k]);
@@ -1373,14 +1378,14 @@ export default function Review() {
       const summaryTranslated = String(summaryNote.translated || '').trim();
       const summarySent = (summaryTranslated || summaryOriginal || '').trim();
 
-             if (isCorrectionReview && unresolvedTaskCount > 0) {
-         alert('Some outstanding tasks have no identifiable correction photo. Refresh or link the missing corrections before reviewing.');
-         return;
-       }
-       if (isCorrectionReview && payloadNotes.some(n => !n.correction_task_id)) {
-         alert('One or more selected photos are not linked to a correction task. Please review the latest correction photo for each task.');
-         return;
-       }
+      if (isCorrectionReview && payloadNotes.length === 0) {
+        alert('Select at least one new original photo in the Full Photo Gallery.');
+        return;
+      }
+      if (payloadNotes.some(n => !String(n.note || '').trim())) {
+        alert('Enter a note for every newly flagged photo before sending.');
+        return;
+      }
        if (payloadNotes.length === 0 && !summarySent) {
         alert('Select at least one photo or add a summary note before sending “Needs fix”.');
         setActing(false);
@@ -1751,7 +1756,7 @@ export default function Review() {
         {(!isCorrectionReview || viewFullTurn) && <div style={{ ...managerPanelStyle, background: '#10192b', marginTop: 16 }}>
           <div style={{ marginBottom: 18, paddingBottom: 12, borderBottom: '1px solid #425878' }}>
             <h3 style={{ margin: 0, fontSize: 20, color: '#f8fafc' }}>Full Photo Gallery</h3>
-            <div style={{ marginTop: 5, color: '#aebed4', fontSize: 13 }}>Photos grouped by checklist section. Select any image to view it full-size.</div>
+            <div style={{ marginTop: 5, color: '#aebed4', fontSize: 13 }}>Photos grouped by checklist section. Select any image to view it full-size. {isCorrectionReview && 'You can flag additional original photos here and send them together below.'}</div>
           </div>
                      {loading ? (
             <div>Loading photos…</div>
@@ -1790,7 +1795,7 @@ export default function Review() {
                       toggleKey: toggleKey,
                       onTranslate: onTranslate,
                       translateBusyByKey: translateBusyByKey,
-                      allowSelection: !readOnly && !isCorrectionReview && !p.is_fix,
+                      allowSelection: canFlagNewPhoto(p),
                       acceptedTaskIds: acceptedTaskIds,
                       correctionDecisionByPhotoId: correctionDecisionByPhotoId,
                       correctionAttemptByPhotoId: correctionAttemptByPhotoId,
@@ -1865,7 +1870,7 @@ export default function Review() {
                         toggleKey: toggleKey,
                         onTranslate: onTranslate,
                         translateBusyByKey: translateBusyByKey,
-                       allowSelection: !readOnly && !isCorrectionReview && !p.is_fix,
+                       allowSelection: canFlagNewPhoto(p),
                        acceptedTaskIds: acceptedTaskIds,
                        correctionDecisionByPhotoId: correctionDecisionByPhotoId,
                       correctionAttemptByPhotoId: correctionAttemptByPhotoId,
@@ -2001,9 +2006,9 @@ export default function Review() {
                 </div>}
 
               <div style={{ display: 'flex', gap: 10, marginTop: 12, flexWrap: 'wrap' }}>
-                {!isCorrectionReview && status === 'submitted' && <button
+                {status === 'submitted' && <button
                   onClick={sendNeedsFix}
-                  disabled={acting || !turnId}
+                  disabled={acting || !turnId || (isCorrectionReview && selectedKeys.size === 0)}
                   style={{
                     ...ui.btnSecondary,
                     border: '1px solid #d97706',
@@ -2011,7 +2016,7 @@ export default function Review() {
                     color: '#fcd34d',
                   }}
                 >
-                  {acting ? '…' : '🛠️ Send Needs Fix (with notes)'}
+                  {acting ? '…' : isCorrectionReview ? `🛠️ Send Needs Fix Requests (${selectedKeys.size})` : '🛠️ Send Needs Fix (with notes)'}
                 </button>}
 
 
@@ -2027,7 +2032,7 @@ export default function Review() {
           <div style={{ ...managerPanelStyle, marginTop: 20, borderLeft: '4px solid #34d399', background: '#142b2e' }}>
             <h3 style={{ margin: '0 0 8px', fontSize: 19 }}>Final Turn Approval</h3>
             <p style={{ color: '#94a3b8', fontSize: 13, marginTop: 0 }}>Approve the entire turnover after all required corrections have been accepted.</p>
-            <button onClick={markApproved} disabled={acting || !turnId || status !== 'submitted' || (activeFindings.length > 0 && !allCorrectionsAccepted)} style={{...ui.btnPrimary, opacity: (acting || !turnId || status !== 'submitted' || (activeFindings.length > 0 && !allCorrectionsAccepted)) ? 0.4 : 1, cursor: (acting || !turnId || status !== 'submitted' || (activeFindings.length > 0 && !allCorrectionsAccepted)) ? 'not-allowed' : 'pointer'}}>
+            <button onClick={markApproved} disabled={acting || !turnId || status !== 'submitted' || (activeFindings.length > 0 && !allCorrectionsAccepted) || selectedKeys.size > 0} style={{...ui.btnPrimary, opacity: (acting || !turnId || status !== 'submitted' || (activeFindings.length > 0 && !allCorrectionsAccepted)) ? 0.4 : 1, cursor: (acting || !turnId || status !== 'submitted' || (activeFindings.length > 0 && !allCorrectionsAccepted)) ? 'not-allowed' : 'pointer'}}>
               {acting ? '…' : '✅ Approve Turn'}
             </button>
             {activeFindings.length > 0 && !allCorrectionsAccepted && <div style={{color:'#fcd34d',fontSize:12,marginTop:8}}>Accept every outstanding correction before approving the entire turn.</div>}
