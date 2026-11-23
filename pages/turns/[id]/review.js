@@ -192,11 +192,22 @@ const fixCardStyle = {
 
 // Dashed section frame, like cleaner need-fix
 const sectionWrapStyle = {
-  border: '2px dashed #334155',
-  borderRadius: 12,
-  padding: 12,
-  background: '#0b1220',
-  marginBottom: 18,
+  border: '1px solid #506587',
+  borderLeft: '4px solid #60a5fa',
+  borderRadius: 14,
+  padding: 16,
+  background: '#15243d',
+  boxShadow: '0 8px 22px rgba(0,0,0,0.16)',
+  marginBottom: 20,
+};
+
+// Visual-only hierarchy for manager review; existing action button styles stay unchanged.
+const managerPanelStyle = {
+  border: '1px solid #435a7c',
+  borderRadius: 16,
+  padding: 18,
+  background: '#142138',
+  boxShadow: '0 8px 24px rgba(0,0,0,0.16)',
 };
 
 // Stable per-photo key: prefer storage path, then id; never include created_at
@@ -1625,7 +1636,7 @@ export default function Review() {
           )}
 
            {hasCorrectionHistory && (
-             <div style={{ marginTop: 18, padding: '18px 20px', border: '1px solid #3b82f6', borderRadius: 14, background: 'rgba(30, 64, 120, 0.28)', boxShadow: 'inset 0 0 0 1px rgba(147,197,253,0.08)' }}>
+             <div style={{ ...managerPanelStyle, marginTop: 20, border: '1px solid #3b82f6', borderLeft: '4px solid #60a5fa', background: '#182d50' }}>
                <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:12,flexWrap:'wrap'}}>
                  <div>
                    <div style={{fontSize:12,color:'#93c5fd',fontWeight:800,letterSpacing:'.07em',textTransform:'uppercase'}}>{isCorrectionReview ? 'Manager action required' : status === 'needs_fix' ? 'Awaiting cleaner' : 'Correction history'}</div>
@@ -1648,7 +1659,7 @@ export default function Review() {
                    const groupStatus = latestIsPending ? 'Review needed' : status === 'needs_fix' && group.finding ? 'Awaiting cleaner' : latestDecision?.decision === 'accepted' ? 'Accepted' : group.finding ? 'Outstanding' : 'History';
                    const groupColor = groupStatus === 'Accepted' ? '#86efac' : groupStatus === 'Review needed' ? '#93c5fd' : '#fcd34d';
                    return (
-                     <details key={group.taskId} open={!!group.finding} style={{ border: '1px solid #475569', borderRadius: 12, background: '#0b1220', padding: 12 }}>
+                     <details key={group.taskId} open={!!group.finding} style={{ border: '1px solid #597398', borderRadius: 12, background: '#101b30', padding: 14 }}>
                        <summary style={{ cursor: 'pointer', color: '#bfdbfe', fontWeight: 800, fontSize: 16 }}>
                          Correction {group.index + 1} — {group.area}
                          <span style={{ color: groupColor, fontSize: 12, marginLeft: 10 }}>{groupStatus}</span>
@@ -1737,7 +1748,11 @@ export default function Review() {
            <div style={{ ...ui.subtle, marginTop: 10 }}>Click any photo to open full-size in a new tab.</div>
         </div>
 
-        {(!isCorrectionReview || viewFullTurn) && <div style={ui.card}>
+        {(!isCorrectionReview || viewFullTurn) && <div style={{ ...managerPanelStyle, background: '#10192b', marginTop: 16 }}>
+          <div style={{ marginBottom: 18, paddingBottom: 12, borderBottom: '1px solid #425878' }}>
+            <h3 style={{ margin: 0, fontSize: 20, color: '#f8fafc' }}>Full Photo Gallery</h3>
+            <div style={{ marginTop: 5, color: '#aebed4', fontSize: 13 }}>Photos grouped by checklist section. Select any image to view it full-size.</div>
+          </div>
                      {loading ? (
             <div>Loading photos…</div>
           ) : sections && sections.length > 0 ? (
@@ -1751,7 +1766,7 @@ export default function Review() {
                     margin: '4px 4px 16px',
                   }}
                 >
-                  <h3 style={{ margin: 0 }}>{sec.title || 'Section'}</h3>
+                  <h3 style={{ margin: 0, color: '#f8fafc', fontSize: 19, fontWeight: 800 }}>{sec.title || 'Section'}</h3>
                   <div style={{ fontSize: 12, color: '#94a3b8' }}>
                     {sec.photos.length} photo{sec.photos.length === 1 ? '' : 's'}
                   </div>
@@ -1827,7 +1842,7 @@ export default function Review() {
                       margin: '2px 4px 10px',
                     }}
                   >
-                    <h3 style={{ margin: 0 }}>{areaKey === '__UNCAT__' ? 'Additional uploads' : areaKey}</h3>
+                    <h3 style={{ margin: 0, color: '#f8fafc', fontSize: 19, fontWeight: 800 }}>{areaKey === '__UNCAT__' ? 'Additional uploads' : areaKey}</h3>
                     <div style={{ fontSize: 12, color: '#94a3b8' }}>
                       {byArea[areaKey].length} photo{byArea[areaKey].length === 1 ? '' : 's'}
                     </div>
@@ -1872,11 +1887,10 @@ export default function Review() {
           {isManagerMode && (
             <div
               style={{
-                margin: '12px 0 6px',
-                padding: 12,
-                border: '1px solid #334155',
-                borderRadius: 12,
-                background: '#0f172a',
+                ...managerPanelStyle,
+                margin: '20px 0 8px',
+                borderLeft: '4px solid #a78bfa',
+                background: '#201c3a',
               }}
             >
               <h3 style={{ margin: 0, fontSize: 19, color: '#f8fafc' }}>Overall Turn Conversation</h3>
@@ -2010,7 +2024,7 @@ export default function Review() {
           )}
 
         {isManagerMode && !readOnly && (
-          <div style={{ ...ui.card, marginTop: 16, border: '1px solid #334155' }}>
+          <div style={{ ...managerPanelStyle, marginTop: 20, borderLeft: '4px solid #34d399', background: '#142b2e' }}>
             <h3 style={{ margin: '0 0 8px', fontSize: 19 }}>Final Turn Approval</h3>
             <p style={{ color: '#94a3b8', fontSize: 13, marginTop: 0 }}>Approve the entire turnover after all required corrections have been accepted.</p>
             <button onClick={markApproved} disabled={acting || !turnId || status !== 'submitted' || (activeFindings.length > 0 && !allCorrectionsAccepted)} style={{...ui.btnPrimary, opacity: (acting || !turnId || status !== 'submitted' || (activeFindings.length > 0 && !allCorrectionsAccepted)) ? 0.4 : 1, cursor: (acting || !turnId || status !== 'submitted' || (activeFindings.length > 0 && !allCorrectionsAccepted)) ? 'not-allowed' : 'pointer'}}>
