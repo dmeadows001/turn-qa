@@ -316,19 +316,13 @@ export default async function handler(req, res) {
       });
     }
 
-    // This endpoint creates the INITIAL correction requests only. Subsequent
-    // rejections are recorded by correction-decision; never create a second
-    // qa_findings row for the same photo (unique turn_id/photo_id).
+    // Accept new issues on a submitted correction review, while preserving
+    // every existing correction task and its decision history.
     const { data: reviewTurn, error: reviewTurnErr } = await supa.from('turns')
-      .select('status').eq('id',turnId).maybeSingle();
+      .select('status').eq('id', turnId).maybeSingle();
     if (reviewTurnErr) throw reviewTurnErr;
     if (!reviewTurn || reviewTurn.status !== 'submitted')
-      return res.status(409).json({error:'Only submitted turns can be reviewed'});
-    const { data: priorReview, error: priorReviewErr } = await supa.from('qa_findings')
-      .select('id').eq('turn_id',turnId).limit(1);
-    if (priorReviewErr) throw priorReviewErr;
-    if (priorReview?.length)
-      return res.status(409).json({error:'This turn already has correction tasks. Use individual correction decisions.'});
+      return res.status(409).json({ error: 'Only submitted turns can be reviewed' });
 
     // Support BOTH payload shapes the UI may send:
     //  - { notes: [{ path, note, photo_id? }], summary?, send_sms? }
@@ -354,6 +348,39 @@ export default async function handler(req, res) {
             norm: buildNormFromRow(p),
           }))
         : [];
+
+    // New needs-fix requests must target original photos, never a replacement
+    // photo or a photo that already has a correction task (even if resolved).
+    if (!normalizedNotes.length) return res.status(400).json({ error: 'Select at least one photo' });
+    const { data: existingFindings, error: existingErr } = await supa.from('qa_findings')
+      .select('id, photo_id, evidence_url').eq('turn_id', turnId);
+    if (existingErr) throw existingErr;
+    const { data: eligiblePhotos, error: eligibleErr } = await supa.from('turn_photos')
+      .select('id, path, storage_path, is_fix').eq('turn_id', turnId);
+    if (eligibleErr) throw eligibleErr;
+    const byPhotoId = new Map((eligiblePhotos || []).map(p => [String(p.id), p]));
+    const byPhotoPath = new Map();
+    for (const p of eligiblePhotos || []) {
+      if (p.path) byPhotoPath.set(p.path, p);
+      if (p.storage_path) byPhotoPath.set(p.storage_path, p);
+    }
+    const seenPhotoIds = new Set();
+    for (const note of normalizedNotes) {
+      const photo = byPhotoId.get(String(note.photo_id || '')) || byPhotoPath.get(note.path);
+      if (!photo || photo.is_fix || (note.photo_id && String(note.photo_id) !== String(photo.id)))
+        return res.status(409).json({ error: 'Select a valid original photo from this turn' });
+      if (seenPhotoIds.has(String(photo.id)))
+        return res.status(409).json({ error: 'A photo was selected more than once' });
+      seenPhotoIds.add(String(photo.id));
+      if ((existingFindings || []).some(f => String(f.photo_id || '') === String(photo.id) ||
+        (!!note.path && String(f.evidence_url || '') === note.path)))
+        return res.status(409).json({ error: 'This photo already has a correction task. Review its existing correction instead.' });
+      if (!String(note.norm?.legacy_note || '').trim())
+        return res.status(400).json({ error: 'Provide a note for each newly flagged photo' });
+      note.photo_id = photo.id;
+      note.path = photo.path || photo.storage_path || note.path;
+      if (!note.path) return res.status(409).json({ error: 'Selected photo has no storage path' });
+    }
 
     const ts = nowIso();
 
@@ -502,8 +529,8 @@ export default async function handler(req, res) {
     }
 
     // --- 3) Append a review round; never delete historical findings ---
-    // The new rows are staged inactive until every insert succeeds.
-    // This avoids leaving the cleaner with a partial active round.
+    // Stage new rows inactive until inserts succeed. Existing active tasks
+    // remain active throughout this additive batch.
     const { data: priorFindings, error: priorErr } = await supa
       .from('qa_findings')
       .select('id, photo_id, evidence_url, review_round, is_active, correction_task_id')
@@ -519,7 +546,7 @@ export default async function handler(req, res) {
 
     // Resolve selected photos to a stable task. A prior finding's own ID is
     // the fallback task ID for records created before the schema migration.
-    // Only the latest active findings can be carried into a new round.
+    // Existing findings remain unchanged; only new original photos are added.
     const { data: selectedPhotos, error: selectedErr } = await supa
       .from('turn_photos')
       .select('id, shot_id, path, storage_path, is_fix, correction_task_id')
@@ -609,12 +636,8 @@ export default async function handler(req, res) {
         findingsInserted = findingRowsBase.length;
       }
 
-      // Close the prior round only after the new records have been stored.
-      if (previousActiveIds.length) {
-        const { error: closeErr } = await supa.from('qa_findings')
-          .update({ is_active: false }).in('id', previousActiveIds);
-        if (closeErr) throw closeErr;
-      }
+      // Existing active tasks stay active: this is an additive batch, not a
+      // replacement review round. Never close the earlier corrections.
       if (newIds.length) {
         const { error: activateErr } = await supa.from('qa_findings')
           .update({ is_active: true }).in('id', newIds);
@@ -623,9 +646,6 @@ export default async function handler(req, res) {
     } catch (err) {
       // Best-effort compensation; a DB transaction/RPC is the stronger long-term solution.
       if (newIds.length) await supa.from('qa_findings').delete().in('id', newIds);
-      if (previousActiveIds.length) {
-        await supa.from('qa_findings').update({ is_active: true }).in('id', previousActiveIds);
-      }
       throw new Error(`Could not save review round: ${err?.message || err}`);
     }
 
@@ -651,15 +671,8 @@ export default async function handler(req, res) {
         const { data: c } = await supa.from('cleaners').select('phone').eq('id', cleanerId).maybeSingle();
         cleanerPhone = c?.phone || null;
       }
-      if (!cleanerPhone && propertyId) {
-        const { data: pc } = await supa
-          .from('property_cleaners')
-          .select('cleaners(phone)')
-          .eq('property_id', propertyId)
-          .limit(1)
-          .maybeSingle();
-        cleanerPhone = pc?.cleaners?.phone || null;
-      }
+      // Never notify an unrelated cleaner assigned to the same property.
+      // Only the cleaner attached to this turn may receive this message.
 
       // ✅ NEW LOGS (and a hard fail) — BEFORE calling Twilio
       const rawPhone = cleanerPhone;
@@ -670,8 +683,6 @@ export default async function handler(req, res) {
         propertyId,
         cleanerId,
         propertyName,
-        rawPhone,
-        cleaned,
         hasTwilioEnv: Boolean(
           process.env.TWILIO_ACCOUNT_SID &&
           process.env.TWILIO_AUTH_TOKEN &&
